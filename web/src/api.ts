@@ -71,6 +71,8 @@ export interface Me {
     login: string;
     /** lark: Base data, OKRs, directory and apps acting in Lark; messages: alerts can message people */
     features: { lark: boolean; messages: boolean };
+    /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
+    mailbox: string | null;
   };
   sidebarLinks: { id: number; name: string; url: string; icon: string }[];
 }

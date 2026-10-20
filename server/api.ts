@@ -3,6 +3,8 @@ import { getCookie } from 'hono/cookie';
 import * as tar from 'tar';
 import { config, loginName } from './config.ts';
 import { messenger } from './notify.ts';
+import { mailboxName } from './mail.ts';
+import { forgetGoogle, googleConnection, googleConnectUrl } from './google/auth.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
@@ -71,6 +73,8 @@ api.get('/me', (c) => {
       accent: config.accent || null, devLogin: config.devLogin, login: loginName,
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
       features: { lark: config.lark.enabled, messages: !!messenger },
+      /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
+      mailbox: mailboxName() || null,
     },
     // Lark apps an admin pinned under the sidebar navigation (e.g. Approval)
     sidebarLinks: larkLinks().filter((l) => l.in_sidebar).map((l) => ({ id: l.id, name: l.name, url: l.url, icon: l.icon })),
@@ -129,6 +133,12 @@ api.get('/home/source', async (c) => {
 
 // ---- Lark data: each person's own connection, Base data for home modules, alerts ----
 api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: true }));
+// ---- Google: each person's own connection, for apps that save Gmail drafts ----
+api.get('/google/status', (c) => c.json({ ...googleConnection(c.get('user').id), available: config.mailDrafts === 'google', connectUrl: googleConnectUrl('/me') }));
+api.post('/google/disconnect', (c) => {
+  forgetGoogle(c.get('user').id);
+  return c.json({ ok: true });
+});
 api.post('/lark/disconnect', (c) => {
   forgetTokens(c.get('user').id);
   return c.json({ ok: true });

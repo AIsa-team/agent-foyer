@@ -69,6 +69,20 @@ export const config = {
     apiBase: env('LARK_API_BASE', `https://open.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
     accountsBase: env('LARK_ACCOUNTS_BASE', `https://accounts.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
   },
+  /**
+   * Google, for apps that save email drafts in Gmail (Google Workspace). Each person connects their own Google account
+   * once; the hub asks only for gmail.compose. Endpoint overrides are for tests against a fake Google.
+   */
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID ?? '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
+    authUrl: env('GOOGLE_AUTH_URL', 'https://accounts.google.com/o/oauth2/v2/auth'),
+    tokenUrl: env('GOOGLE_TOKEN_URL', 'https://oauth2.googleapis.com/token'),
+    userinfoUrl: env('GOOGLE_USERINFO_URL', 'https://openidconnect.googleapis.com/v1/userinfo'),
+    gmailBase: env('GOOGLE_GMAIL_BASE', 'https://gmail.googleapis.com'),
+  },
+  /** Where apps save email drafts: the person's Gmail (needs GOOGLE_CLIENT_ID) or Lark Mail; "none" turns it off */
+  mailDrafts: env('MAIL_DRAFTS', process.env.GOOGLE_CLIENT_ID ? 'google' : authProvider === 'lark' ? 'lark' : 'none') as 'google' | 'lark' | 'none',
   /** With no sign-in provider configured, a local "pick a user" login is used instead (DEV_LOGIN=1 forces it on plain-http test setups). */
   devLogin: authProvider === 'dev' || (process.env.DEV_LOGIN === '1' && hubUrl.protocol !== 'https:'),
   /** Time zone for date buckets in Lark Base data (week/month boundaries) and alert messages */
@@ -104,6 +118,10 @@ if (config.devLogin && config.secure) {
 if (config.auth.provider === 'oidc' && /accounts\.google\.com/.test(config.oidc.issuer) && !config.oidc.allowedDomains.length) {
   throw new Error('OIDC with Google needs OIDC_ALLOWED_DOMAINS (your company email domains), or any Google account could sign in.');
 }
+if (!['google', 'lark', 'none'].includes(config.mailDrafts)) throw new Error('MAIL_DRAFTS must be google, lark or none');
+if (config.mailDrafts === 'google' && !config.google.clientId) throw new Error('MAIL_DRAFTS=google needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET (docs/GOOGLE_MAIL.md).');
+if (config.mailDrafts === 'lark' && !config.lark.enabled) throw new Error('MAIL_DRAFTS=lark needs Lark sign-in.');
+
 /** Name of the sign-in provider for people: "Lark", "Google"… */
 export const loginName = config.auth.provider === 'lark' ? 'Lark' : config.auth.provider === 'oidc' ? config.oidc.name : config.companyName;
 

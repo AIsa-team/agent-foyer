@@ -21,7 +21,8 @@ import { localize } from '../localized.ts';
 import { larkMessenger } from '../lark/messenger.ts';
 import { createRecord, fetchRecords, listFields, parseBaseUrl, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
-import { createDraft, MAIL_SCOPES } from '../lark/mail.ts';
+import { MAIL_SCOPES } from '../lark/mail.ts';
+import { mailboxName, mailConnectUrl, saveDraft } from '../mail.ts';
 import { canAccessApp } from './access.ts';
 
 // ---------------------------------------------------------------- declaration
@@ -102,10 +103,13 @@ export function revokeConsent(user: User, slug: string) {
 export function needsConnect(user: User, m: Manifest): { write: boolean; mail: boolean } | null {
   const c = connection(user.id);
   const write = m.tables.some((t) => t.access === 'write');
-  const mail = !!m.mailDrafts;
+  const mail = !!m.mailDrafts && config.mailDrafts === 'lark';
   if (!c.connected || (write && !c.scopes?.includes(WRITE_SCOPE)) || (mail && !MAIL_SCOPES.every((s) => c.scopes?.includes(s)))) return { write, mail };
   return null;
 }
+
+/** Back to the app after consent, collecting any connection it still needs on the way (see auth/routes.ts). */
+export const goPath = (slug: string, returnPath: string) => `/auth/app-lark/go?app=${encodeURIComponent(slug)}&return=${encodeURIComponent(returnPath)}`;
 
 export const consentUrl = (slug: string, returnPath: string) => `${config.hubUrl}/auth/app-lark?app=${encodeURIComponent(slug)}&return=${encodeURIComponent(returnPath)}`;
 
@@ -117,6 +121,7 @@ export function describeManifest(user: User | undefined, app: App) {
     tables: m.tables.map((t) => ({ name: t.name, url: t.url, access: t.access })),
     notify: { people: m.notify.people.map((p) => p.name), chats: m.notify.chats.map((c) => c.name) },
     mailDrafts: !!m.mailDrafts,
+    mailbox: mailboxName(),
     consented: user ? hasConsent(user, app) : false,
   };
 }
@@ -196,7 +201,9 @@ export async function handleAppLark(app: App, sessionUser: User | undefined, req
       return json(res, 200, { declared: describeManifest(user, app), ready: !!m && hasConsent(user, app) && !needsConnect(user, m), consentUrl: consent });
     }
     if (!m) return json(res, 404, { error: tr(locale, 'err.appLark.notDeclared'), code: 'err.appLark.notDeclared' });
-    if (!hasConsent(user, app) || needsConnect(user, m)) return json(res, 403, { error: 'consent_required', consentUrl: consent });
+    if (!hasConsent(user, app)) return json(res, 403, { error: 'consent_required', consentUrl: consent });
+    // agreed, but a connection it needs is missing (Lark data, Lark write / mail access, Google): go and get it
+    if (needsConnect(user, m) || (m.mailDrafts && mailConnectUrl(user, '/'))) return json(res, 403, { error: 'consent_required', consentUrl: `${config.hubUrl}${goPath(app.slug, back)}` });
 
     if (url.pathname === '/__hub/notify' && req.method === 'POST') return json(res, 200, await notify(app, m, user, await readJson(req), locale));
     if (url.pathname === '/__hub/lark/mail/drafts' && req.method === 'POST') {
@@ -297,5 +304,5 @@ async function mailDraft(user: User, body: Record<string, unknown>) {
   const html = typeof body.html === 'string' ? body.html.slice(0, 200_000) : undefined;
   const text = typeof body.text === 'string' ? body.text.slice(0, 200_000) : undefined;
   if (!subject || (!html && !text)) throw new UserError('err.mail.incomplete');
-  return { saved: true, ...(await createDraft(user, { to: addresses(body.to), cc: addresses(body.cc), bcc: addresses(body.bcc), subject, html, text })) };
+  return { saved: true, ...(await saveDraft(user, { to: addresses(body.to), cc: addresses(body.cc), bcc: addresses(body.bcc), subject, html, text })) };
 }

@@ -4,6 +4,7 @@
  * Starts its own hub with a throwaway data dir:  node scripts/smoke-data.ts
  */
 import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -72,6 +73,9 @@ const lark = {
   messages: [] as { type: string; id: string; text: string }[],
   scopesAsked: '',
   drafts: [] as string[],
+  gmail: [] as string[],
+  googleEmail: 'alex@example.com',
+  googleScope: '',
   searchCalls: 0,
   hideApi: false,
   denyOrders: false,
@@ -101,11 +105,32 @@ const larkServer = http.createServer(async (req, res) => {
     req.on('data', (d) => (b += d));
     req.on('end', () => ok(b));
   });
-  const body = raw ? JSON.parse(raw) : {};
-  const send = (o: unknown) => {
-    res.writeHead(200, { 'content-type': 'application/json' });
+  const send = (o: unknown, status = 200) => {
+    res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(o));
   };
+  // a fake Google: OAuth (code + PKCE), userinfo and Gmail drafts
+  if (p === '/google/auth') {
+    lark.googleScope = url.searchParams.get('scope') ?? '';
+    const back = new URL(url.searchParams.get('redirect_uri')!);
+    back.searchParams.set('code', 'gcode-' + (url.searchParams.get('code_challenge') ?? ''));
+    back.searchParams.set('state', url.searchParams.get('state')!);
+    res.writeHead(302, { location: back.toString() });
+    return res.end();
+  }
+  if (p === '/google/token') {
+    const f = new URLSearchParams(raw);
+    const challenge = createHash('sha256').update(f.get('code_verifier') ?? '').digest('base64url');
+    if (f.get('grant_type') === 'authorization_code' && f.get('code') !== 'gcode-' + challenge) return send({ error: 'invalid_grant' }, 400);
+    return send({ access_token: 'g-at', expires_in: 3600, refresh_token: 'g-rt', scope: lark.googleScope, token_type: 'Bearer' });
+  }
+  if (p === '/google/userinfo') return send({ sub: 'g1', email: lark.googleEmail, email_verified: true });
+  if (p === '/gmail/v1/users/me/drafts' && req.method === 'POST') {
+    if (req.headers.authorization !== 'Bearer g-at') return send({ error: { message: 'unauthorized' } }, 401);
+    lark.gmail.push(Buffer.from((JSON.parse(raw) as { message: { raw: string } }).message.raw, 'base64url').toString('utf8'));
+    return send({ id: `r-${lark.gmail.length}`, message: { id: `m-${lark.gmail.length}` } });
+  }
+  const body = raw ? JSON.parse(raw) : {};
   const bearer = (req.headers.authorization ?? '').replace('Bearer ', '');
   const userOk = () => lark.access.has(bearer);
 
@@ -313,6 +338,8 @@ const hub = spawn(process.execPath, ['server/index.ts'], {
   env: {
     ...process.env, PORT: String(HUB_PORT), HUB_URL: HUB, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en',
     ALERT_QUIET_HOURS: 'off', LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`,
+    GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `http://localhost:${LARK_PORT}/google/auth`, GOOGLE_TOKEN_URL: `http://localhost:${LARK_PORT}/google/token`,
+    GOOGLE_USERINFO_URL: `http://localhost:${LARK_PORT}/google/userinfo`, GOOGLE_GMAIL_BASE: `http://localhost:${LARK_PORT}`,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -527,8 +554,9 @@ try {
   const csrf = /name="csrf" value="([^"]+)"/.exec(page)![1];
   check((await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'invoice', return: '/', decision: 'allow' }) })).status === 403, 'consent without its token is refused');
   const allow = await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'invoice', return: '/', decision: 'allow', csrf }) });
-  const loc = allow.headers.get('location') ?? '';
-  check(loc.startsWith('/auth/lark/connect') && loc.includes('write=1'), 'a writable table sends the person to grant Lark write access');
+  const goLoc = allow.headers.get('location') ?? '';
+  const loc = (await fetch(`${HUB}${goLoc}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } })).headers.get('location') ?? '';
+  check(goLoc.startsWith('/auth/app-lark/go') && loc.startsWith('/auth/lark/connect') && loc.includes('write=1'), 'a writable table sends the person to grant Lark write access');
   // follow the connect flow (asks for bitable:app), then back to the app
   const startW = await fetch(`${HUB}${loc}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
   alex.jar.store(startW);
@@ -574,20 +602,31 @@ try {
   check(mailPage.includes('draft') || mailPage.includes('草稿'), 'the consent page says the app saves mail drafts');
   const mailCsrf = /name="csrf" value="([^"]+)"/.exec(mailPage)![1];
   const mailAllow = await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'invoice', return: '/', decision: 'allow', csrf: mailCsrf }) });
-  const mailLoc = mailAllow.headers.get('location') ?? '';
-  check(mailLoc.includes('mail=1'), 'mail drafts send the person to grant Lark mail access');
-  const startM = await fetch(`${HUB}${mailLoc}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
-  alex.jar.store(startM);
-  const authM = await fetch(startM.headers.get('location')!, { redirect: 'manual' });
-  check(lark.scopesAsked.includes('mail:user_mailbox.message:modify') && lark.scopesAsked.includes('bitable:app'), 'it asks for the mail scopes and keeps the write access already granted');
-  alex.jar.store(await fetch(authM.headers.get('location')!, { redirect: 'manual', headers: { cookie: alex.jar.header() } }));
+  // after "Allow", the go step sends the person to connect Google (Gmail), which comes back to it and on to the app
+  const follow = async (path: string) => {
+    const r = await fetch(path.startsWith('http') ? path : `${HUB}${path}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
+    alex.jar.store(r);
+    return r.headers.get('location') ?? '';
+  };
+  const toGoogle = await follow(mailAllow.headers.get('location') ?? '');
+  check(toGoogle.includes('/auth/google/connect'), 'mail drafts in Gmail send the person to connect Google');
+  lark.googleEmail = 'alex@personal.example';
+  const wrongBack = await follow(await follow(await follow(toGoogle)));
+  check(wrongBack === '' && (await api(alex.jar, 'GET', '/google/status')).body.connected === false, 'a Google account on another domain is refused');
+  lark.googleEmail = 'alex@example.com';
+  const authG = await follow(toGoogle);
+  check(lark.googleScope.includes('https://www.googleapis.com/auth/gmail.compose') && authG.includes('access_type=offline'), 'it asks Google for gmail.compose with offline access');
+  const backToGo = await follow(await follow(authG));
+  check(backToGo.startsWith('/auth/app-lark/go') && (await follow(backToGo)) === 'http://invoice.apps.localhost:18930/', 'and comes back to the app');
+  const gs = (await api(alex.jar, 'GET', '/google/status')).body;
+  check(gs.connected === true && gs.email === 'alex@example.com', 'the Me page shows the connected Google account');
   const drafted = await post('/__hub/lark/mail/drafts', { to: ['client@example.com'], cc: ['林小雨'], subject: '合作确认函', html: '<p>感谢您的支持</p>' });
-  const draftBody = await drafted.json() as { saved: boolean; draftId: string };
-  const eml = lark.drafts[0] ?? '';
-  check(drafted.status === 200 && draftBody.saved && draftBody.draftId === 'draft1', 'the app saves a draft');
-  check(eml.includes('From: alex@example.com') && eml.includes('To: client@example.com') && eml.includes('Cc: alice@example.com') && eml.includes('Subject: =?UTF-8?B?')
-    && Buffer.from(eml.split('\n\n').slice(1).join('').replace(/\n/g, ''), 'base64').toString('utf8').includes('感谢您的支持'),
-    'as EML from the person\'s own address, colleagues by name turned into their email, non-ASCII encoded');
+  const draftBody = await drafted.json() as { saved: boolean; draftId: string; url: string };
+  const eml = lark.gmail[0] ?? '';
+  check(drafted.status === 200 && draftBody.saved && draftBody.draftId === 'r-1' && draftBody.url.includes('mail.google.com'), 'the app saves a draft in Gmail, with a link to it');
+  check(eml.includes('From: alex@example.com\r\n') && eml.includes('To: client@example.com') && eml.includes('Cc: alice@example.com') && eml.includes('Subject: =?UTF-8?B?')
+    && Buffer.from(eml.split('\r\n\r\n').slice(1).join('').replace(/\r\n/g, ''), 'base64').toString('utf8').includes('感谢您的支持'),
+    'as EML (CRLF) from the Google account, colleagues by name turned into their email, non-ASCII encoded');
   check((await post('/__hub/lark/mail/drafts', { to: ['nobody-here'], subject: 's', text: 't' })).status === 400, 'unknown recipients are refused');
   rmSync(appDir, { recursive: true, force: true });
 

@@ -7,12 +7,14 @@ import { escapeHtml, page } from '../html.ts';
 import { requestLocale, tr, trHtml, UserError } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
 import { canAccessApp } from '../apps/access.ts';
-import { describeManifest, grantConsent, manifestOf, needsConnect } from '../apps/larkApi.ts';
+import { describeManifest, goPath, grantConsent, manifestOf, needsConnect } from '../apps/larkApi.ts';
 import { exchangeCode, larkAuthorizeUrl } from '../lark/auth.ts';
 import { oidcAuthorize, oidcExchange } from './oidc.ts';
 import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
+import { mailboxName, mailConnectUrl } from '../mail.ts';
+import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
 export const authRoutes = new Hono();
@@ -63,7 +65,7 @@ authRoutes.get('/auth/lark/connect', (c) => {
   // keep write and mail access when reconnecting someone who already granted it
   const had = connection(user.id).scopes ?? [];
   const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
-  const mail = c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s));
+  const mail = config.mailDrafts === 'lark' && (c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s)));
   const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
@@ -88,7 +90,7 @@ authRoutes.get('/auth/app-lark', (c) => {
   const items = [
     ...d.tables.map((t) => `<li>${trHtml(L, t.access === 'write' ? 'appLark.consent.write' : 'appLark.consent.read', { name: t.name })} <a href="${escapeHtml(t.url)}" target="_blank" rel="noreferrer">${escapeHtml(tr(L, 'appLark.consent.openTable'))}</a></li>`),
     ...(d.notify.people.length || d.notify.chats.length ? [`<li>${trHtml(L, 'appLark.consent.notify', { who: [...d.notify.people, ...d.notify.chats].join(L.startsWith('zh') ? '、' : ', ') })}</li>`] : []),
-    ...(d.mailDrafts ? [`<li>${escapeHtml(tr(L, 'appLark.consent.mail'))}</li>`] : []),
+    ...(d.mailDrafts ? [`<li>${escapeHtml(tr(L, 'appLark.consent.mail', { mailbox: mailboxName() }))}</li>`] : []),
   ];
   const csrf = signToken(`app-lark|${user.id}|${slug}`, 10 * 60_000);
   return c.html(page(tr(L, 'appLark.consent.title', { app: name }), `
@@ -121,17 +123,62 @@ authRoutes.post('/auth/app-lark', async (c) => {
       <a class="btn" href="${escapeHtml(appUrl(slug) + ret)}">${escapeHtml(tr(L, 'lark.connect.back'))}</a>`, L));
   }
   grantConsent(user, app);
-  const need = needsConnect(user, m);
-  const go = `/auth/app-lark/go?app=${encodeURIComponent(slug)}&return=${encodeURIComponent(ret)}`;
-  if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(go)}${need.write ? '&write=1' : ''}${need.mail ? '&mail=1' : ''}`);
-  return c.redirect(go);
+  return c.redirect(goPath(slug, ret));
 });
 
-/** Back to the app after consent (and after connecting Lark data, whose return path must stay on the hub). */
+/**
+ * Back to the app after consent. On the way it sends the person to whatever connection the app still needs (Lark
+ * data with write or mail access, Google for Gmail drafts), each returning here, so one "Allow" covers all of it.
+ */
 authRoutes.get('/auth/app-lark/go', (c) => {
   const slug = c.req.query('app') ?? '';
-  if (!get('SELECT 1 FROM apps WHERE slug = ?', slug)) return c.redirect('/apps');
-  return c.redirect(appUrl(slug) + safeReturnPath(c.req.query('return')));
+  const ret = safeReturnPath(c.req.query('return'));
+  const app = get<App>('SELECT * FROM apps WHERE slug = ?', slug);
+  if (!app) return c.redirect('/apps');
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  const m = manifestOf(app);
+  if (user && m && config.lark.enabled) {
+    const here = goPath(slug, ret);
+    const need = needsConnect(user, m);
+    if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(here)}${need.write ? '&write=1' : ''}${need.mail ? '&mail=1' : ''}`);
+    const google = m.mailDrafts ? mailConnectUrl(user, here) : null;
+    if (google) return c.redirect(google);
+  }
+  return c.redirect(appUrl(slug) + ret);
+});
+
+/** Connect the signed-in person's Google account (for Gmail drafts). Returns to `return` on the hub. */
+authRoutes.get('/auth/google/connect', (c) => {
+  const L = localeOf(c);
+  const ret = safeReturnPath(c.req.query('return'));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/google/connect?return=${encodeURIComponent(ret)}`)}`);
+  if (config.mailDrafts !== 'google') return c.html(page(tr(L, 'google.connect.title'), `<h1>${escapeHtml(tr(L, 'google.connect.title'))}</h1><p>${escapeHtml(tr(L, 'google.connect.noApp'))}</p>`, L), 400);
+  const state = randomToken(16);
+  const { url, verifier } = googleAuthorize(user, state);
+  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|google|${verifier}`, { ...cookieOpts, maxAge: 600 });
+  return c.redirect(url);
+});
+
+authRoutes.get('/auth/google/callback', async (c) => {
+  const L = localeOf(c);
+  const [expected, rawRet, mode, verifier] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
+  deleteCookie(c, STATE_COOKIE, { path: '/', secure: config.secure });
+  const ret = safeReturnPath(decodeURIComponent(rawRet ?? ''));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  const failed = (reason: string, status: 400 | 500) => c.html(page(tr(L, 'google.connect.failed'),
+    `<h1>${escapeHtml(tr(L, 'google.connect.failed'))}</h1><p>${escapeHtml(reason)}</p><a class="btn primary" href="/auth/google/connect?return=${encodeURIComponent(ret)}">${escapeHtml(tr(L, 'login.retry'))}</a>`, L), status);
+  const code = c.req.query('code');
+  if (!user || mode !== 'google' || !verifier || !expected || c.req.query('state') !== expected) return failed(tr(L, 'login.failed.expired'), 400);
+  if (!code) return failed(c.req.query('error') === 'access_denied' ? tr(L, 'err.google.scopeDenied') : tr(L, 'login.failed.expired'), 400);
+  try {
+    await finishGoogleConnect(user, code, verifier);
+    return c.redirect(ret);
+  } catch (e) {
+    if (e instanceof UserError) return failed(e.localized(L), 400);
+    console.error('[auth] google connect failed', e);
+    return failed((e as Error).message, 500);
+  }
 });
 
 authRoutes.post('/auth/dev-login', async (c) => {

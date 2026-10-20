@@ -352,6 +352,18 @@ const MIGRATIONS: string[] = [
   );
   ALTER TABLE lark_links ADD COLUMN in_sidebar INTEGER NOT NULL DEFAULT 0;  -- also pinned under the sidebar navigation
   `,
+  // each person's own Google connection, for apps that save email drafts in their Gmail
+  `
+  CREATE TABLE google_tokens (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT,                     -- the Google account that granted access
+    access_enc TEXT NOT NULL,
+    access_expires_at INTEGER NOT NULL,
+    refresh_enc TEXT,
+    scopes TEXT,
+    updated_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 {

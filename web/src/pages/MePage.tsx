@@ -32,6 +32,31 @@ function LarkDataCard() {
   );
 }
 
+/** The person's own Google connection: apps save email drafts in their Gmail with it (only drafts, never sent). */
+function GoogleCard() {
+  const { t } = useI18n();
+  const { data, reload } = useApi<{ connected: boolean; email?: string | null; available: boolean; connectUrl: string }>('/google/status');
+  const { busy, run } = useAction();
+  if (!data?.available) return null;
+  const disconnect = () => {
+    if (confirm(t('me.google.disconnectConfirm'))) run(() => api.post('/google/disconnect'), t('me.google.disconnected')).then(reload);
+  };
+  return (
+    <div className="card pad" style={{ marginTop: 12 }}>
+      <div className="section-title" style={{ marginBottom: 8 }}>
+        {t('me.google.title')}
+        {data.connected && <span className="badge ok" style={{ marginLeft: 8 }}>{t('me.connected')}</span>}
+        {data.connected && data.email && <span className="small muted" style={{ marginLeft: 8, fontWeight: 400 }}>{data.email}</span>}
+        <span className="spacer" />
+        {data.connected
+          ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.google.disconnect')}</button>
+          : <a className="btn sm" href={data.connectUrl}>{t('me.google.connect')}</a>}
+      </div>
+      <p className="small muted" style={{ margin: 0 }}>{t(data.connected ? 'me.google.connectedBody' : 'me.google.body')}</p>
+    </div>
+  );
+}
+
 function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const me = useMe();
   const { t } = useI18n();
@@ -142,6 +167,7 @@ export function MePage() {
         </div>
       </div>
       {me.hub.features.lark && <LarkDataCard />}
+      {me.hub.mailbox === 'Gmail' && <GoogleCard />}
       {data.agents.length > 0 && (
         <div className="grid" style={{ marginTop: 12 }}>
           {data.agents.map((a) => (
