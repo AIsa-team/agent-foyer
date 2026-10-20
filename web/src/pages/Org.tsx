@@ -1,14 +1,15 @@
 import { useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router';
 import { useI18n } from '../i18n';
-import { Avatar, Empty, Icon, Loading, useApi } from '../ui';
+import { Avatar, Empty, Icon, Loading, useApi, useMe } from '../ui';
 
 interface Dept { id: string; name: string; parent: string | null; leaders: string[]; members: string[] }
 interface Person { id: string; name: string; enName: string | null; email: string | null; avatar: string | null; joined: boolean }
 
-/** The 组织 page: the synced Lark departments as a tree, and the people in each. */
+/** The 组织 page: the departments synced from Lark as a tree and the people in each (without Lark: everyone who signed in). */
 export function OrgPage() {
   const { t } = useI18n();
+  const me = useMe();
   const { data, error } = useApi<{ departments: Dept[]; people: Person[] }>('/org');
   const [params, setParams] = useSearchParams();
   const [q, setQ] = useState('');
@@ -47,7 +48,7 @@ export function OrgPage() {
     <>
       <div className="page-head"><div><h1>{t('org.title')}</h1><p>{t('org.intro', { n: data.people.length, d: data.departments.length })}</p></div></div>
       {data.departments.length === 0 && data.people.length <= 1 ? (
-        <div className="card"><Empty title={t('org.empty')} hint={t('org.emptyHint')} /></div>
+        <div className="card"><Empty title={t('org.empty')} hint={t(me.hub.features.lark ? 'org.emptyHint' : 'org.emptyHint.signIn')} /></div>
       ) : (
         <div className="org">
           <div className="card org-tree">

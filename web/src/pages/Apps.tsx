@@ -52,7 +52,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
   const { t } = useI18n();
   const profile = useApi<{ agents: Agent[] }>('/profile');
   return (
-    <Dialog title={t('publish.title')} subtitle={t('publish.subtitle')} onClose={onClose}>
+    <Dialog title={t('publish.title')} subtitle={t('publish.subtitle', { login: me.hub.login })} onClose={onClose}>
       <div className="steps">
         <AgentStep agents={profile.data?.agents ?? null} />
         <Step n={2} title={t('publish.step2.title')}>
@@ -61,7 +61,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
           <p style={{ marginTop: 10 }}>{t('publish.step2.after')}</p>
         </Step>
         <Step n={3} title={t('publish.step3.title')}>
-          <p>{t('publish.step3.body', { domain: me.hub.appsDomain })}</p>
+          <p>{t('publish.step3.body', { domain: me.hub.appsDomain, login: me.hub.login })}</p>
         </Step>
       </div>
     </Dialog>

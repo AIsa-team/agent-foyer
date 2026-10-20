@@ -4,11 +4,13 @@ import { appUrl, config } from '../config.ts';
 import { randomToken, sha256, signToken, verifyToken } from '../crypto.ts';
 import { all, get, now, run, type App, type User } from '../db.ts';
 import { escapeHtml, page } from '../html.ts';
-import { requestLocale, tr, trHtml } from '../i18n/index.ts';
+import { requestLocale, tr, trHtml, UserError } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
 import { canAccessApp } from '../apps/access.ts';
 import { describeManifest, grantConsent, manifestOf, needsConnect } from '../apps/larkApi.ts';
-import { exchangeCode, larkAuthorizeUrl, upsertUser } from './lark.ts';
+import { exchangeCode, larkAuthorizeUrl } from '../lark/auth.ts';
+import { oidcAuthorize, oidcExchange } from './oidc.ts';
+import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
@@ -18,7 +20,7 @@ const cookieOpts = { path: '/', httpOnly: true, sameSite: 'Lax' as const, secure
 
 const localeOf = (c: Context) => requestLocale((h) => c.req.header(h));
 
-authRoutes.get('/auth/login', (c) => {
+authRoutes.get('/auth/login', async (c) => {
   const ret = safeReturnPath(c.req.query('return'));
   if (config.devLogin) {
     const L = localeOf(c);
@@ -31,8 +33,14 @@ authRoutes.get('/auth/login', (c) => {
       </ul></form>`, L));
   }
   const state = randomToken(16);
-  setCookie(c, STATE_COOKIE, `${state}|${ret}`, { ...cookieOpts, maxAge: 600 });
-  return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state));
+  const callback = `${config.hubUrl}/auth/callback`;
+  if (config.auth.provider === 'oidc') {
+    const { url, verifier } = await oidcAuthorize(callback, state);
+    setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|login|${verifier}`, { ...cookieOpts, maxAge: 600 });
+    return c.redirect(url);
+  }
+  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|login`, { ...cookieOpts, maxAge: 600 });
+  return c.redirect(larkAuthorizeUrl(callback, state));
 });
 
 /**
@@ -45,7 +53,7 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const L = localeOf(c);
   const user = sessionUser(getCookie(c, HUB_COOKIE));
   if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/lark/connect?return=${encodeURIComponent(ret)}`)}`);
-  if (!config.lark.appId) {
+  if (!config.lark.enabled) {
     return c.html(page(tr(L, 'lark.connect.noApp.title'), `<h1>${escapeHtml(tr(L, 'lark.connect.noApp.title'))}</h1><p>${escapeHtml(tr(L, 'lark.connect.noApp.body'))}</p>
       <a class="btn" href="${escapeHtml(ret)}">${escapeHtml(tr(L, 'lark.connect.back'))}</a>`, L), 400);
   }
@@ -62,6 +70,7 @@ authRoutes.get('/auth/lark/connect', (c) => {
  * agreement and, if needed, sends them through "connect Lark data" (with write access when a table is writable).
  */
 authRoutes.get('/auth/app-lark', (c) => {
+  if (!config.lark.enabled) return c.notFound();
   const L = localeOf(c);
   const slug = c.req.query('app') ?? '';
   const ret = safeReturnPath(c.req.query('return'));
@@ -91,6 +100,7 @@ authRoutes.get('/auth/app-lark', (c) => {
 });
 
 authRoutes.post('/auth/app-lark', async (c) => {
+  if (!config.lark.enabled) return c.notFound();
   const L = localeOf(c);
   const origin = c.req.header('origin');
   if (origin && origin !== config.hubUrl) return c.text('bad origin', 403);
@@ -131,29 +141,37 @@ authRoutes.post('/auth/dev-login', async (c) => {
 });
 
 authRoutes.get('/auth/callback', async (c) => {
-  const [expected, rawRet, mode] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
-  const ret = mode === 'connect' ? safeReturnPath(decodeURIComponent(rawRet ?? '')) : rawRet;
+  const [expected, rawRet, mode, verifier] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
+  const ret = safeReturnPath(decodeURIComponent(rawRet ?? ''));
   deleteCookie(c, STATE_COOKIE, { path: '/', secure: config.secure });
   const code = c.req.query('code');
   const L = localeOf(c);
   const failed = (reason: string, status: 400 | 500) => c.html(page(tr(L, 'login.failed.title'),
     `<h1>${escapeHtml(tr(L, 'login.failed.title'))}</h1><p>${escapeHtml(reason)}</p><a class="btn primary" href="/auth/login">${escapeHtml(tr(L, 'login.retry'))}</a>`, L), status);
   if (!code || !expected || c.req.query('state') !== expected) return failed(tr(L, 'login.failed.expired'), 400);
+  const callback = `${config.hubUrl}/auth/callback`;
   try {
-    const { info, tokens } = await exchangeCode(code, `${config.hubUrl}/auth/callback`);
+    if (config.auth.provider === 'oidc') {
+      if (mode !== 'login' || !verifier) return failed(tr(L, 'login.failed.expired'), 400);
+      const user = upsertUser(await oidcExchange(code, callback, verifier));
+      setCookie(c, HUB_COOKIE, createSession(user.id), { ...cookieOpts, maxAge: 30 * 86400 });
+      return c.redirect(ret);
+    }
+    const { identity, tokens } = await exchangeCode(code, callback);
     if (mode === 'connect') {
       const current = sessionUser(getCookie(c, HUB_COOKIE));
       if (!current) return failed(tr(L, 'login.failed.expired'), 400);
       // the Lark account that granted access must be the person signed in to the hub
-      if (current.id !== info.open_id) return failed(tr(L, 'lark.connect.otherAccount'), 400);
+      if (current.id !== identity.id) return failed(tr(L, 'lark.connect.otherAccount'), 400);
       saveTokens(current.id, tokens);
-      return c.redirect(safeReturnPath(ret));
+      return c.redirect(ret);
     }
-    const user = upsertUser(info);
+    const user = upsertUser(identity);
     setCookie(c, HUB_COOKIE, createSession(user.id), { ...cookieOpts, maxAge: 30 * 86400 });
-    return c.redirect(safeReturnPath(ret));
+    return c.redirect(ret);
   } catch (e) {
-    console.error('[auth] lark callback failed', e);
+    if (e instanceof UserError) return failed(e.localized(L), 400);
+    console.error('[auth] sign-in callback failed', e);
     return failed((e as Error).message, 500);
   }
 });

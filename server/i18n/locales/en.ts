@@ -66,7 +66,8 @@ const en: Record<MessageKey, string> = {
   'note.skillsUpToDate': 'Everything is up to date',
 
   'login.dev.title': 'Development sign-in',
-  'login.dev.body': 'LARK_APP_ID is not configured; sign in with a local test account.',
+  'login.dev.body': 'No sign-in provider (Lark or OIDC) is configured; sign in with a local test account.',
+  'err.login.domainNotAllowed': '{email} cannot sign in to this hub: only company email addresses can. Sign in with your work account.',
   'login.dev.admin': 'admin',
   'login.failed.title': 'Sign-in failed',
   'login.failed.expired': 'The sign-in session expired. Please sign in again.',
@@ -169,7 +170,8 @@ const en: Record<MessageKey, string> = {
   'alert.msg.source': 'Source: {source} {url}',
   'alert.msg.hub': 'Open the hub: {url}',
   'lark.connect.noApp.title': 'No Lark app configured',
-  'lark.connect.noApp.body': 'This hub runs in local development mode without Lark, so it cannot read Lark data.',
+  'lark.connect.noApp.body': 'This hub does not sign in with Lark, so it cannot read Lark data.',
+  'err.lark.disabled': 'This hub is not connected to Lark, so Lark features (Base tables, OKRs, Lark messages) are not available. Use a data app for data instead.',
   'lark.connect.back': 'Back',
   'lark.connect.otherAccount': 'The Lark account you approved with is not the one signed in to the hub. Please try again with the same account.',
 };

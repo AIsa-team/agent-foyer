@@ -68,55 +68,61 @@ export function AdminPage() {
         )}
       </div>
 
-      <div className="section">
-        <div className="section-title">{t('admin.okrOwner')}</div>
-        <div className="card pad">
-          <p className="small muted" style={{ marginTop: 0 }}>{t('admin.okrOwnerHint')}</p>
-          <select className="select" value={data.okrOwner ?? ''} disabled={busy} style={{ maxWidth: 320 }}
-            onChange={(e) => run(() => api.post('/admin/okr-owner', { owner: e.target.value || null }), t('admin.alertsSaved')).then(reload)}>
-            <option value="">{t('admin.okrOwnerAuto')}</option>
-            {data.users.map((u) => <option key={u.id} value={u.id}>{u.name}{u.email ? ` · ${u.email}` : ''}</option>)}
-          </select>
-        </div>
-      </div>
-
-      <div className="section">
-        <div className="section-title">{t('admin.alerts')}</div>
-        <div className="card pad">
-          <p className="small muted" style={{ marginTop: 0 }}>{t('admin.alertsHint')}</p>
-          <div className="stack" style={{ gap: 8 }}>
-            {(['admins', 'everyone'] as const).map((mode) => (
-              <label key={mode} className={`option ${data.alertNotify === mode ? 'selected' : ''}`}>
-                <input type="radio" name="alert-notify" checked={data.alertNotify === mode} disabled={busy}
-                  onChange={() => run(() => api.post('/admin/alerts', { notify: mode }), t('admin.alertsSaved')).then(reload)} />
-                <span><b>{t(`admin.alerts.${mode}`)}</b><br /><span className="small muted">{t(`admin.alerts.${mode}Hint`)}</span></span>
-              </label>
-            ))}
+      {me.hub.features.lark && (
+        <div className="section">
+          <div className="section-title">{t('admin.okrOwner')}</div>
+          <div className="card pad">
+            <p className="small muted" style={{ marginTop: 0 }}>{t('admin.okrOwnerHint')}</p>
+            <select className="select" value={data.okrOwner ?? ''} disabled={busy} style={{ maxWidth: 320 }}
+              onChange={(e) => run(() => api.post('/admin/okr-owner', { owner: e.target.value || null }), t('admin.alertsSaved')).then(reload)}>
+              <option value="">{t('admin.okrOwnerAuto')}</option>
+              {data.users.map((u) => <option key={u.id} value={u.id}>{u.name}{u.email ? ` · ${u.email}` : ''}</option>)}
+            </select>
           </div>
         </div>
-      </div>
+      )}
 
-      <div className="section">
-        <div className="section-title">{t('admin.larkLinks')} <span className="count">{t('admin.larkLinksHint')}</span></div>
-        <div className="card pad">
-          {data.larkLinks.length === 0 && <p className="small muted" style={{ margin: 0 }}>{t('admin.larkLinksEmpty')}</p>}
-          <div className="stack" style={{ gap: 6 }}>
-            {data.larkLinks.map((l) => (
-              <div key={l.id} className="row">
-                <span style={{ width: 28, textAlign: 'center' }}>{/^https?:/.test(l.icon) ? <img src={l.icon} width={20} alt="" /> : l.icon || '🔗'}</span>
-                <span style={{ fontWeight: 500 }}>{l.name}</span>
-                <span className="small muted grow ellipsis">{l.url}</span>
-                <button className="btn sm ghost danger" onClick={() => run(() => api.del(`/lark-links/${l.id}`)).then(reload)} type="button">{t('common.delete')}</button>
-              </div>
-            ))}
+      {me.hub.features.messages && (
+        <div className="section">
+          <div className="section-title">{t('admin.alerts')}</div>
+          <div className="card pad">
+            <p className="small muted" style={{ marginTop: 0 }}>{t('admin.alertsHint')}</p>
+            <div className="stack" style={{ gap: 8 }}>
+              {(['admins', 'everyone'] as const).map((mode) => (
+                <label key={mode} className={`option ${data.alertNotify === mode ? 'selected' : ''}`}>
+                  <input type="radio" name="alert-notify" checked={data.alertNotify === mode} disabled={busy}
+                    onChange={() => run(() => api.post('/admin/alerts', { notify: mode }), t('admin.alertsSaved')).then(reload)} />
+                  <span><b>{t(`admin.alerts.${mode}`)}</b><br /><span className="small muted">{t(`admin.alerts.${mode}Hint`)}</span></span>
+                </label>
+              ))}
+            </div>
           </div>
-          <LinkForm onAdded={reload} />
         </div>
-      </div>
+      )}
+
+      {me.hub.features.lark && (
+        <div className="section">
+          <div className="section-title">{t('admin.larkLinks')} <span className="count">{t('admin.larkLinksHint')}</span></div>
+          <div className="card pad">
+            {data.larkLinks.length === 0 && <p className="small muted" style={{ margin: 0 }}>{t('admin.larkLinksEmpty')}</p>}
+            <div className="stack" style={{ gap: 6 }}>
+              {data.larkLinks.map((l) => (
+                <div key={l.id} className="row">
+                  <span style={{ width: 28, textAlign: 'center' }}>{/^https?:/.test(l.icon) ? <img src={l.icon} width={20} alt="" /> : l.icon || '🔗'}</span>
+                  <span style={{ fontWeight: 500 }}>{l.name}</span>
+                  <span className="small muted grow ellipsis">{l.url}</span>
+                  <button className="btn sm ghost danger" onClick={() => run(() => api.del(`/lark-links/${l.id}`)).then(reload)} type="button">{t('common.delete')}</button>
+                </div>
+              ))}
+            </div>
+            <LinkForm onAdded={reload} />
+          </div>
+        </div>
+      )}
 
       <div className="section">
         <div className="section-title">{t('admin.members')} <span className="count">{t('admin.memberCount', { n: data.users.length })}</span><span className="spacer" />
-          {!data.devLogin && <button className="btn sm" disabled={busy} onClick={sync} type="button"><Icon name="refresh" /> {t('admin.sync')}</button>}
+          {!data.devLogin && me.hub.features.lark && <button className="btn sm" disabled={busy} onClick={sync} type="button"><Icon name="refresh" /> {t('admin.sync')}</button>}
         </div>
         <div className="card table-wrap">
           <table className="table">

@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
 import { appUrl, config } from './config.ts';
+import { messenger } from './notify.ts';
 import { all, type User } from './db.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
@@ -19,6 +20,9 @@ import * as boards from './boards.ts';
 import { createUpload } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
 import { localeCodes, type LocalizedMap } from './localized.ts';
+
+const LARK = config.lark.enabled;
+const MESSAGES = !!messenger;
 
 const INSTRUCTIONS = `This is the ${config.companyName} company hub. It lets the user publish web apps to the company server and share/install Skills.
 
@@ -40,17 +44,17 @@ Publishing an app (e.g. "publish this project to the company server"):
 Logged-in users reach apps through the hub gateway. Your app can read the current user from request headers X-Hub-User-Id, X-Hub-User-Name (URI-encoded), X-Hub-User-Email, X-Hub-User-Locale, or from the browser via fetch('/__hub/me') ({ id, name, email, avatar, locale }). Do not build a separate login. App UI text should follow the user's hub language (locale above) with locale files, so English and Chinese colleagues can both use it.
 ${config.designSkills.length ? `Company design: when you build anything visual (apps, pages, decks, charts), install and follow these Skills from the market: ${config.designSkills.join(', ')}.` : 'Company design: if the Skill market has design-system or brand Skills (check list_skills), install and follow them when you build anything visual.'}
 Never put secrets in the upload; use set_app_env for API keys.
-Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).
+${LARK ? `Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).\n` : ''}
 
 Sharing a Skill: if it has no icon, draw a simple square SVG icon and pass icon_svg. The folder must have SKILL.md at its root with frontmatter "name" (lowercase-hyphen) and "description". create_upload(purpose="skill"), upload the folder contents, then publish_skill with localized market names/descriptions for every hub language. Republishing the same name creates a new version. To change only the market text later, use update_skill.
-Lark data (Base tables): the hub reads Lark Base with each person's own Lark access, so everyone only sees rows they could open in Lark. If a tool says Lark data is not connected, give the user the link it returns (they approve once in Lark) and continue after they confirm.
-To chart a table: inspect_base(url) to see its tables and fields, then save_data_source with a short id and a title in every hub language, then try query_data until the numbers look right, then put it on a home page (chart/stats module with source {data: <id>, query}) via preview_homepage. Use count / sum / avg with groupBy for breakdowns and date {field, bucket, last} for trends; stats tiles with date get the trend and the change vs the previous bucket automatically (add date.complete: true so the current, unfinished period is not compared with a full one; the tile's period text is just "last month" / "上月").
-Data apps: data that is not in Lark Base (Metabase, a database, a CRM, another SaaS) comes in through a small hub app the user's agent builds and publishes like any other app. The app answers GET <path> with JSON {"rows": [{...}, ...]} (or a bare array): one flat object per row; dates as ISO strings ("2026-07-20T06:32:29Z") or ms timestamps, numbers as numbers. Optional per row: "_id" (unique and stable; needed for data checks) and "_url" (link to the row in its own system). Optional top level "fields": [{"name", "type": "text|number|date|person|select|multi|checkbox"}] when inference is not enough. Put a person's name or email in a normal field (e.g. "owner") to assign data-check issues. Keep credentials in set_app_env, cache upstream results for a few minutes, and keep rows under ~50k. Visibility of the app = who may see its data: the hub fetches as the viewer (X-Hub-User-* headers) and only for people allowed to open the app. Then inspect_app_data, save_data_source with app + path, and use it like any Base source.
+${LARK ? `Lark data (Base tables): the hub reads Lark Base with each person's own Lark access, so everyone only sees rows they could open in Lark. If a tool says Lark data is not connected, give the user the link it returns (they approve once in Lark) and continue after they confirm.\n` : ''}
+To chart data: register it once as a data source (${LARK ? 'a Lark Base table: inspect_base(url) to see its tables and fields; ' : ''}a data app: see below), save_data_source with a short id and a title in every hub language, then try query_data until the numbers look right, then put it on a home page (chart/stats module with source {data: <id>, query}) via preview_homepage. Use count / sum / avg with groupBy for breakdowns and date {field, bucket, last} for trends; stats tiles with date get the trend and the change vs the previous bucket automatically (add date.complete: true so the current, unfinished period is not compared with a full one; the tile's period text is just "last month" / "上月").
+Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase, a database, a CRM, another SaaS) comes in through a small hub app the user's agent builds and publishes like any other app. The app answers GET <path> with JSON {"rows": [{...}, ...]} (or a bare array): one flat object per row; dates as ISO strings ("2026-07-20T06:32:29Z") or ms timestamps, numbers as numbers. Optional per row: "_id" (unique and stable; needed for data checks) and "_url" (link to the row in its own system). Optional top level "fields": [{"name", "type": "text|number|date|person|select|multi|checkbox"}] when inference is not enough. Put a person's name or email in a normal field (e.g. "owner") to assign data-check issues. Keep credentials in set_app_env, cache upstream results for a few minutes, and keep rows under ~50k. Visibility of the app = who may see its data: the hub fetches as the viewer (X-Hub-User-* headers) and only for people allowed to open the app. Then inspect_app_data, save_data_source with app + path, and use it like any other data source.
 Example, a Metabase question: in Metabase Admin → Authentication → API keys create a key (give it a group that only sees what is needed); set_app_env METABASE_URL and METABASE_API_KEY; a container app with GET /rows that POSTs {METABASE_URL}/api/card/<question id>/query/json with header x-api-key, caches the result 5 minutes, adds _id from the question's unique column and _url {METABASE_URL}/question/<id>, and returns {rows}.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
-Data quality ("异常项"): the hub can check Base tables for records that need fixing. When asked to clean up a table, inspect_base first, then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the person field of whoever must fix the record: they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.
-Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule with the creator's Lark access; when it starts or stops firing the hub bot messages the recipients (and optionally a Lark group via chat_id) in Lark, and it shows on their home pages (alerts module). Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. For now the hub only messages hub admins; other recipients see alerts on their home page. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
+Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
+${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
 const localizedSchema = () => z.record(z.string(), z.object({ name: z.string().optional(), description: z.string().optional() }))
@@ -293,7 +297,7 @@ export function buildMcpServer(user: User): McpServer {
     myDepartments: homepage.userDepartments(user, locale),
     editableDepartments: homepage.editableDepartments(user, locale),
     apps: apps.listAppsFor(user, locale).filter((x) => x.canOpen).map((x) => ({ slug: x.slug, name: x.name })),
-    tip: 'Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Data can be static, come from an app via source {app, path, pick}, or from a Lark Base data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about. The okr module shows Lark OKRs (default: each viewer their own) as a pace card. Always preview_homepage and send the user the link; save only after they confirm.',
+    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card.' : ' (The okr module needs Lark and is not available on this hub.)'} Always preview_homepage and send the user the link; save only after they confirm.`,
   })));
 
   server.registerTool('preview_homepage', {
@@ -311,31 +315,35 @@ export function buildMcpServer(user: User): McpServer {
     inputSchema: scopeArgs,
   }, guard((a: { scope: homepage.Scope; department_id?: string }) => homepage.resetHome(user, a.scope, a.department_id)));
 
-  // ---- Lark data: Base tables as data sources, alert rules ----
-  server.registerTool('lark_data_status', {
-    description: 'Whether the user has connected their Lark data (needed before reading Base tables). If not, returns the link they open once to approve.',
-  }, guard(() => {
-    const c = connection(user.id);
-    return c.connected ? c : { ...c, connectUrl: connectUrl('/me'), hint: 'Send this link to the user; they approve in Lark, then call again.' };
-  }));
+  // ---- data sources (Lark Base tables or data apps), alert rules ----
+  if (LARK) {
+    server.registerTool('lark_data_status', {
+      description: 'Whether the user has connected their Lark data (needed before reading Base tables). If not, returns the link they open once to approve.',
+    }, guard(() => {
+      const c = connection(user.id);
+      return c.connected ? c : { ...c, connectUrl: connectUrl('/me'), hint: 'Send this link to the user; they approve in Lark, then call again.' };
+    }));
 
-  server.registerTool('inspect_base', {
-    description: 'Look inside a Lark Base (Bitable) link with the user\'s Lark access: its tables, and for the chosen table (from ?table= in the link, or `table`) the fields with their types and 5 sample rows.',
-    inputSchema: { url: z.string().describe('a Lark Base or wiki link, e.g. https://xxx.larksuite.com/base/AbC…?table=tbl…'), table: z.string().optional() },
-  }, guard((a: { url: string; table?: string }) => dataSources.inspect(user, a.url, a.table)));
+    server.registerTool('inspect_base', {
+      description: 'Look inside a Lark Base (Bitable) link with the user\'s Lark access: its tables, and for the chosen table (from ?table= in the link, or `table`) the fields with their types and 5 sample rows.',
+      inputSchema: { url: z.string().describe('a Lark Base or wiki link, e.g. https://xxx.larksuite.com/base/AbC…?table=tbl…'), table: z.string().optional() },
+    }, guard((a: { url: string; table?: string }) => dataSources.inspect(user, a.url, a.table)));
+  }
 
   server.registerTool('list_data_sources', {
-    description: 'Lark Base tables registered in the hub as data sources (id, title, link, owner).',
+    description: 'Data sources registered in the hub (id, title, link, owner): Lark Base tables or data apps.',
   }, guard(() => ({ sources: dataSources.listSources(locale) })));
 
   server.registerTool('save_data_source', {
-    description: 'Register (or update, if you own it) a named data source for home pages, boards, alerts and data checks: either a Lark Base table (url) or rows served by a hub app (app + path, see "Data apps" in the instructions). The hub reads it once as the user to check it.',
+    description: `Register (or update, if you own it) a named data source for home pages, boards, alerts and data checks: ${LARK ? 'either a Lark Base table (url) or ' : ''}rows served by a hub app (app + path, see "Data apps" in the instructions). The hub reads it once as the user to check it.`,
     inputSchema: {
       id: z.string().describe('short lowercase id, e.g. "sales-orders"'),
       title: i18nText().describe('name per hub language'),
-      url: z.string().optional().describe('Lark Base or wiki link; include ?table=… (and &view=… to read only a view)'),
-      table: z.string().optional().describe('table id, if the link has none'),
-      app: z.string().optional().describe('slug of a hub app that serves rows (instead of url)'),
+      ...(LARK ? {
+        url: z.string().optional().describe('Lark Base or wiki link; include ?table=… (and &view=… to read only a view)'),
+        table: z.string().optional().describe('table id, if the link has none'),
+      } : {}),
+      app: z.string().optional().describe(LARK ? 'slug of a hub app that serves rows (instead of url)' : 'slug of a hub app that serves rows'),
       path: z.string().optional().describe('path on that app returning {"rows": [...]}, e.g. /api/rows'),
     },
   }, guard((a: { id: string; title: lib.I18nText; url?: string; table?: string; app?: string; path?: string }) => dataSources.saveSource(user, a)));
@@ -351,7 +359,7 @@ export function buildMcpServer(user: User): McpServer {
   }, guard((a: { id: string }) => dataSources.deleteSource(user, a.id)));
 
   server.registerTool('query_data', {
-    description: 'Run a query on a data source with the user\'s Lark access and see the numbers (use this to check a chart or alert before saving it).',
+    description: 'Run a query on a data source as the user and see the numbers (use this to check a chart or alert before saving it).',
     inputSchema: { source: z.string(), query: querySchema },
   }, guard(async (a: { source: string; query: Query }) => {
     const r = await dataSources.query(user, a.source, a.query, true);
@@ -363,7 +371,7 @@ export function buildMcpServer(user: User): McpServer {
   }, guard(() => ({ rules: alerts.rulesFor(user, locale) })));
 
   server.registerTool('save_alert_rule', {
-    description: 'Create (no id) or update an alert rule on a data source. Checked every every_minutes with your Lark access; Lark messages go to you, the recipients, and chat_id when it starts or stops firing.',
+    description: `Create (no id) or update an alert rule on a data source. Checked every every_minutes as you; it shows on the home pages of you and the recipients${MESSAGES ? `, and the hub bot messages them${LARK ? ' (and chat_id)' : ''} when it starts or stops firing` : ''}.`,
     inputSchema: {
       id: z.number().int().optional(),
       title: i18nText().describe('what is being watched, per hub language, e.g. "Daily signups"'),
@@ -371,17 +379,17 @@ export function buildMcpServer(user: User): McpServer {
       query: querySchema.describe('one number: no groupBy/series. Add date {field, bucket, last: 2, complete: true} to watch the last finished day/week/month (needed for change conditions, so a half-finished period does not look like a drop)'),
       condition: alerts.conditionSchema,
       recipients: z.array(z.string()).max(50).optional().describe('colleagues to tell (email, name or open_id); you are always included'),
-      chat_id: z.string().optional().describe('Lark group chat id (oc_…) the hub bot is in'),
+      ...(LARK ? { chat_id: z.string().optional().describe('Lark group chat id (oc_…) the hub bot is in') } : {}),
       every_minutes: z.number().int().min(10).max(1440).optional().describe('default 60'),
       enabled: z.boolean().optional(),
     },
   }, guard((a: { id?: number; title: lib.I18nText; source: string; query: Query; condition: alerts.Condition; recipients?: string[]; chat_id?: string; every_minutes?: number; enabled?: boolean }) => {
     const saved = alerts.saveRule(user, { id: a.id, title: a.title, source: a.source, query: a.query, condition: a.condition, recipients: resolveColleagues(a.recipients ?? []), chatId: a.chat_id, everyMinutes: a.every_minutes, enabled: a.enabled });
-    return alerts.notifyMode() === 'admins' ? { ...saved, note: say({ key: 'note.alert.adminsOnly' }) } : saved;
+    return MESSAGES && alerts.notifyMode() === 'admins' ? { ...saved, note: say({ key: 'note.alert.adminsOnly' }) } : saved;
   }));
 
   server.registerTool('check_alert_rule', {
-    description: 'Check an alert rule right now and return its value and state. With notify (default true) due Lark messages go out, still subject to the cooldown, quiet hours and the admins-only setting; notify=false only checks.',
+    description: 'Check an alert rule right now and return its value and state. With notify (default true) due messages go out (if the hub can message people), still subject to the cooldown, quiet hours and the admins-only setting; notify=false only checks.',
     inputSchema: { id: z.number().int(), notify: z.boolean().optional() },
   }, guard(async (a: { id: number; notify?: boolean }) => {
     if (!alerts.rulesFor(user, locale).some((r) => r.id === a.id)) throw new UserError('err.alert.notFound', { id: a.id });
@@ -400,7 +408,7 @@ export function buildMcpServer(user: User): McpServer {
   }, guard(() => ({ boards: boards.boardsFor(user, locale), canEditCompany: user.role === 'admin', editableDepartments: homepage.editableDepartments(user, locale) })));
 
   server.registerTool('save_board', {
-    description: 'Create or replace a shared data board on the Data page. Company boards (no department_id) need an admin; department boards need a leader of that department and are shown to its members. Same modules as home pages; numbers are read with each viewer\'s own Lark access. Show the user the result at the returned URL.',
+    description: 'Create or replace a shared data board on the Data page. Company boards (no department_id) need an admin; department boards need a leader of that department and are shown to its members. Same modules as home pages; numbers are read as each viewer. Show the user the result at the returned URL.',
     inputSchema: {
       id: z.string().describe('short lowercase id, e.g. "sales-weekly"'),
       title: i18nText(),
@@ -417,19 +425,21 @@ export function buildMcpServer(user: User): McpServer {
   }, guard((a: { id: string }) => boards.deleteBoard(user, a.id)));
 
   // ---- apps that use Lark as the person using them ----
-  server.registerTool('set_app_lark', {
-    description: 'Declare which Lark Base tables an app may use (read or write) and whom it may notify through the hub bot. Each colleague agrees once before the app can act as them; changing the declaration asks again. Send empty lists to remove it.',
-    inputSchema: { slug: z.string(), lark: appLark.manifestSchema },
-  }, guard(async (a: { slug: string; lark: appLark.ManifestInput }) => {
-    const app = apps.getApp(a.slug);
-    if (!app) throw new UserError('err.appNotFound', { slug: a.slug });
-    const m = await appLark.setManifest(user, app, a.lark, resolveColleagues(a.lark.notify?.people ?? []));
-    return { declared: m && appLark.describeManifest(undefined, { ...app, lark_manifest: JSON.stringify(m) }), sdk: `${appUrl(a.slug)}/__hub/sdk.js` };
-  }));
+  if (LARK) {
+    server.registerTool('set_app_lark', {
+      description: 'Declare which Lark Base tables an app may use (read or write) and whom it may notify through the hub bot. Each colleague agrees once before the app can act as them; changing the declaration asks again. Send empty lists to remove it.',
+      inputSchema: { slug: z.string(), lark: appLark.manifestSchema },
+    }, guard(async (a: { slug: string; lark: appLark.ManifestInput }) => {
+      const app = apps.getApp(a.slug);
+      if (!app) throw new UserError('err.appNotFound', { slug: a.slug });
+      const m = await appLark.setManifest(user, app, a.lark, resolveColleagues(a.lark.notify?.people ?? []));
+      return { declared: m && appLark.describeManifest(undefined, { ...app, lark_manifest: JSON.stringify(m) }), sdk: `${appUrl(a.slug)}/__hub/sdk.js` };
+    }));
+  }
 
   // ---- data checks ("异常项") ----
   server.registerTool('save_check', {
-    description: 'Create (no id) or update a data check: a rule that finds records in a data source that need fixing. It runs right away with your Lark access and returns how many records it found plus a sample, so you can tune it before showing the team.',
+    description: 'Create (no id) or update a data check: a rule that finds records in a data source that need fixing. It runs right away as you and returns how many records it found plus a sample, so you can tune it before showing the team.',
     inputSchema: {
       id: z.number().int().optional(),
       title: i18nText().describe('what is wrong, per hub language, e.g. "Paid but no payment date"'),
@@ -438,7 +448,7 @@ export function buildMcpServer(user: User): McpServer {
       level: z.enum(checks.LEVELS).describe('error = definitely wrong; verify = needs a human to confirm; style = written inconsistently'),
       team: i18nText().optional().describe('who usually fixes it, e.g. Finance'),
       spec: checks.specSchema,
-      owner_field: z.string().optional().describe('person field: whoever is in it must fix the record (they see it on their home page)'),
+      owner_field: z.string().optional().describe('person field, or a field with names / emails: whoever is in it must fix the record (they see it on their home page)'),
       label_fields: z.array(z.string()).min(1).max(3).describe('fields that name a record in the list, e.g. project name and client'),
       enabled: z.boolean().optional(),
     },
@@ -468,25 +478,27 @@ export function buildMcpServer(user: User): McpServer {
     return { counts: r.counts, lastRun: r.lastRun, checks: r.checks.map((c) => ({ id: c.id, title: c.title, level: c.level, rows: keep(c.rows).map(({ owners, ...x }) => ({ ...x, owners: owners.map((o) => o.name) })) })).filter((c) => c.rows.length) };
   }));
 
-  server.registerTool('get_okrs', {
-    description: 'Lark OKRs with the user\'s Lark access: objectives and key results with progress (0–1) for a period (default: current), the overall progress and how much of the period has passed.',
-    inputSchema: {
-      colleague: z.string().optional().describe('whose OKRs (email, name or open_id); default: the user'),
-      period_id: z.string().optional().describe('from list_okr_periods; default: the current period'),
-    },
-  }, guard((a: { colleague?: string; period_id?: string }) => userOkrs(user, { userId: a.colleague ? resolveColleagues([a.colleague])[0] : undefined, periodId: a.period_id, locale })));
+  if (LARK) {
+    server.registerTool('get_okrs', {
+      description: 'Lark OKRs with the user\'s Lark access: objectives and key results with progress (0–1) for a period (default: current), the overall progress and how much of the period has passed.',
+      inputSchema: {
+        colleague: z.string().optional().describe('whose OKRs (email, name or open_id); default: the user'),
+        period_id: z.string().optional().describe('from list_okr_periods; default: the current period'),
+      },
+    }, guard((a: { colleague?: string; period_id?: string }) => userOkrs(user, { userId: a.colleague ? resolveColleagues([a.colleague])[0] : undefined, periodId: a.period_id, locale })));
 
-  server.registerTool('get_company_okrs', {
-    description: 'Everyone\'s Lark OKRs for a period (default: current), read with the user\'s Lark access: each objective with owner, progress and what it aligns to, the company\'s objectives, objectives not aligned to anything, each person\'s average progress and who has no OKRs yet. Good for OKR reviews and weekly reports.',
-    inputSchema: { period_id: z.string().optional() },
-  }, guard(async (a: { period_id?: string }) => {
-    const b = await okrBoard(user, locale, a.period_id);
-    return { ...b, people: { total: b.people.total, withOkrs: b.people.withOkrs, without: b.people.without.map((p) => p.name), hidden: b.people.hidden.map((p) => p.name) } };
-  }));
+    server.registerTool('get_company_okrs', {
+      description: 'Everyone\'s Lark OKRs for a period (default: current), read with the user\'s Lark access: each objective with owner, progress and what it aligns to, the company\'s objectives, objectives not aligned to anything, each person\'s average progress and who has no OKRs yet. Good for OKR reviews and weekly reports.',
+      inputSchema: { period_id: z.string().optional() },
+    }, guard(async (a: { period_id?: string }) => {
+      const b = await okrBoard(user, locale, a.period_id);
+      return { ...b, people: { total: b.people.total, withOkrs: b.people.withOkrs, without: b.people.without.map((p) => p.name), hidden: b.people.hidden.map((p) => p.name) } };
+    }));
 
-  server.registerTool('list_okr_periods', {
-    description: 'Lark OKR periods (id, name, date range when it can be read from the name).',
-  }, guard(async () => ({ periods: await listPeriods(user, locale) })));
+    server.registerTool('list_okr_periods', {
+      description: 'Lark OKR periods (id, name, date range when it can be read from the name).',
+    }, guard(async () => ({ periods: await listPeriods(user, locale) })));
+  }
 
   server.registerTool('install_skill', {
     description: 'Get the download command to install (or update) a skill from the company market.',

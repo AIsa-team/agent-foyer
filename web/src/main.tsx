@@ -39,7 +39,7 @@ function Shell() {
   }, [t, me.hub.companyName]);
   const nav = [
     { to: '/', label: t('nav.home'), icon: 'home' as const, end: true },
-    { to: '/okr', label: 'OKR', icon: 'target' as const },
+    ...(me.hub.features.lark ? [{ to: '/okr', label: 'OKR', icon: 'target' as const }] : []),
     { to: '/library', label: t('nav.library'), icon: 'library' as const },
     { to: '/data', label: t('nav.data'), icon: 'chart' as const },
     { to: '/issues', label: t('nav.issues'), icon: 'issues' as const },
@@ -88,7 +88,7 @@ function Shell() {
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/data" element={<DataPage />} />
           <Route path="/org" element={<OrgPage />} />
-          <Route path="/okr" element={<OkrPage />} />
+          {me.hub.features.lark && <Route path="/okr" element={<OkrPage />} />}
           <Route path="/apps" element={<AppsPage />} />
           <Route path="/apps/:slug" element={<AppDetailPage />} />
           <Route path="/skills" element={<SkillsPage />} />

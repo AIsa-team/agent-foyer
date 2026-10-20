@@ -1,6 +1,7 @@
 import { config } from '../config.ts';
-import { all, get, now, run, tx, type User } from '../db.ts';
-import { larkFetch } from '../lark/client.ts';
+import { now, run } from '../db.ts';
+import { upsertUser, type Identity } from '../auth/users.ts';
+import { larkFetch } from './client.ts';
 
 export function larkAuthorizeUrl(redirectUri: string, state: string, scope?: string): string {
   const u = new URL(`${config.lark.accountsBase}/authen/v1/authorize`);
@@ -23,7 +24,7 @@ interface LarkUserInfo {
 export interface UserTokens { access_token: string; expires_in: number; refresh_token?: string; refresh_token_expires_in?: number; scope?: string }
 
 /** Trades a login or data-connect code for the person's tokens and who they are. */
-export async function exchangeCode(code: string, redirectUri: string): Promise<{ info: LarkUserInfo; tokens: UserTokens }> {
+export async function exchangeCode(code: string, redirectUri: string): Promise<{ identity: Identity; tokens: UserTokens }> {
   const tokens = await larkFetch<UserTokens>('/authen/v2/oauth/token', {
     method: 'POST',
     body: JSON.stringify({
@@ -35,7 +36,7 @@ export async function exchangeCode(code: string, redirectUri: string): Promise<{
     }),
   });
   const info = await larkFetch<{ data: LarkUserInfo }>('/authen/v1/user_info', { token: tokens.access_token });
-  return { info: info.data, tokens };
+  return { identity: identityOf({ ...info.data, avatar: { avatar_240: info.data.avatar_url } }), tokens };
 }
 
 
@@ -51,23 +52,6 @@ export async function getTenantToken(): Promise<string> {
   return tenantToken.value;
 }
 
-export function upsertUser(info: { open_id: string; name: string; en_name?: string; email?: string; enterprise_email?: string; avatar_url?: string }, touch = true): User {
-  const email = info.enterprise_email || info.email || null;
-  return tx(() => {
-    const isFirst = !get('SELECT 1 FROM users LIMIT 1');
-    const isConfiguredAdmin = config.admins.includes(info.open_id) || (!!email && config.admins.includes(email));
-    run(
-      `INSERT INTO users (id, name, en_name, email, avatar, role, created_at, last_seen_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, en_name = excluded.en_name, email = excluded.email,
-         avatar = excluded.avatar, last_seen_at = COALESCE(excluded.last_seen_at, users.last_seen_at),
-         role = CASE WHEN ? THEN 'admin' ELSE users.role END`,
-      info.open_id, info.name, info.en_name ?? null, email, info.avatar_url ?? null,
-      isFirst || isConfiguredAdmin ? 'admin' : 'member', now(), touch ? now() : null, isConfiguredAdmin ? 1 : 0,
-    );
-    return get<User>('SELECT * FROM users WHERE id = ?', info.open_id)!;
-  });
-}
 
 /**
  * Pull the company directory so people can be picked as app members before they ever log in.
@@ -78,6 +62,10 @@ type LarkDept = {
   i18n_name?: { zh_cn?: string; en_us?: string }; leaders?: { leaderType: number; leaderID: string }[];
 };
 type LarkContact = { open_id: string; name: string; en_name?: string; email?: string; enterprise_email?: string; avatar?: { avatar_240?: string } };
+/** People are keyed by their Lark open_id; the company email wins over a personal one. */
+const identityOf = (u: LarkContact): Identity => ({
+  id: u.open_id, name: u.name, enName: u.en_name, email: u.enterprise_email || u.email, avatar: u.avatar?.avatar_240,
+});
 type Page<K extends string, T> = { data: { [k in K]?: T[] } & { page_token?: string; has_more: boolean } };
 
 async function allPages<K extends string, T>(path: string, key: K, token: string): Promise<T[]> {
@@ -143,7 +131,7 @@ export async function syncDirectory(): Promise<number> {
   const save = (u: LarkContact) => {
     if (seen.has(u.open_id)) return;
     seen.add(u.open_id);
-    upsertUser({ ...u, avatar_url: u.avatar?.avatar_240 }, false);
+    upsertUser(identityOf(u), false);
   };
   for (const dep of departments) {
     try {
@@ -168,20 +156,4 @@ export async function syncDirectory(): Promise<number> {
     }
   }
   return seen.size;
-}
-
-/** Fake people for local development without a Lark app; removed again once Lark login is configured. */
-export function seedDevUsers() {
-  if (!config.devLogin) {
-    run(`DELETE FROM users WHERE id LIKE 'ou_dev_%'
-         AND NOT EXISTS (SELECT 1 FROM apps WHERE owner_id = users.id) AND NOT EXISTS (SELECT 1 FROM skills WHERE owner_id = users.id)`);
-    return;
-  }
-  if (all('SELECT 1 FROM users LIMIT 1').length) return;
-  const people = [
-    { open_id: 'ou_dev_alex', name: 'Alex', email: 'alex@example.com' },
-    { open_id: 'ou_dev_alice', name: '林小雨', email: 'alice@example.com' },
-    { open_id: 'ou_dev_bob', name: '周明', email: 'bob@example.com' },
-  ];
-  for (const p of people) upsertUser(p, false);
 }

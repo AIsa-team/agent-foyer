@@ -38,6 +38,10 @@ Apps that use Lark declare which tables they read or write and whom they may mes
 list, and changing the list asks again. Shared board snapshots are only served to people who can open the source
 table themselves.
 
+**Who can sign in.** With Lark, only members of your Lark tenant within the app's availability can. With OpenID
+Connect, anyone your provider lets through can, so set `OIDC_ALLOWED_DOMAINS` (the hub refuses to start with Google
+without it) or restrict the client to your organisation at the provider.
+
 **Secrets.** `HUB_SECRET` signs links and encrypts stored secrets; keep it stable (changing it makes stored app
 environment variables and Lark tokens unreadable) and keep it out of version control. The dev login (pick any user)
 refuses to start when `HUB_URL` is https.

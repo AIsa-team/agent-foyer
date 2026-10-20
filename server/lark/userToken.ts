@@ -7,7 +7,7 @@ import { config } from '../config.ts';
 import { decrypt, encrypt } from '../crypto.ts';
 import { get, now, run, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
-import type { UserTokens } from '../auth/lark.ts';
+import type { UserTokens } from '../lark/auth.ts';
 import { larkFetch, LarkError, TOKEN_CODES } from './client.ts';
 
 /** What "connect Lark data" asks for. offline_access is what makes Lark return a refresh token. */

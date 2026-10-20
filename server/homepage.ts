@@ -22,9 +22,9 @@ const source = z.object({
   pick: z.string().optional().describe('dot path into the JSON, e.g. "revenue.total"'),
 }).describe('live data from one of the company apps, fetched as the viewer');
 const baseSource = z.object({
-  data: z.string().describe('id of a Lark Base data source (see list_data_sources / save_data_source)'),
+  data: z.string().describe('id of a registered data source (see list_data_sources / save_data_source)'),
   query: querySchema,
-}).describe('live numbers from a Lark Base table, read with the viewer\'s own Lark access (people only see what they can open in Lark)');
+}).describe('live numbers from a registered data source (a Lark Base table or a data app), read as the viewer (people only see what they may open)');
 const anySource = z.union([source, baseSource]);
 const format = z.object({ style: z.enum(['decimal', 'percent', 'currency']).optional(), currency: z.string().optional(), unit: z.string().optional(), decimals: z.number().int().min(0).max(4).optional() }).optional();
 
@@ -41,7 +41,7 @@ const moduleSchema = z.discriminatedUnion('type', [
       label: text(), value: z.union([z.number(), z.string()]).optional(), format,
       delta: z.number().optional().describe('change as a fraction, e.g. 0.12 = +12%'), period: text().optional().describe('what the delta compares to, shown after a "vs": write "last month" / "上月", not "vs last month" / "较上月"'),
       goodWhenUp: z.boolean().optional(), trend: z.array(z.number()).max(24).optional(),
-      source: anySource.optional().describe('value comes from here instead of `value`; with a Base source and query.date, the tile also gets the trend and the change from the previous bucket'),
+      source: anySource.optional().describe('value comes from here instead of `value`; with a data source and query.date, the tile also gets the trend and the change from the previous bucket'),
     })).min(1).max(6),
   }).describe('a row of KPI tiles'),
   z.object({
@@ -57,7 +57,7 @@ const moduleSchema = z.discriminatedUnion('type', [
       'diverging {categories, values}; gantt {tasks:[{name,owner,start,end,progress,milestone?}], today}; calendar {data:[{date,value}], start, end}.',
       'Charts are ink by default with orange for the highlight; follow the data-viz rules (no rainbow, ≤ 8 series).',
     ].join(' ')),
-    source: anySource.optional().describe('the JSON at this source is used as `data`; Base sources work with kinds bar, line, area, donut, rank, funnel, waffle, segment, calendar (date.bucket "day" for calendar)'),
+    source: anySource.optional().describe('the JSON at this source is used as `data`; data sources work with kinds bar, line, area, donut, rank, funnel, waffle, segment, calendar (date.bucket "day" for calendar)'),
     format, height: z.number().int().min(120).max(480).optional(),
   }).describe('one chart following the hub\'s data-viz rules'),
   z.object({
@@ -78,7 +78,7 @@ const moduleSchema = z.discriminatedUnion('type', [
     user: z.string().optional().describe('whose OKRs: an email or open_id; default = whoever views the page (so one department/company layout shows each person their own)'),
   }).describe('Lark OKR for the current period as a pace card (progress vs time passed) plus objectives and key results'),
   z.object({ type: z.literal('alerts'), width, title: text().optional(), showOk: z.boolean().optional().describe('also list rules that are fine (default: only firing / failing ones)') })
-    .describe('alert rules on Lark Base data that the viewer owns or is told about'),
+    .describe('alert rules on data sources that the viewer owns or is told about'),
 ]);
 
 export const layoutSchema = z.object({ modules: z.array(moduleSchema).max(24) });
@@ -130,8 +130,9 @@ export function parseLayout(raw: unknown): Layout {
   if (!r.success) throw new UserError('err.home.badLayout', { details: r.error.issues.slice(0, 5).map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') });
   r.data.modules.forEach((m, i) => {
     if (m.type === 'chart' && m.source && 'data' in m.source && !(CHART_KINDS as readonly string[]).includes(m.kind)) {
-      throw new UserError('err.home.badLayout', { details: `modules.${i}.kind: "${m.kind}" cannot use a Base source (use ${CHART_KINDS.join(', ')})` });
+      throw new UserError('err.home.badLayout', { details: `modules.${i}.kind: "${m.kind}" cannot use a data source (use ${CHART_KINDS.join(', ')})` });
     }
+    if (m.type === 'okr' && !config.lark.enabled) throw new UserError('err.lark.disabled');
   });
   return r.data;
 }

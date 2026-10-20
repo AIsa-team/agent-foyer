@@ -10,6 +10,16 @@ function env(name: string, fallback?: string): string {
 
 const hubUrl = new URL(env('HUB_URL', 'http://localhost:8080'));
 const larkAppId = process.env.LARK_APP_ID ?? '';
+const oidcIssuer = (process.env.OIDC_ISSUER ?? '').replace(/\/+$/, '');
+/**
+ * How people sign in. "lark" also turns on everything built on Lark (Base data, OKRs, the directory, bot messages,
+ * apps acting in Lark); "oidc" is any OpenID Connect provider (Google, Microsoft Entra, Okta, Keycloak…) and gives
+ * the core hub; "dev" is a local pick-a-user login. Inferred from what is configured unless AUTH_PROVIDER says.
+ */
+const authProvider = env('AUTH_PROVIDER', larkAppId ? 'lark' : oidcIssuer ? 'oidc' : 'dev');
+if (!['lark', 'oidc', 'dev'].includes(authProvider)) throw new Error(`AUTH_PROVIDER must be lark, oidc or dev, not "${authProvider}"`);
+if (authProvider === 'lark' && !larkAppId) throw new Error('AUTH_PROVIDER=lark needs LARK_APP_ID and LARK_APP_SECRET (docs/LARK_SETUP.md).');
+if (authProvider === 'oidc' && (!oidcIssuer || !process.env.OIDC_CLIENT_ID)) throw new Error('AUTH_PROVIDER=oidc needs OIDC_ISSUER and OIDC_CLIENT_ID (docs/OIDC_SETUP.md).');
 
 export const config = {
   port: Number(env('PORT', '8080')),
@@ -22,7 +32,7 @@ export const config = {
   appsProtocol: env('APPS_PROTOCOL', hubUrl.protocol.replace(':', '')),
   dataDir: path.resolve(env('DATA_DIR', './data')),
   /** Used to sign cookies and encrypt app env vars. Must be stable in production. */
-  secret: env('HUB_SECRET', larkAppId ? undefined : 'dev-only-secret-change-me'),
+  secret: env('HUB_SECRET', authProvider === 'dev' ? 'dev-only-secret-change-me' : undefined),
   companyName: env('COMPANY_NAME', 'Acme'),
   /** Name agents register the hub's MCP server under (shown in the "connect your agent" prompt) */
   mcpName: env('HUB_MCP_NAME', 'agent-hub'),
@@ -37,7 +47,20 @@ export const config = {
   /** Extra subdomains apps may not use, e.g. names that already have their own DNS records under APPS_DOMAIN */
   reservedSlugs: env('RESERVED_SLUGS', '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
 
+  auth: { provider: authProvider as 'lark' | 'oidc' | 'dev' },
+  oidc: {
+    issuer: oidcIssuer,
+    clientId: process.env.OIDC_CLIENT_ID ?? '',
+    clientSecret: process.env.OIDC_CLIENT_SECRET ?? '',
+    scopes: env('OIDC_SCOPES', 'openid profile email'),
+    /** Shown on buttons and in instructions: "Sign in with <name>" */
+    name: env('OIDC_NAME', 'SSO'),
+    /** Only people whose verified email is in one of these domains may sign in (needed for public providers like Google) */
+    allowedDomains: env('OIDC_ALLOWED_DOMAINS', '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+  },
   lark: {
+    /** Lark features (Base data, OKRs, directory sync, bot messages, apps acting in Lark) need Lark sign-in */
+    enabled: authProvider === 'lark',
     appId: larkAppId,
     appSecret: process.env.LARK_APP_SECRET ?? '',
     /** larksuite.com for Lark (international), feishu.cn for Feishu */
@@ -46,8 +69,8 @@ export const config = {
     apiBase: env('LARK_API_BASE', `https://open.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
     accountsBase: env('LARK_ACCOUNTS_BASE', `https://accounts.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
   },
-  /** With no Lark app configured, a local "pick a user" login is used instead (DEV_LOGIN=1 forces it on plain-http test setups). */
-  devLogin: !larkAppId || (process.env.DEV_LOGIN === '1' && hubUrl.protocol !== 'https:'),
+  /** With no sign-in provider configured, a local "pick a user" login is used instead (DEV_LOGIN=1 forces it on plain-http test setups). */
+  devLogin: authProvider === 'dev' || (process.env.DEV_LOGIN === '1' && hubUrl.protocol !== 'https:'),
   /** Time zone for date buckets in Lark Base data (week/month boundaries) and alert messages */
   timezone: env('HUB_TIMEZONE', 'UTC'),
   alerts: {
@@ -75,8 +98,14 @@ export const config = {
 
 // Dev login lets anyone pick any user. Never allow it on a real (https) deployment.
 if (config.devLogin && config.secure) {
-  throw new Error('LARK_APP_ID is not set but HUB_URL is https: refusing to start with the development login. Configure the Lark app (docs/LARK_SETUP.md).');
+  throw new Error('No sign-in provider is configured but HUB_URL is https: refusing to start with the development login. Configure Lark (docs/LARK_SETUP.md) or OIDC (docs/OIDC_SETUP.md).');
 }
+// Google lets any Google account sign in; without a domain list that would be anyone on the internet.
+if (config.auth.provider === 'oidc' && /accounts\.google\.com/.test(config.oidc.issuer) && !config.oidc.allowedDomains.length) {
+  throw new Error('OIDC with Google needs OIDC_ALLOWED_DOMAINS (your company email domains), or any Google account could sign in.');
+}
+/** Name of the sign-in provider for people: "Lark", "Google"… */
+export const loginName = config.auth.provider === 'lark' ? 'Lark' : config.auth.provider === 'oidc' ? config.oidc.name : config.companyName;
 
 export const paths = {
   db: path.join(config.dataDir, 'hub.db'),

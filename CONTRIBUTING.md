@@ -16,7 +16,9 @@ pnpm test       # typecheck + data features end to end; run before every pull re
 
 ## Principles
 
-- **The core stays generic.** The hub talks to Lark and Docker, nothing else. Integrations with other systems
+- **The core stays generic.** The hub talks to its sign-in provider (Lark or OIDC), Docker, and Lark when it signs in
+  with Lark; nothing else. Lark-only code lives in `server/lark/` and `server/apps/larkApi.ts`, behind
+  `config.lark.enabled`, and the hub must work with it off (`pnpm smoke:oidc`). Integrations with other systems
   (Metabase, a database, a CRM) belong in apps that serve rows to the hub ([docs/DATA_APPS.md](docs/DATA_APPS.md)),
   not in `server/`.
 - **Agents are the main users.** Every feature should be reachable through an MCP tool in `server/mcp.ts`, with an

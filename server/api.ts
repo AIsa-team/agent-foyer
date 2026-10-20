@@ -1,11 +1,12 @@
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
 import * as tar from 'tar';
-import { config } from './config.ts';
+import { config, loginName } from './config.ts';
+import { messenger } from './notify.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
-import { syncDirectory } from './auth/lark.ts';
+import { syncDirectory } from './lark/auth.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
@@ -39,6 +40,14 @@ api.use('*', async (c, next) => {
 
 const localeOf = (c: Context) => requestLocale((h) => c.req.header(h));
 
+// what only exists when the hub signs in with Lark
+for (const p of ['/lark/*', '/okr', '/okr/*', '/admin/okr-owner', '/admin/sync-directory', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*']) {
+  api.use(p, async (_c, next) => {
+    if (!config.lark.enabled) throw new UserError('err.lark.disabled');
+    await next();
+  });
+}
+
 api.onError((e, c) => {
   // `code` lets the UI react to specific cases, e.g. offer the "connect Lark data" button
   if (e instanceof UserError) return c.json({ error: e.localized(localeOf(c)), code: e.key, params: e.params }, 400);
@@ -55,7 +64,12 @@ api.get('/me', (c) => {
   const u = c.get('user');
   return c.json({
     user: { id: u.id, name: u.name, email: u.email, avatar: u.avatar, role: u.role, locale: u.locale },
-    hub: { url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName, accent: config.accent || null, devLogin: config.devLogin },
+    hub: {
+      url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName,
+      accent: config.accent || null, devLogin: config.devLogin, login: loginName,
+      // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
+      features: { lark: config.lark.enabled, messages: !!messenger },
+    },
   });
 });
 
@@ -110,7 +124,7 @@ api.get('/home/source', async (c) => {
 });
 
 // ---- Lark data: each person's own connection, Base data for home modules, alerts ----
-api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: !!config.lark.appId }));
+api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: true }));
 api.post('/lark/disconnect', (c) => {
   forgetTokens(c.get('user').id);
   return c.json({ ok: true });
@@ -177,7 +191,7 @@ api.get('/apps/:slug', (c) => {
       `SELECT r.version, r.status, r.created_at, r.kind, u.name AS created_by_name FROM app_releases r JOIN users u ON u.id = r.created_by
        WHERE r.app_slug = ? ORDER BY r.version DESC LIMIT 20`, app.slug)
     : [];
-  return c.json({ app: data, releases, lark: appLark.describeManifest(u, app), larkConsentUrl: appLark.consentUrl(app.slug, '/') });
+  return c.json({ app: data, releases, lark: config.lark.enabled ? appLark.describeManifest(u, app) : null, larkConsentUrl: appLark.consentUrl(app.slug, '/') });
 });
 
 /** Take back an app's permission to use your Lark data. */
@@ -284,7 +298,7 @@ api.delete('/agents/:id', (c) => {
 
 // ---- Lark native app shortcuts ----
 interface LarkLink { id: number; name: string; description: string; url: string; icon: string; sort: number }
-const larkLinks = () => all<LarkLink>('SELECT * FROM lark_links ORDER BY sort, id');
+const larkLinks = () => (config.lark.enabled ? all<LarkLink>('SELECT * FROM lark_links ORDER BY sort, id') : []);
 
 api.post('/lark-links', async (c) => {
   requireAdmin(c.get('user'));
@@ -306,7 +320,7 @@ api.get('/admin', (c) => {
   const u = c.get('user');
   const pending = all<App>("SELECT * FROM apps WHERE visibility = 'public' AND public_status = 'pending'").map((a) => apps.serializeApp(a, u, localeOf(c)));
   const users = all<User>('SELECT id, name, email, avatar, role, last_seen_at FROM users ORDER BY last_seen_at DESC NULLS LAST, name');
-  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: okrBoard.companyOwner() });
+  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null });
 });
 
 api.post('/admin/alerts', async (c) => {

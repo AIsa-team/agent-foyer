@@ -5,7 +5,7 @@ import type { T } from './i18n';
 
 const hub = (me: Me, t: T) => t('prompt.hub', { company: me.hub.companyName, mcp: me.hub.mcpName });
 
-export const connectPrompt = (me: Me, t: T) => t('prompt.connect', { company: me.hub.companyName, mcp: me.hub.mcpName, url: me.hub.mcpUrl });
+export const connectPrompt = (me: Me, t: T) => t('prompt.connect', { company: me.hub.companyName, mcp: me.hub.mcpName, url: me.hub.mcpUrl, login: me.hub.login });
 export const publishPrompt = (me: Me, t: T) => t('prompt.publish', { hub: hub(me, t) });
 export const skillWritePrompt = (t: T) => t('prompt.skillWrite');
 export const skillSharePrompt = (me: Me, t: T) => t('prompt.skillShare', { hub: hub(me, t) });

@@ -64,7 +64,8 @@ const zhCN = {
   'note.skillsUpToDate': '都是最新的',
 
   'login.dev.title': '开发登录',
-  'login.dev.body': '还没配置 LARK_APP_ID，用本地测试账号登录。',
+  'login.dev.body': '还没配置登录方式（Lark 或 OIDC），用本地测试账号登录。',
+  'err.login.domainNotAllowed': '{email} 不能登录这个中台，只有公司邮箱可以。请用工作账号登录。',
   'login.dev.admin': '管理员',
   'login.failed.title': '登录失败',
   'login.failed.expired': '登录状态已过期，请重新登录。',
@@ -167,7 +168,8 @@ const zhCN = {
   'alert.msg.source': '数据来源：{source} {url}',
   'alert.msg.hub': '在中台查看：{url}',
   'lark.connect.noApp.title': '还没有配置 Lark 应用',
-  'lark.connect.noApp.body': '这个中台运行在本地开发模式，没有连接 Lark，读不了 Lark 数据。',
+  'lark.connect.noApp.body': '这个中台没有用 Lark 登录，读不了 Lark 数据。',
+  'err.lark.disabled': '这个中台没有接入 Lark，用不了 Lark 相关功能（多维表格、OKR、Lark 消息）。数据可以通过数据应用接入。',
   'lark.connect.back': '返回',
   'lark.connect.otherAccount': '你在 Lark 里授权的账号和当前登录中台的不是同一个人。请用同一个账号再试一次。',
 };

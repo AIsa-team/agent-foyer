@@ -49,7 +49,13 @@ export interface Agent { id: string; name: string; connectedAt: number; lastUsed
 
 export interface Me {
   user: { id: string; name: string; email: string | null; avatar: string | null; role: 'admin' | 'member'; locale: string | null };
-  hub: { url: string; mcpUrl: string; mcpName: string; appsDomain: string; companyName: string; accent: string | null; devLogin: boolean };
+  hub: {
+    url: string; mcpUrl: string; mcpName: string; appsDomain: string; companyName: string; accent: string | null; devLogin: boolean;
+    /** the sign-in provider's name: "Lark", "Google"… */
+    login: string;
+    /** lark: Base data, OKRs, directory and apps acting in Lark; messages: alerts can message people */
+    features: { lark: boolean; messages: boolean };
+  };
 }
 
 export class ApiError extends Error {

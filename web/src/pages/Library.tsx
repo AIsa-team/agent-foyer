@@ -77,7 +77,7 @@ function AddResourceDialog({ groups, section, onClose, onSaved }: { groups: Grou
         </div>
         {groupId === 'new' && perLocale(groupName, setGroupName, t('library.add.groupName'))}
         {perLocale(title, setTitle, t('library.add.docTitle'))}
-        <div className="field"><span className="label">{t('library.add.url')}</span><input className="input" placeholder="https://…larksuite.com/docx/…" value={url} onChange={(e) => setUrl(e.target.value)} /></div>
+        <div className="field"><span className="label">{t('library.add.url')}</span><input className="input" placeholder="https://…" value={url} onChange={(e) => setUrl(e.target.value)} /></div>
         <div className="field"><span className="label">{t('library.add.owner')}</span><input className="input" value={owner} onChange={(e) => setOwner(e.target.value)} /></div>
         <div className="row" style={{ justifyContent: 'flex-end' }}>
           <button className="btn primary" disabled={busy || !url || !Object.values(title).some((v) => v.trim()) || (groupId === 'new' && !Object.values(groupName).some((v) => v.trim()))} onClick={save} type="button">{t('common.save')}</button>

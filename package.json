@@ -14,7 +14,8 @@
     "typecheck": "tsc --noEmit -p . && tsc --noEmit -p web",
     "smoke": "node scripts/smoke.ts",
     "smoke:data": "node scripts/smoke-data.ts",
-    "test": "pnpm typecheck && pnpm smoke:data"
+    "test": "pnpm typecheck && pnpm smoke:data && pnpm smoke:oidc",
+    "smoke:oidc": "node scripts/smoke-oidc.ts"
   },
   "dependencies": {
     "@hono/node-server": "^2.1.5",

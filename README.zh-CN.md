@@ -2,7 +2,7 @@
 
 > 占位名。[English](README.md)
 
-基于 [Lark](https://www.larksuite.com)（飞书也可以）的 Agent 原生公司中台。大家用 Lark 登录，自己的编程 Agent（Claude Code、Codex、Cursor 等）通过 MCP 接入，具体的事都由 Agent 来做：发布 vibe coding 出来的小工具、分享 Skill、给公司数据做图表、设指标提醒。中台替代 Lark 工作台，成为大家的入口。
+基于 [Lark](https://www.larksuite.com)（飞书也可以）或任意 OpenID Connect 登录（Google Workspace、Microsoft Entra ID、Okta 等）的 Agent 原生公司中台。大家登录后，自己的编程 Agent（Claude Code、Codex、Cursor 等）通过 MCP 接入，具体的事都由 Agent 来做：发布 vibe coding 出来的小工具、分享 Skill、给公司数据做图表、设指标提醒。中台替代 Lark 工作台，成为大家的入口。
 
 - **应用广场**：对 Agent 说「把这个项目发布到公司服务器」，静态网站或容器就会部署到 `https://<名字>.<应用域名>`，要用 Lark 登录才能打开。可见范围四档：只有自己 / 指定同事 / 全公司 / 所有人（公开需要管理员审批）。
 - **Skill 市场**：分享和安装 Skill，带版本号；装过的人在有新版本时会收到提醒。
@@ -12,13 +12,15 @@
 - **资料和组织**：按主题分组的制度、SOP 链接，Lark 通讯录，以及覆盖以上全部内容的 ⌘K 搜索。
 - **基于 Lark 的应用**：应用声明它要读写哪些多维表格、可以给谁发消息；每个人同意一次后，应用就能通过一个小 SDK 以这个人的身份调用 Lark。
 
+**用不用 Lark 都可以。** 用 Lark 登录能用全部功能。用 OpenID Connect 登录能用核心功能：应用、Skill、Agent 接入、首页、资料，以及基于数据应用的看板、异常项和指标提醒；多维表格、OKR、通讯录同步、Lark 消息和应用调用 Lark 会关闭（见 [docs/OIDC_SETUP.zh-CN.md](docs/OIDC_SETUP.zh-CN.md)）。
+
 用户能看到的内容，在中台支持的每种语言里都有（目前是中文和英文；新增一种语言只需加一个词条文件，见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
 
 ## 架构
 
 ```
                   ┌─────────────────────────── 中台（一个 Node 进程）────────────────────────────┐
- hub.example.com ►│ Web 界面 (React)   /api   /auth (Lark OAuth)   /oauth + /mcp (Agent)         │
+ hub.example.com ►│ Web 界面 (React)   /api   /auth (Lark / OIDC)  /oauth + /mcp (Agent)         │
                   │                                                                              │
  *.example.net  ─►│ 网关：校验 Lark 身份和应用权限 ─► 静态文件 或 应用容器                       │
                   └───────────────────────────────────┬──────────────────────────────────────────┘
@@ -28,10 +30,11 @@
 
 - **一个进程，按 Host 分流**：中台域名走 Hono 应用，应用子域名走网关。反向代理只负责 TLS，增删应用不用改它的配置。
 - **存储**：SQLite（`data/hub.db`），加上 `data/` 下的应用文件、Skill 包和图标。
-- **应用怎么登录**：网关把访客送到中台，中台校验 Lark 身份和权限后，把一次性 code 交回应用子域名，换成只属于这个子域名的 Cookie。每次请求都重新检查权限，撤销立即生效。应用从请求头 `X-Hub-User-Id`、`X-Hub-User-Name`（URI 编码）、`X-Hub-User-Email` 拿到当前访客；纯前端应用可以 `fetch('/__hub/me')`。
+- **应用怎么登录**：网关把访客送到中台，中台校验身份和权限后，把一次性 code 交回应用子域名，换成只属于这个子域名的 Cookie。每次请求都重新检查权限，撤销立即生效。应用从请求头 `X-Hub-User-Id`、`X-Hub-User-Name`（URI 编码）、`X-Hub-User-Email` 拿到当前访客；纯前端应用可以 `fetch('/__hub/me')`。
 - **两类应用**：`static`（构建产物，支持 SPA 路由）和 `container`（用项目自己的 Dockerfile，Node 和 Python 项目会自动生成）。容器有内存、CPU、进程数上限，去掉了所有 capabilities，持久目录是 `/data`，环境变量加密保存。
 - **Agent 接入**：标准 MCP OAuth 2.1（发现元数据、动态注册、PKCE、refresh token）。不支持 OAuth 的 Agent 可以在「我的」页面生成个人令牌。
 - **Lark 数据以查看者本人的身份读取**：每个人连接一次自己的 Lark；在 Lark 里打不开的表，在中台也看不到。
+- **边界可替换**：登录可以是 Lark、OIDC 或本地开发登录（`server/auth/`）；发消息走同一个接口（`server/notify.ts`）；Lark 相关的代码都在 `server/lark/` 和 `server/apps/larkApi.ts`。
 
 ## 本地运行
 
@@ -55,13 +58,13 @@ claude mcp add --transport http agent-hub http://localhost:8080/mcp
 ## 测试
 
 ```bash
-pnpm test           # 类型检查 + 用假的 Lark 端到端测试数据功能（会自己启动一个中台）
+pnpm test           # 类型检查 + 用假的 Lark 和假的 OIDC 服务做端到端测试（会自己启动中台）
 pnpm smoke          # 对正在运行的中台做核心端到端测试：pnpm smoke -- http://localhost:8080 [--docker]
 ```
 
 ## 部署
 
-见 [docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md) 和 [docs/LARK_SETUP.zh-CN.md](docs/LARK_SETUP.zh-CN.md)。请先读 [SECURITY.md](SECURITY.md)：中台会运行同事写的代码，并且持有宿主机的 Docker socket。
+见 [docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md)，然后是 [docs/LARK_SETUP.zh-CN.md](docs/LARK_SETUP.zh-CN.md) 或 [docs/OIDC_SETUP.zh-CN.md](docs/OIDC_SETUP.zh-CN.md)。请先读 [SECURITY.md](SECURITY.md)：中台会运行同事写的代码，并且持有宿主机的 Docker socket。
 
 ## 换成自己公司的
 

@@ -338,6 +338,7 @@ function IssuesModule({ m }: { m: Extract<Module, { type: 'issues' }> }) {
 export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
   const { t } = useI18n();
   const text = useText();
+  const me = useMe();
   switch (m.type) {
     case 'apps':
       return <AppsModule m={m} data={data} />;
@@ -390,7 +391,8 @@ export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
     case 'alerts':
       return <AlertsModule m={m} />;
     case 'okr':
-      return <OkrModule m={m} />;
+      // a layout saved while the hub used Lark
+      return me.hub.features.lark ? <OkrModule m={m} /> : null;
     case 'issues':
       return <IssuesModule m={m} />;
     case 'resources':

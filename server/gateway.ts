@@ -152,6 +152,7 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
     return res.end(SDK_JS);
   }
   if (url.pathname === '/__hub/lark' || url.pathname.startsWith('/__hub/lark/') || url.pathname === '/__hub/notify') {
+    if (!config.lark.enabled) return send(res, 404, 'this hub is not connected to Lark');
     const app = getApp(slug);
     if (!app) return send(res, 404, 'not found');
     const user = sessionUser(cookies[APP_COOKIE], slug);

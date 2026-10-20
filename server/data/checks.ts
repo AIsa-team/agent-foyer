@@ -253,7 +253,7 @@ function colleagueByName(): Resolve {
   const users = all<{ id: string; name: string; en_name: string | null; email: string | null }>('SELECT id, name, en_name, email FROM users');
   const index = new Map<string, { id: string; name: string }>();
   for (const u of users) {
-    for (const k of [u.name, u.en_name, u.email?.split('@')[0]]) {
+    for (const k of [u.name, u.en_name, u.email, u.email?.split('@')[0]]) {
       const key = k?.trim().toLowerCase();
       if (key && !index.has(key)) index.set(key, { id: u.id, name: u.name });
     }

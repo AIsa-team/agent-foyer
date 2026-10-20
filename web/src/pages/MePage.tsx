@@ -96,10 +96,10 @@ export function MePage() {
             <p>{t('me.step2.body')}</p>
             <CopyBox text={connectPrompt(me, t)} collapsible />
           </Step>
-          <Step n={3} title={t('me.step3.title')}><p>{t('me.step3.body')}</p></Step>
+          <Step n={3} title={t('me.step3.title', { login: me.hub.login })}><p>{t('me.step3.body')}</p></Step>
         </div>
       </div>
-      <LarkDataCard />
+      {me.hub.features.lark && <LarkDataCard />}
       {data.agents.length > 0 && (
         <div className="grid" style={{ marginTop: 12 }}>
           {data.agents.map((a) => (

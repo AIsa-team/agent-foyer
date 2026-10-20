@@ -2,7 +2,8 @@
 
 > Placeholder name. [中文说明](README.zh-CN.md)
 
-An agent-native company hub on [Lark](https://www.larksuite.com) (Feishu works too). People sign in with Lark, and their
+An agent-native company hub on [Lark](https://www.larksuite.com) (Feishu works too), or on any OpenID Connect sign-in
+(Google Workspace, Microsoft Entra ID, Okta…). People sign in, and their
 coding agents (Claude Code, Codex, Cursor, …) connect over MCP and do the work: publish the tools they vibe-coded,
 share Skills, build charts over company data, set alerts. The hub replaces the Lark workplace as everyone's entry
 point.
@@ -20,6 +21,10 @@ point.
 - **Apps on top of Lark**: an app declares which Base tables it reads or writes and whom it may message; each person
   consents once, then the app calls Lark as them through a small SDK.
 
+**With Lark or without.** Signing in with Lark gives the whole hub. With OpenID Connect you get the core: apps, Skills,
+agents, home pages, resources, and boards, checks and alerts on data apps; Base tables, OKRs, the directory sync, Lark
+messages and apps acting in Lark are switched off ([docs/OIDC_SETUP.md](docs/OIDC_SETUP.md)).
+
 Everything people see exists in every language the hub ships (English and Chinese today; adding one is a catalogue
 file, see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
@@ -27,7 +32,7 @@ file, see [CONTRIBUTING.md](CONTRIBUTING.md)).
 
 ```
                   ┌─────────────────────────── hub (one Node process) ──────────────────────────┐
- hub.example.com ►│ web UI (React)   /api   /auth (Lark OAuth)   /oauth + /mcp (agents)          │
+ hub.example.com ►│ web UI (React)   /api   /auth (Lark / OIDC)  /oauth + /mcp (agents)          │
                   │                                                                              │
  *.example.net  ─►│ gateway: checks Lark identity and app access ─► static files or app container │
                   └───────────────────────────────────┬──────────────────────────────────────────┘
@@ -38,7 +43,7 @@ file, see [CONTRIBUTING.md](CONTRIBUTING.md)).
 - **One process, routed by Host.** The hub's own domain goes to the Hono app; app subdomains go to the gateway. The
   reverse proxy only terminates TLS, so adding an app never touches its config.
 - **Storage**: SQLite (`data/hub.db`) plus app files, Skill packages and icons under `data/`.
-- **App sign-in**: the gateway sends visitors to the hub, which checks Lark identity and access and hands a one-time
+- **App sign-in**: the gateway sends visitors to the hub, which checks who they are and their access and hands a one-time
   code back to the app's subdomain, exchanged for a cookie scoped to that subdomain only. Access is re-checked on every
   request, so revoking it takes effect at once. Apps read the visitor from the `X-Hub-User-Id`, `X-Hub-User-Name`
   (URI-encoded) and `X-Hub-User-Email` headers; front-end-only apps can `fetch('/__hub/me')`.
@@ -49,6 +54,8 @@ file, see [CONTRIBUTING.md](CONTRIBUTING.md)).
   Agents without OAuth support can use a personal token from the "Me" page.
 - **Lark data is read as the viewer.** Each person connects their own Lark once; nobody sees a table in the hub that
   they couldn't open in Lark.
+- **Pluggable edges**: sign-in is Lark, OIDC or a local dev login (`server/auth/`); messages go through one interface
+  (`server/notify.ts`); everything Lark-specific lives in `server/lark/` and `server/apps/larkApi.ts`.
 
 ## Quick start (local)
 
@@ -73,13 +80,14 @@ claude mcp add --transport http agent-hub http://localhost:8080/mcp
 ## Tests
 
 ```bash
-pnpm test           # typecheck + data features end to end against a fake Lark (starts its own hub)
+pnpm test           # typecheck + end-to-end tests against a fake Lark and a fake OIDC provider (they start their own hub)
 pnpm smoke          # core end-to-end test against a running hub: pnpm smoke -- http://localhost:8080 [--docker]
 ```
 
 ## Deploying
 
-See [docs/DEPLOY.md](docs/DEPLOY.md) and [docs/LARK_SETUP.md](docs/LARK_SETUP.md). Read [SECURITY.md](SECURITY.md)
+See [docs/DEPLOY.md](docs/DEPLOY.md), then [docs/LARK_SETUP.md](docs/LARK_SETUP.md) or
+[docs/OIDC_SETUP.md](docs/OIDC_SETUP.md). Read [SECURITY.md](SECURITY.md)
 first: the hub runs code your colleagues write and holds the host's Docker socket.
 
 ## Making it yours
@@ -104,11 +112,12 @@ The default theme, fonts and chart library come from the [AIsa](https://aisa.one
 server/
   index.ts            entry: HTTP server, routing by Host, uploads, downloads, icons, brand files
   config.ts, db.ts    configuration, SQLite schema and migrations
-  auth/               Lark sign-in, sessions, the OAuth server for agents
+  auth/               sign-in (OIDC, dev), people, sessions, the OAuth server for agents
   apps/               publishing, access, Docker runtime, apps calling Lark
   skills/             Skill publishing, installs, update checks
   data/               data sources, queries, alerts, data checks
-  lark/               Lark API client, OKR
+  lark/               everything Lark: sign-in, directory, Base, OKR, bot messages
+  notify.ts           how the hub messages people (Lark today)
   mcp.ts              the MCP tools and the instructions agents get
   gateway.ts          the app subdomain gateway
   api.ts              REST API for the web UI
@@ -116,7 +125,7 @@ server/
 web/src/              React UI; i18n/locales/ holds the UI catalogues
 scripts/              admin CLI and end-to-end tests
 deploy/               docker-compose.yml, nginx.conf, Caddyfile
-docs/                 deployment, Lark setup, data apps
+docs/                 deployment, Lark or OIDC setup, data apps
 ```
 
 ## License

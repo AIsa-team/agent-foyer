@@ -9,7 +9,7 @@ import { verifyToken } from './crypto.ts';
 import { api } from './api.ts';
 import { authRoutes } from './auth/routes.ts';
 import { authenticateBearer, MCP_PATH, oauth, wwwAuthenticate } from './auth/oauth.ts';
-import { seedDevUsers } from './auth/lark.ts';
+import { seedDevUsers } from './auth/users.ts';
 import { handleMcp } from './mcp.ts';
 import { cleanupUploads, receiveUpload } from './uploads.ts';
 import { skillFile } from './skills/service.ts';
@@ -18,7 +18,7 @@ import { requestLocale, tr } from './i18n/index.ts';
 import { handleAppRequest, handleAppUpgrade, slugFromHost } from './gateway.ts';
 import { startAlertScheduler } from './data/alerts.ts';
 import { startCheckScheduler } from './data/checks.ts';
-import { syncDirectory } from './auth/lark.ts';
+import { syncDirectory } from './lark/auth.ts';
 import { startSnapshotRefresher } from './data/sources.ts';
 import { run, now } from './db.ts';
 
@@ -132,13 +132,13 @@ server.listen(config.port, () => {
   console.log(`${config.companyName} hub listening on :${config.port}`);
   console.log(`  hub:  ${config.hubUrl}`);
   console.log(`  apps: ${config.appsProtocol}://<slug>.${config.appsDomain}`);
-  console.log(`  login: ${config.devLogin ? 'DEV' : 'Lark ' + config.lark.domain}`);
+  console.log(`  login: ${config.devLogin ? 'DEV' : config.auth.provider === 'lark' ? 'Lark ' + config.lark.domain : 'OIDC ' + config.oidc.issuer}`);
 });
 
-// alert rules read Lark data and message people through the Lark bot, so they need a Lark app
-if (config.lark.appId) {
-  startAlertScheduler().unref();
-  startCheckScheduler().unref();
+// alerts and data checks also run on data apps; Lark only adds Base snapshots, bot messages and the directory
+startAlertScheduler().unref();
+startCheckScheduler().unref();
+if (config.lark.enabled) {
   startSnapshotRefresher().unref();
   // keep departments and colleagues in step with Lark (the admin page can still sync on demand)
   const sync = () => syncDirectory().catch((e) => console.warn('[lark] directory sync failed', (e as Error).message));

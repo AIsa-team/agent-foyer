@@ -12,7 +12,7 @@ import type { User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
 import { asUser } from './userToken.ts';
-import { getTenantToken } from '../auth/lark.ts';
+import { getTenantToken } from './auth.ts';
 import { larkFetch } from './client.ts';
 
 interface LarkPeriod { id: string; zh_name?: string; en_name?: string; status?: number }

@@ -57,7 +57,7 @@ cp .env.example .env
 #   HUB_URL=https://hub.example.com
 #   APPS_DOMAIN=example.net
 #   HUB_SECRET=<openssl rand -base64 48>     定下后不要改，改了已保存的密钥就解不开了
-#   LARK_APP_ID / LARK_APP_SECRET            见 docs/LARK_SETUP.zh-CN.md
+#   LARK_APP_ID / LARK_APP_SECRET            见 docs/LARK_SETUP.zh-CN.md（或 OIDC_*，见 docs/OIDC_SETUP.zh-CN.md）
 #   HUB_ADMINS=you@example.com
 #   HOST_DATA_DIR=/srv/agent-hub/data
 #   COMPANY_NAME、HUB_ACCENT、HUB_BRAND_DIR 等，换成自己公司的
@@ -66,7 +66,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 curl -s localhost:8090/healthz      # {"ok":true}
 ```
 
-打开 `https://hub.example.com`，用 Lark 登录。第一个登录的人自动成为管理员。
+打开 `https://hub.example.com` 登录。第一个登录的人自动成为管理员。
 
 **用自己的 Logo**：把 `logo.svg`、`app-icon.svg`、`motif.svg` 放进 `data/brand/`，设置 `HUB_BRAND_DIR=/data/brand`（容器里的路径）。
 
@@ -76,7 +76,7 @@ curl -s localhost:8090/healthz      # {"ok":true}
 
 ```bash
 claude mcp add --transport http --scope user agent-hub https://hub.example.com/mcp
-# 进入 Claude Code，输入 /mcp，选 agent-hub，在浏览器里用 Lark 登录后点「允许」
+# 进入 Claude Code，输入 /mcp，选 agent-hub，在浏览器里登录后点「允许」
 ```
 
 然后找个小项目，说「把这个项目发布到公司中台」，跑通一遍。

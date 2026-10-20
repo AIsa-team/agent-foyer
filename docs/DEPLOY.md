@@ -66,7 +66,7 @@ cp .env.example .env
 #   HUB_URL=https://hub.example.com
 #   APPS_DOMAIN=example.net
 #   HUB_SECRET=<openssl rand -base64 48>     never change it later: stored secrets would become unreadable
-#   LARK_APP_ID / LARK_APP_SECRET            see docs/LARK_SETUP.md
+#   LARK_APP_ID / LARK_APP_SECRET            see docs/LARK_SETUP.md (or OIDC_*, see docs/OIDC_SETUP.md)
 #   HUB_ADMINS=you@example.com
 #   HOST_DATA_DIR=/srv/agent-hub/data
 #   COMPANY_NAME, HUB_ACCENT, HUB_BRAND_DIR … to make it yours
@@ -75,7 +75,7 @@ docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
 curl -s localhost:8090/healthz      # {"ok":true}
 ```
 
-Open `https://hub.example.com` and sign in with Lark. The first person to sign in becomes an admin.
+Open `https://hub.example.com` and sign in. The first person to sign in becomes an admin.
 
 **Your own logo**: put `logo.svg`, `app-icon.svg` and `motif.svg` in `data/brand/` and set `HUB_BRAND_DIR=/data/brand`
 (the path inside the container).
@@ -86,7 +86,7 @@ On your own machine:
 
 ```bash
 claude mcp add --transport http --scope user agent-hub https://hub.example.com/mcp
-# in Claude Code run /mcp, pick agent-hub, sign in with Lark in the browser and allow
+# in Claude Code run /mcp, pick agent-hub, sign in in the browser and allow
 ```
 
 Then take a small project and say "publish this project to the company hub".

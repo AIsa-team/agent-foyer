@@ -12,9 +12,8 @@ import { config } from '../config.ts';
 import { all, get, now, run, type User } from '../db.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
-import { getTenantToken } from '../auth/lark.ts';
 import { hourIn, isQuietHour } from './quiet.ts';
-import { larkFetch } from '../lark/client.ts';
+import { messenger } from '../notify.ts';
 import { getSource, query } from './sources.ts';
 import { querySchema, toStat, type Query } from './query.ts';
 
@@ -203,23 +202,23 @@ export async function flushNotices(at = now()): Promise<{ sent: number; held?: '
     // people are now considered told, even if all of them opted out or are filtered by the setting
     run('UPDATE alert_rules SET notified_state = ?, notified_at = ? WHERE id = ?', r.state, at, r.id);
   }
+  // no chat tool connected: the alerts module on home pages is the only place people see it
+  if (!messenger) return { sent: 0 };
   let sent = 0;
-  const token = perUser.size || perChat.size ? await getTenantToken() : '';
-  const send = async (type: 'open_id' | 'chat_id', id: string, rules: RuleRow[], locale: string) => {
+  const send = async (to: 'person' | 'group', id: string, rules: RuleRow[], locale: string) => {
     try {
-      await larkFetch(`/im/v1/messages?receive_id_type=${type}`, {
-        method: 'POST', token, body: JSON.stringify({ receive_id: id, msg_type: 'text', content: JSON.stringify({ text: noticeText(rules, locale) }) }),
-      });
+      const text = noticeText(rules, locale);
+      await (to === 'person' ? messenger!.toPerson(id, text) : messenger!.toGroup(id, text));
       sent++;
     } catch (e) {
-      console.warn('[alerts] could not message', type, id, (e as Error).message);
+      console.warn('[alerts] could not message', to, id, (e as Error).message);
     }
   };
   for (const [uid, rules] of perUser) {
     const u = get<{ locale: string | null }>('SELECT locale FROM users WHERE id = ?', uid);
-    await send('open_id', uid, rules, u?.locale ?? config.defaultLocale);
+    await send('person', uid, rules, u?.locale ?? config.defaultLocale);
   }
-  for (const [chat, rules] of perChat) await send('chat_id', chat, rules, config.defaultLocale);
+  for (const [chat, rules] of perChat) await send('group', chat, rules, config.defaultLocale);
   return { sent };
 }
 

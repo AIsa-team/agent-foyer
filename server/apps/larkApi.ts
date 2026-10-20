@@ -17,8 +17,7 @@ import { safeEqual, sha256 } from '../crypto.ts';
 import { all, get, now, run, type App, type User } from '../db.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
-import { getTenantToken } from '../auth/lark.ts';
-import { larkFetch } from '../lark/client.ts';
+import { larkMessenger } from '../lark/messenger.ts';
 import { createRecord, fetchRecords, listFields, parseBaseUrl, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
 import { canAccessApp } from './access.ts';
@@ -250,12 +249,11 @@ async function notify(app: App, m: Manifest, user: User, body: Record<string, un
   const chats = targets.filter((t) => t.type === 'chat_id');
   const recent = get<{ n: number }>('SELECT COUNT(*) AS n FROM app_notify_log WHERE app_slug = ? AND at > ?', app.slug, now() - 3600_000)!.n;
   if (recent + people.length + chats.length > NOTIFY_PER_HOUR) throw new UserError('err.appLark.rateLimited', { n: NOTIFY_PER_HOUR });
-  const token = await getTenantToken();
   let sent = 0;
   const send = async (type: 'open_id' | 'chat_id', id: string, L: string) => {
     const name = localize(app, app.i18n, L).name;
     const message = [`【${name}】${text}`, link, tr(L, 'appLark.msg.footer', { user: user.name, app: name, company: config.companyName })].filter(Boolean).join('\n');
-    await larkFetch(`/im/v1/messages?receive_id_type=${type}`, { method: 'POST', token, body: JSON.stringify({ receive_id: id, msg_type: 'text', content: JSON.stringify({ text: message }) }) });
+    await (type === 'open_id' ? larkMessenger.toPerson(id, message) : larkMessenger.toGroup(id, message));
     run('INSERT INTO app_notify_log (app_slug, user_id, at) VALUES (?, ?, ?)', app.slug, user.id, now());
     sent++;
   };

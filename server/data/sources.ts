@@ -93,6 +93,7 @@ async function appTable(user: User, s: Pick<SourceRow, 'app_slug' | 'app_path'>)
 // ---------------------------------------------------------------- inspecting and registering
 /** What an agent needs to configure charts: tables in the Base, and for the chosen table its fields and a few rows. */
 export async function inspect(user: User, url: string, table?: string) {
+  if (!config.lark.enabled) throw new UserError('err.lark.disabled');
   const ref = parseBaseUrl(url);
   const app = await resolveAppToken(user, ref);
   const tables = await listTables(user, app);
@@ -133,6 +134,7 @@ export async function saveSource(user: User, input: { id: string; title: Record<
     await appTable(user, { app_slug: input.app, app_path: path });
     row = { kind: 'app', url: appUrl(input.app) + path, app_token: '', table_id: '', view_id: null, app_slug: input.app, app_path: path };
   } else {
+    if (!config.lark.enabled) throw new UserError('err.lark.disabled');
     if (!input.url) throw new UserError('err.data.badUrl', { url: '' });
     const ref = parseBaseUrl(input.url);
     const app = await resolveAppToken(user, ref);
@@ -260,6 +262,8 @@ export function loadTable(user: User, s: SourceRow, fresh = false): Promise<Tabl
   const value = s.kind === 'app'
     ? appTable(user, s)
     : (async () => {
+      // a Base source saved while the hub still signed in with Lark
+      if (!config.lark.enabled) throw new UserError('err.lark.disabled');
       const fields = await listFields(user, s.app_token, s.table_id, s.view_id ?? undefined);
       const rows = (!fresh && (await sharedRows(user, s))) || (await baseRows(user, s));
       return { fields, rows };
