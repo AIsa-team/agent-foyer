@@ -391,6 +391,44 @@ const MIGRATIONS: string[] = [
     at INTEGER NOT NULL,
     value TEXT NOT NULL
   );
+  `,  // feedback covers Skills too, and can come from the app page itself or from the sender's agent
+  `
+  CREATE TABLE feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,                    -- app | skill
+    slug TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    context TEXT,                          -- details for the owner: the page it was sent from, what the agent saw
+    via TEXT NOT NULL DEFAULT 'web',       -- web (hub page) | app (button inside the app) | agent
+    agent TEXT,                            -- the agent's name, when via = agent
+    status TEXT NOT NULL DEFAULT 'open',   -- open | done | declined
+    reply TEXT,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+  );
+  INSERT INTO feedback (id, kind, slug, user_id, body, status, reply, created_at, resolved_at, resolved_by)
+    SELECT id, 'app', app_slug, user_id, body, status, reply, created_at, resolved_at, resolved_by FROM app_feedback;
+  DROP TABLE app_feedback;
+  CREATE INDEX feedback_target ON feedback (kind, slug, status);
+  CREATE TRIGGER apps_feedback_gone AFTER DELETE ON apps BEGIN DELETE FROM feedback WHERE kind = 'app' AND slug = OLD.slug; END;
+  CREATE TRIGGER skills_feedback_gone AFTER DELETE ON skills BEGIN DELETE FROM feedback WHERE kind = 'skill' AND slug = OLD.slug; END;
+  ALTER TABLE apps ADD COLUMN feedback_button INTEGER NOT NULL DEFAULT 1;
+  `,
+  // colleagues who look after an app or Skill together with its owner
+  `
+  CREATE TABLE collaborators (
+    kind TEXT NOT NULL,                    -- app | skill
+    slug TEXT NOT NULL,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    added_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    added_at INTEGER NOT NULL,
+    PRIMARY KEY (kind, slug, user_id)
+  );
+  CREATE INDEX collaborators_user ON collaborators (user_id);
+  CREATE TRIGGER apps_collaborators_gone AFTER DELETE ON apps BEGIN DELETE FROM collaborators WHERE kind = 'app' AND slug = OLD.slug; END;
+  CREATE TRIGGER skills_collaborators_gone AFTER DELETE ON skills BEGIN DELETE FROM collaborators WHERE kind = 'skill' AND slug = OLD.slug; END;
   `,
 ];
 
@@ -464,6 +502,7 @@ export interface App {
   i18n: string | null;
   skill_slug: string | null;
   lark_manifest: string | null;
+  feedback_button: number;
   created_at: number;
   updated_at: number;
 }

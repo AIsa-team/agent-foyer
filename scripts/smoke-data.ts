@@ -70,6 +70,7 @@ const PROJECTS = [
 const ghKeys = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
 
 const lark = {
+  appInfo: false,
   access: new Set<string>(),
   refresh: new Set<string>(),
   refreshes: 0,
@@ -87,6 +88,8 @@ const lark = {
   advanced: false,
   writeTokens: new Set<string>(),
   docsTokens: new Set<string>(),
+  wikiTokens: new Set<string>(),
+  made: new Map<string, { title: string; folder?: string; blocks: { block_id: string; block_type: number; children?: string[] }[]; calls: number }>(),
   doc: new Map<string, DocBlock>(),
   fixP1: false,
   created: [] as { table: string; fields: Record<string, unknown>; by: string }[],
@@ -135,7 +138,8 @@ function issue(expiresIn: number) {
   lark.access.add(a);
   lark.refresh.add(r);
   if (lark.scopesAsked.split(' ').includes('bitable:app')) lark.writeTokens.add(a);
-  if (lark.scopesAsked.split(' ').includes('docx:document')) lark.docsTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('docx:document') && lark.scopesAsked.split(' ').includes('docx:document:create')) lark.docsTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('wiki:wiki')) lark.wikiTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -246,6 +250,20 @@ const larkServer = http.createServer(async (req, res) => {
     lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text });
     return send({ code: 0, data: {} });
   }
+  if (p === '/application/v6/applications') {
+    if (bearer !== 't-app') return send({ code: 99991663, msg: 'bad tenant token' });
+    if (!lark.appInfo) return send({ code: 99991672, msg: 'Access denied. One of the following scopes is required: [admin:app.info:readonly]' });
+    const all = [
+      { app_id: 'cli_approval', app_name: 'App 1', status: 1, pc_default_ability: 'gadget', avatar_url: 'https://pan16.larksuitecdn.com/static-resource/v1/v2_6a3c492f-bace-4c54-a931-40161e8eef9h', i18n: [{ i18n_key: 'zh_cn', name: '审批', description: '发起和处理审批' }, { i18n_key: 'en_us', name: 'Approval', description: 'Request approvals' }] },
+      { app_id: 'cli_wiki', app_name: 'Handbook', status: 1, pc_default_ability: 'web_app', avatar_url: 'https://pan16.larksuitecdn.com/static-resource/v1/48571196-2ea9-4a61-9255-40c0bd8472fh' },
+      { app_id: 'cli_old', app_name: 'Old', status: 0, pc_default_ability: 'web_app' },
+      { app_id: 'cli_nothing', app_name: 'Nothing to open', status: 1 },
+      { app_id: 'cli_smoke', app_name: 'Hub', status: 1, pc_default_ability: 'web_app' },
+    ];
+    // two pages, to follow page_token
+    const second = url.searchParams.get('page_token') === 'p2';
+    return send({ code: 0, data: second ? { app_list: all.slice(3), has_more: false } : { app_list: all.slice(0, 3), has_more: true, page_token: 'p2' } });
+  }
   if (p === '/okr/v1/periods') {
     return bearer === 't-app'
       ? send({ code: 99991672, msg: 'Access denied. One of the following scopes is required: [okr:okr.period:readonly, okr:okr:readonly, okr:okr]' })
@@ -301,6 +319,52 @@ const larkServer = http.createServer(async (req, res) => {
     const list = only.length ? mine.filter((e) => only.includes(e.period_id)) : mine;
     return send({ code: 0, data: { okr_list: list, total: list.length } });
   }
+  // creating and reading documents
+  const noDocs = () => send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [docx:document:create]' });
+  if (p === '/docx/v1/documents' && req.method === 'POST') {
+    if (!lark.docsTokens.has(bearer)) return noDocs();
+    const id = `doxMade${lark.made.size + 1}`;
+    lark.made.set(id, { title: body.title, folder: body.folder_token, blocks: [], calls: 0 });
+    return send({ code: 0, data: { document: { document_id: id, title: body.title } } });
+  }
+  if (p === '/wiki/v2/spaces/sp1/nodes' && req.method === 'POST') {
+    if (!lark.wikiTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [wiki:wiki]' });
+    const id = `doxWiki${lark.made.size + 1}`;
+    lark.made.set(id, { title: body.title, folder: `wiki:${body.parent_node_token}`, blocks: [], calls: 0 });
+    return send({ code: 0, data: { node: { node_token: `wikMade${lark.made.size}`, obj_token: id, obj_type: 'docx', title: body.title, space_id: 'sp1' } } });
+  }
+  const descendant = p.match(/^\/docx\/v1\/documents\/(\w+)\/blocks\/(\w+)\/descendant$/);
+  if (descendant) {
+    const d = lark.made.get(descendant[1]);
+    if (!d || descendant[1] !== descendant[2]) return send({ code: 1770002, msg: 'not found' });
+    if (!lark.docsTokens.has(bearer)) return noDocs();
+    const ids = new Set((body.descendants as { block_id: string }[]).map((b) => b.block_id));
+    const bad = body.children_id.length > 1000 || body.descendants.length > 1000
+      || (body.descendants as { table?: { property?: { merge_info?: unknown } } }[]).some((b) => b.table?.property?.merge_info)
+      || (body.descendants as { children?: string[] }[]).some((b) => (b.children ?? []).some((c) => !ids.has(c)))
+      || (body.children_id as string[]).some((c) => !ids.has(c));
+    if (bad) return send({ code: 1770001, msg: 'invalid param' });
+    d.blocks.push(...body.descendants);
+    d.calls++;
+    return send({ code: 0, data: { children: [] } });
+  }
+  if (p === '/docx/v1/documents/doxFolder/blocks') {
+    if (!userOk()) return send({ code: 99991668, msg: 'bad token' });
+    const run = (content: string, style = {}) => ({ text_run: { content, text_element_style: style } });
+    return send({ code: 0, data: { has_more: false, items: [
+      { block_id: 'doxFolder', block_type: 1, children: ['f1', 'f2', 'f3', 'f4'] },
+      { block_id: 'f1', block_type: 4, heading2: { elements: [run('怎么开日会')] } },
+      { block_id: 'f2', block_type: 2, text: { elements: [run('每天早上 '), run('9:30', { bold: true }), run('，日报放在这里，'), { mention_user: { user_id: 'ou_dev_alice' } }, run(' 主持。')] } },
+      { block_id: 'f3', block_type: 12, bullet: { elements: [run('先看昨天')] }, children: ['f5'] },
+      { block_id: 'f5', block_type: 12, bullet: { elements: [run('卡点优先')] } },
+      { block_id: 'f4', block_type: 31, table: { cells: ['c1', 'c2', 'c3', 'c4'], property: { row_size: 2, column_size: 2 } }, children: ['c1', 'c2', 'c3', 'c4'] },
+      { block_id: 'c1', block_type: 32, children: ['t1'] }, { block_id: 't1', block_type: 2, text: { elements: [run('负责', { bold: true }), run('人', { bold: true })] } },
+      { block_id: 'c2', block_type: 32, children: ['t2'] }, { block_id: 't2', block_type: 2, text: { elements: [run('时间')] } },
+      { block_id: 'c3', block_type: 32, children: ['t3'] }, { block_id: 't3', block_type: 2, text: { elements: [{ mention_user: { user_id: 'ou_dev_alex' } }] } },
+      { block_id: 'c4', block_type: 32, children: ['t4'] }, { block_id: 't4', block_type: 2, text: { elements: [run('周一')] } },
+    ] } });
+  }
+  if (p === '/docx/v1/documents/doxFolder') return send({ code: 0, data: { document: { document_id: 'doxFolder', title: '团队日会' } } });
   if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikDaily') {
     return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wikDaily', title: '团队日会', obj_type: 'docx', obj_token: 'doxFolder' } } });
   }
@@ -874,14 +938,133 @@ try {
   const ownerView = await api(alex.jar, 'GET', '/apps/invoice');
   check((ownerView.body.feedback as { body: string }[])[0]?.body.includes('专票') && (ownerView.body.usage as { last30: number }).last30 === 1 && (ownerView.body.app as { openFeedback: number }).openFeedback === 1,
     'the owner sees all feedback, usage per day and the open count');
-  const todo = await tool(alex.token, 'list_app_feedback', {});
+  const todo = await tool(alex.token, 'list_feedback', {});
   check(todo.items?.length === 1 && todo.items[0].author.name === '林小雨', "the owner's agent lists open feedback on their apps");
-  check(String((await tool(alice.token, 'resolve_app_feedback', { id: todo.items[0].id, status: 'done' })).error).length > 0, 'only the owner can resolve it');
+  check(String((await tool(alice.token, 'resolve_feedback', { id: todo.items[0].id, status: 'done' })).error).length > 0, 'only the owner can resolve it');
   lark.messages = [];
-  const resolved = await tool(alex.token, 'resolve_app_feedback', { id: todo.items[0].id, status: 'done', reply: '加上了' });
+  const resolved = await tool(alex.token, 'resolve_feedback', { id: todo.items[0].id, status: 'done', reply: '加上了' });
   await new Promise((r) => setTimeout(r, 300));
   check(resolved.status === 'done' && lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice' && lark.messages[0].text.includes('加上了'), 'resolving it tells the colleague, with the reply');
-  check((await tool(alex.token, 'list_app_feedback', {})).items.length === 0, 'and it leaves the open list');
+  check((await tool(alex.token, 'list_feedback', {})).items.length === 0, 'and it leaves the open list');
+
+  // the 「feedback」 button inside apps: on by default, posts with the page it was sent from, and the owner can turn it off
+  const appPage = await appFetch('invoice', '/', aliceInvoice, { 'sec-fetch-dest': 'document', accept: 'text/html' });
+  check((await appPage.text()).endsWith('<script src="/__hub/sdk.js"></script><script src="/__hub/feedback.js" defer></script>'), 'app pages get the feedback button (at the end when there is no </body>)');
+  const asset = await appFetch('invoice', '/', aliceInvoice, { 'sec-fetch-dest': 'script' });
+  check(!(await asset.text()).includes('/__hub/feedback.js'), 'only when a page is opened, not when fetched as something else');
+  const widget = await (await appFetch('invoice', '/__hub/feedback.js', aliceInvoice)).text();
+  check(/给作者提意见|Feedback for the owner/.test(widget) && widget.includes('attachShadow'), "the button comes in the person's language");
+  check((await appFetch('invoice', '/__hub/feedback', aliceInvoice, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ body: '跨站' }))).status === 405, 'posting without the hub header is refused');
+  lark.messages = [];
+  const inApp = await appFetch('invoice', '/__hub/feedback', aliceInvoice, { 'content-type': 'application/json', 'x-hub-feedback': '1' }, 'POST', JSON.stringify({ body: '提交按钮太靠下了', page: '/new?type=vat' }));
+  await new Promise((r) => setTimeout(r, 300));
+  check(inApp.status === 200 && lark.messages[0]?.id === 'ou_dev_alex', 'feedback from inside the app reaches the owner');
+  const fromApp = (await tool(alex.token, 'list_feedback', { slug: 'invoice' })).items[0];
+  check(fromApp.via === 'app' && fromApp.context === 'URL: http://invoice.apps.localhost:18930/new?type=vat', 'with the page it was sent from');
+  await tool(alex.token, 'resolve_feedback', { id: fromApp.id, status: 'done' });
+  check(String((await tool(alice.token, 'update_app', { slug: 'invoice', feedback_button: false })).error).length > 0, 'only the owner turns the button off');
+  await tool(alex.token, 'update_app', { slug: 'invoice', feedback_button: false });
+  const quiet = await appFetch('invoice', '/', aliceInvoice, { 'sec-fetch-dest': 'document' });
+  check(!(await quiet.text()).includes('/__hub/feedback.js') && ((await api(alex.jar, 'GET', '/apps/invoice')).body.app as { feedbackButton: boolean }).feedbackButton === false, 'and then pages come without it');
+  await api(alex.jar, 'PATCH', '/apps/invoice', { feedbackButton: true });
+
+  // a container app's pages get it too: the gateway adds it to the HTML on the way back
+  const upstream = http.createServer((req, res) => {
+    if (req.url === '/') {
+      res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'x-from': 'upstream' });
+      return res.end(`<html><body><h1>server app</h1>${req.headers['accept-encoding'] ? 'gzip-asked' : ''}</body></html>`);
+    }
+    res.writeHead(200, { 'content-type': 'application/json' });
+    res.end('{"ok":true}');
+  }).listen(0);
+  await new Promise((r) => upstream.once('listening', r));
+  const { DatabaseSync } = await import('node:sqlite');
+  const db = new DatabaseSync(path.join(dataDir, 'hub.db'));
+  db.prepare("UPDATE apps SET kind = 'container', upstream = ? WHERE slug = 'invoice'").run(`http://127.0.0.1:${(upstream.address() as { port: number }).port}`);
+  const proxied = await appFetch('invoice', '/', aliceInvoice, { 'sec-fetch-dest': 'document', 'accept-encoding': 'gzip' });
+  const proxiedHtml = await proxied.text();
+  check(proxiedHtml === '<html><body><h1>server app</h1><script src="/__hub/feedback.js" defer></script></body></html>' && proxied.headers.get('x-from') === 'upstream'
+    && proxied.headers.get('content-length') === String(Buffer.byteLength(proxiedHtml)), "a container app's page comes back with the button and its own headers, uncompressed");
+  const api2 = await appFetch('invoice', '/data', aliceInvoice, { 'sec-fetch-dest': 'empty' });
+  check((await api2.text()) === '{"ok":true}', 'its API responses pass through untouched');
+  db.prepare("UPDATE apps SET kind = 'static', upstream = NULL WHERE slug = 'invoice'").run();
+  db.close();
+  upstream.close();
+
+  // Skills get feedback too, from the hub page or from the person's agent
+  const skillDir = mkdtempSync(path.join(tmpdir(), 'hub-skill-'));
+  (await import('node:fs')).writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: invoice-check\ndescription: Checks invoices\n---\nCheck invoices.');
+  execFileSync(process.execPath, ['scripts/admin.ts', 'publish-skill', skillDir, '--owner', 'alex@example.com',
+    '--localized', JSON.stringify({ 'zh-CN': { name: '发票检查', description: '检查发票' }, en: { name: 'Invoice check', description: 'Checks invoices' } })],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
+  rmSync(skillDir, { recursive: true, force: true });
+  lark.messages = [];
+  check((await api(bob.jar, 'POST', '/skills/invoice-check/feedback', { body: '日期格式识别错了' })).status === 200, 'a colleague leaves feedback on a Skill');
+  const sent = await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'invoice-check', body: '遇到增值税专票会报错', context: 'Step 2, error: unknown field "tax_rate" (v1)' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(typeof sent.id === 'number' && lark.messages.length === 2 && lark.messages[1].text.includes('test') && lark.messages[1].text.includes('/skills/invoice-check#feedback'),
+    "or has their agent send it; the owner is told which agent and where to look");
+  const skillView = await api(alex.jar, 'GET', '/skills/invoice-check');
+  const viaAgent = (skillView.body.feedback as { via: string; agent: string; context: string }[]).find((f) => f.via === 'agent');
+  check((skillView.body.feedback as unknown[]).length === 2 && !!viaAgent?.agent && viaAgent.context.includes('tax_rate'), 'the owner sees both on the Skill page, with the details the agent added');
+  check(((await api(bob.jar, 'GET', '/skills/invoice-check')).body.feedback as unknown[]).length === 1, "others only see what they sent themselves");
+  const skillTodo = await tool(alex.token, 'list_feedback', { kind: 'skill' });
+  check(skillTodo.items.length === 2 && skillTodo.items.every((f: { kind: string }) => f.kind === 'skill'), "the owner's agent lists Skill feedback");
+  check(String((await tool(bob.token, 'list_feedback', { slug: 'invoice-check' })).error).length > 0, "and nobody else's agent can");
+  lark.messages = [];
+  await tool(alex.token, 'resolve_feedback', { id: sent.id, status: 'done', reply: 'v2 支持专票了' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages[0]?.id === 'ou_dev_alice' && lark.messages[0].text.includes('v2 支持专票了'), 'and resolving tells the sender');
+  check(String((await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'no-such-skill', body: '你好' })).error).length > 0, 'feedback on something that does not exist is refused');
+  lark.messages = [];
+  const own = await api(alex.jar, 'POST', '/skills/invoice-check/feedback', { body: '自己先试一下' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(own.status === 200 && lark.messages[0]?.id === 'ou_dev_alex', 'owners can send feedback on their own Skill to try it, and get the message');
+  lark.messages = [];
+  await tool(alex.token, 'resolve_feedback', { id: own.body.id, status: 'done', reply: '收到' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages[0]?.id === 'ou_dev_alex' && lark.messages[0].text.includes('收到'), 'and the reply too');
+
+  // several people looking after one Skill or app
+  lark.messages = [];
+  const team = await tool(alex.token, 'set_collaborators', { kind: 'skill', slug: 'invoice-check', add: ['bob@example.com'] });
+  await new Promise((r) => setTimeout(r, 300));
+  check(team.collaborators?.map((c: { role: string }) => c.role).join() === 'owner,collaborator' && lark.messages[0]?.id === 'ou_dev_bob' && lark.messages[0].text.includes('/skills/invoice-check'),
+    'the owner adds a collaborator, who is told in Lark');
+  check(String((await tool(bob.token, 'set_collaborators', { kind: 'skill', slug: 'invoice-check', add: ['alice@example.com'] })).error).length > 0, 'collaborators cannot add others');
+  const skillDir2 = mkdtempSync(path.join(tmpdir(), 'hub-skill-'));
+  (await import('node:fs')).writeFileSync(path.join(skillDir2, 'SKILL.md'), '---\nname: invoice-check\ndescription: Checks invoices\n---\nCheck invoices, VAT too.');
+  execFileSync(process.execPath, ['scripts/admin.ts', 'publish-skill', skillDir2, '--owner', 'bob@example.com', '--notes', 'VAT'],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
+  rmSync(skillDir2, { recursive: true, force: true });
+  const afterBob = (await api(alex.jar, 'GET', '/skills/invoice-check')).body as { skill: { version: number; owner: { id: string } } };
+  check(afterBob.skill.version === 2 && afterBob.skill.owner.id === 'ou_dev_alex', 'a collaborator publishes a new version; the owner stays the owner');
+  const bobSkill = (await api(bob.jar, 'GET', '/skills/invoice-check')).body.skill as { canManage: boolean; canAdminister: boolean; myRole: string };
+  check(bobSkill.canManage && !bobSkill.canAdminister && bobSkill.myRole === 'collaborator', 'the Skill page knows what a collaborator may do');
+  check((await tool(bob.token, 'list_feedback', { kind: 'skill' })).items?.length >= 1, "collaborators handle the Skill's feedback");
+  lark.messages = [];
+  await api(alice.jar, 'POST', '/skills/invoice-check/feedback', { body: '能不能支持电子发票' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages.map((m) => m.id).sort().join() === 'ou_dev_alex,ou_dev_bob', 'new feedback reaches the owner and the collaborators');
+  check((await api(bob.jar, 'DELETE', '/skills/invoice-check')).status === 400, 'collaborators cannot delete it');
+  check(((await api(bob.jar, 'GET', '/profile')).body.skills as { slug: string }[]).some((x) => x.slug === 'invoice-check'), "it shows among the collaborator's own Skills");
+  await api(bob.jar, 'POST', '/skills/invoice-check/collaborators', { remove: ['ou_dev_bob'] });
+  check(!((await api(bob.jar, 'GET', '/skills/invoice-check')).body.skill as { canManage: boolean }).canManage, 'anyone can leave on their own');
+
+  await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', add: ['bob@example.com'] });
+  const bobApps = await tool(bob.token, 'list_my_apps', {});
+  check(Array.isArray(bobApps) && bobApps.some((x: { slug: string; myRole: string }) => x.slug === 'invoice' && x.myRole === 'collaborator'), 'collaborators find the app among theirs');
+  check(!(await tool(bob.token, 'update_app', { slug: 'invoice', feedback_button: true })).error, 'and change its settings');
+  check(String((await tool(bob.token, 'delete_app', { slug: 'invoice', confirm_slug: 'invoice' })).error).length > 0, 'but not delete it');
+  lark.messages = [];
+  const handed = await tool(alex.token, 'transfer_ownership', { kind: 'app', slug: 'invoice', to: 'alice@example.com' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(handed.collaborators?.[0]?.id === 'ou_dev_alice' && handed.collaborators.some((c: { id: string; role: string }) => c.id === 'ou_dev_alex' && c.role === 'collaborator')
+    && lark.messages[0]?.id === 'ou_dev_alice', 'the owner hands the app over and stays on as a collaborator');
+  check(String((await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', remove: ['bob@example.com'] })).error).length > 0, 'after which they no longer choose collaborators');
+  await tool(alice.token, 'transfer_ownership', { kind: 'app', slug: 'invoice', to: 'alex@example.com' });
+  await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', remove: ['alice@example.com', 'bob@example.com'] });
+  check((await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice' })).collaborators.length === 1, 'and back again');
 
   // asking to open an app to everyone messages the admins; their decision messages the owner
   lark.messages = [];
@@ -966,6 +1149,42 @@ try {
   check(after.sections[0].rows[1].cells[0] === '招募 47 位创作者\n完善 SOP', "colleagues' rows are untouched");
   check(String((await tool(alex.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '财务', cells: ['x'] }] })).error).includes('社媒资源层'), 'an unknown section lists the ones there are');
   check(String((await tool(alice.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '日常工作', cells: ['x'] }] })).error).length > 0, 'nobody writes into a table without a row of their own');
+
+  // Lark documents: read one as Markdown, create one from Markdown as the person
+  const wikiPage = await tool(alex.token, 'read_lark_doc', { url: 'https://x.larksuite.com/wiki/wikDaily' });
+  check(wikiPage.title === '团队日会' && wikiPage.url === 'https://www.larksuite.com/wiki/wikDaily', 'an agent reads the document behind a wiki page');
+  check(wikiPage.markdown === '## 怎么开日会\n\n每天早上 **9:30**，日报放在这里，@林小雨 主持。\n- 先看昨天\n  - 卡点优先\n\n| **负责人** | 时间 |\n| --- | --- |\n| @Alex | 周一 |', 'as Markdown: headings, bold, @people, nested lists and tables');
+  check(String((await tool(alex.token, 'read_lark_doc', { url: 'https://example.com/whatever' })).error).length > 0, 'a link that is not a Lark document is refused');
+  await api(alex.jar, 'POST', '/lark/disconnect');
+  await connect(alex.jar);
+  const bigMd = ['# 方案', '背景说明', '| 项目 | 负责人 |\n| --- | --- |\n| 日报 | Alex |\n| 网关 | 林小雨 |', '![架构图](https://x/y.png)', ...Array.from({ length: 1200 }, (_, i) => `第 ${i + 1} 条`)].join('\n\n');
+  check(String((await tool(alex.token, 'create_lark_doc', { title: '周会纪要', markdown: bigMd })).error).includes('docs=1'), 'creating a document first asks the person to let the hub create and edit documents');
+  await connect(alex.jar, '&docs=1');
+  check(['docx:document', 'docx:document:create'].every((x) => lark.scopesAsked.split(' ').includes(x)), 'that connection asks for creating and editing documents');
+  const made = await tool(alex.token, 'create_lark_doc', { title: '周会纪要', markdown: bigMd });
+  const madeDoc = lark.made.get(String(made.url).split('/').pop()!);
+  check(made.url?.startsWith('https://www.larksuite.com/docx/') && madeDoc?.title === '周会纪要' && !madeDoc.folder, 'a document is created in the person\'s own space, with a link to it');
+  check(made.blocks === 1215 && madeDoc!.calls === 2 && madeDoc!.blocks.some((b) => b.block_type === 31), 'the Markdown goes in as blocks, tables included, in batches Lark accepts');
+  check(madeDoc!.blocks.some((b) => b.block_type === 3 && JSON.stringify(b).includes('方案')) && madeDoc!.blocks.filter((b) => b.block_type === 32).length === 6, 'headings and table cells come out as Lark blocks');
+  check(made.imagesLeftOut === 1 && !madeDoc!.blocks.some((b) => b.block_type === 27), 'images are left out, and the result says so');
+  const inFolder = await tool(alex.token, 'create_lark_doc', { title: '放进文件夹', markdown: '一行', parent: 'https://x.larksuite.com/drive/folder/fldAbc123' });
+  check(lark.made.get(String(inFolder.url).split('/').pop()!)?.folder === 'fldAbc123', 'or in a Drive folder');
+  check(String((await tool(alex.token, 'create_lark_doc', { title: '放进知识库', markdown: '一行', parent: 'https://x.larksuite.com/wiki/wikDaily' })).error).includes('wiki=1'), 'placing it under a wiki page first asks for wiki editing');
+  await connect(alex.jar, '&wiki=1');
+  check(lark.scopesAsked.split(' ').includes('wiki:wiki') && lark.scopesAsked.split(' ').includes('docx:document:create'), 'which is added on top of document access');
+  const inWiki = await tool(alex.token, 'create_lark_doc', { title: '放进知识库', markdown: '一行', parent: 'https://x.larksuite.com/wiki/wikDaily' });
+  check(String(inWiki.url).startsWith('https://www.larksuite.com/wiki/wikMade') && [...lark.made.values()].some((d) => d.folder === 'wiki:wikDaily' && d.title === '放进知识库'), 'the document becomes a page under the wiki page');
+  check(String((await tool(alex.token, 'create_lark_doc', { title: 'x', markdown: 'y', parent: 'https://x.larksuite.com/docx/doxDaily' })).error).length > 0, 'a document cannot go inside another document');
+
+  // the admin's picker: Lark's own features always; the company's apps once the hub may read them
+  check((await api(alice.jar, 'GET', '/lark-links/catalog')).status === 400, 'only admins see the Lark app picker');
+  let catalog = (await api(alex.jar, 'GET', '/lark-links/catalog')).body as { builtins: { name: string; url: string }[]; installed: { key: string; name: string; url: string; description: string }[]; installedMissing: boolean };
+  check(catalog.installedMissing && catalog.installed.length === 0 && catalog.builtins.some((x) => x.url === 'https://applink.larksuite.com/client/calendar/open'), 'without app info access the picker still offers Calendar and Tasks');
+  lark.appInfo = true;
+  catalog = (await api(alex.jar, 'GET', '/lark-links/catalog')).body as typeof catalog;
+  check(!catalog.installedMissing && catalog.installed.map((x) => x.key).join() === 'cli_approval,cli_wiki', 'it lists enabled apps that can be opened, not the hub itself');
+  const approval = catalog.installed.find((x) => x.key === 'cli_approval')!;
+  check(approval.name === 'Approval' && approval.description === 'Request approvals' && approval.url === 'https://applink.larksuite.com/client/mini_program/open?appId=cli_approval&mode=appCenter', 'in the reader\'s language, opening the right way');
 
   // an admin pins a Lark shortcut under the sidebar navigation
   await api(alex.jar, 'POST', '/lark-links', { name: '审批', url: 'https://applink.larksuite.com/approval', icon: '✅' });

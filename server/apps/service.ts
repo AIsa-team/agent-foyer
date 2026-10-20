@@ -4,8 +4,12 @@ import { appUrl, config, paths } from '../config.ts';
 import { decrypt, encrypt, randomToken } from '../crypto.ts';
 import { all, get, now, run, tx, type App, type User } from '../db.ts';
 import { extractTarball, takeUpload } from '../uploads.ts';
-import { canAccessApp, canManageApp } from './access.ts';
-import { openFeedbackCount, usageBySlug } from './feedback.ts';
+import { canAccessApp, canAdministerApp, canManageApp } from './access.ts';
+import { collaboratorsOf, isCollaborator, transferOwnership } from '../collab.ts';
+
+const isCollab = (slug: string, user: User) => isCollaborator('app', slug, user.id);
+import { openFeedbackCount } from '../feedback.ts';
+import { usageBySlug } from './visits.ts';
 import { publicRequested } from './approvals.ts';
 import * as docker from './docker.ts';
 import { UserError, type Msg } from '../i18n/index.ts';
@@ -234,7 +238,7 @@ export function linkSkill(user: User, slug: string, skillSlug: string | null) {
     return;
   }
   const skill = get<{ slug: string; listed: number; owner_id: string }>('SELECT slug, listed, owner_id FROM skills WHERE slug = ?', skillSlug);
-  if (!skill || (!skill.listed && skill.owner_id !== user.id && user.role !== 'admin')) throw new UserError('err.skill.notFound', { slug: skillSlug });
+  if (!skill || (!skill.listed && skill.owner_id !== user.id && user.role !== 'admin' && !isCollaborator('skill', skillSlug, user.id))) throw new UserError('err.skill.notFound', { slug: skillSlug });
   const other = get<{ slug: string }>('SELECT slug FROM apps WHERE skill_slug = ? AND slug != ?', skillSlug, app.slug);
   if (other) throw new UserError('err.link.skillTaken', { skill: skillSlug, app: other.slug });
   run('UPDATE apps SET skill_slug = ?, updated_at = ? WHERE slug = ?', skillSlug, now(), slug);
@@ -263,10 +267,11 @@ export function setVisibility(user: User, slug: string, visibility: Visibility, 
 
 export function updateApp(user: User, slug: string, patch: {
   name?: string; description?: string; localized?: LocalizedMap; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean;
-  relatedSkill?: string | null;
+  relatedSkill?: string | null; feedbackButton?: boolean;
 }) {
   const app = requireManageable(slug, user);
   if (patch.relatedSkill !== undefined) linkSkill(user, slug, patch.relatedSkill);
+  if (patch.feedbackButton !== undefined) run('UPDATE apps SET feedback_button = ? WHERE slug = ?', Number(patch.feedbackButton), slug);
   const icon = patch.iconSvg || patch.iconPngBase64 ? saveIcon(slug, { svg: patch.iconSvg, pngBase64: patch.iconPngBase64 }) : undefined;
   const i18n = mergeLocalized(app.i18n, patch.localized);
   run(
@@ -322,7 +327,8 @@ export async function setRunning(user: User, slug: string, running: boolean) {
 }
 
 export async function deleteApp(user: User, slug: string) {
-  requireManageable(slug, user);
+  const app = requireManageable(slug, user);
+  if (!canAdministerApp(app, user)) throw new UserError('err.collab.ownerOnlyDelete');
   if (busy.has(slug)) throw new UserError('err.app.busy', { slug });
   busy.add(slug);
   try {
@@ -341,7 +347,7 @@ export async function deleteApp(user: User, slug: string) {
 export function transferApp(user: User, slug: string, newOwnerId: string) {
   requireManageable(slug, user);
   if (!get('SELECT 1 FROM users WHERE id = ?', newOwnerId)) throw new UserError('err.app.transferUserNotFound');
-  run('UPDATE apps SET owner_id = ?, updated_at = ? WHERE slug = ?', newOwnerId, now(), slug);
+  transferOwnership(user, 'app', slug, newOwnerId);
 }
 
 export async function appStatus(user: User, slug: string, locale: string) {
@@ -388,6 +394,10 @@ export function serializeApp(app: App, viewer: User, locale: string, usage?: Map
     version: app.current_release,
     owner: owner ? { id: owner.id, name: owner.name, avatar: owner.avatar } : null,
     canManage: manageable,
+    /** may delete it, choose collaborators and hand it over */
+    canAdminister: canAdministerApp(app, viewer),
+    myRole: app.owner_id === viewer.id ? 'owner' as const : isCollab(app.slug, viewer) ? 'collaborator' as const : null,
+    collaborators: collaboratorsOf('app', app.slug).filter((c) => c.role === 'collaborator'),
     canOpen: canAccessApp(app, viewer),
     members: manageable
       ? all<{ id: string; name: string; avatar: string | null }>('SELECT u.id, u.name, u.avatar FROM app_members m JOIN users u ON u.id = m.user_id WHERE m.app_slug = ?', app.slug)
@@ -398,7 +408,9 @@ export function serializeApp(app: App, viewer: User, locale: string, usage?: Map
     isNew: now() - app.created_at < 7 * 86_400_000,
     /** colleagues (not the owner) who opened it in the last 30 days */
     usage30: usage?.get(app.slug) ?? usageBySlug().get(app.slug) ?? 0,
-    openFeedback: manageable ? openFeedbackCount(app.slug) : undefined,
+    openFeedback: manageable ? openFeedbackCount('app', app.slug) : undefined,
+    /** the 「feedback」 button shown inside the app */
+    feedbackButton: !!app.feedback_button,
   };
 }
 

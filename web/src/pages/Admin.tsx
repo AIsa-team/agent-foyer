@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type AppInfo, type LarkLink } from '../api';
 import { useI18n } from '../i18n';
-import { AppIcon, Avatar, Icon, Loading, useAction, useApi, useMe, useToast } from '../ui';
+import { AppIcon, Avatar, Icon, LinkIcon, Loading, useAction, useApi, useMe, useToast } from '../ui';
 
 interface AdminData {
   pending: AppInfo[];
@@ -13,22 +13,115 @@ interface AdminData {
   okrOwner: string | null;
 }
 
-function LinkForm({ onAdded }: { onAdded: () => void }) {
+interface CatalogItem { key: string; name: string; description: string; icon: string; url: string }
+interface Catalog { builtins: CatalogItem[]; installed: CatalogItem[]; installedMissing: boolean }
+
+/** A dropdown of Lark's own features and the company's Lark apps, with their icons and a filter box. */
+function AppPicker({ groups, chosen, onPick }: {
+  groups: { label: string; items: CatalogItem[] }[]; chosen: CatalogItem | 'custom' | undefined; onPick: (key: string) => void;
+}) {
   const { t } = useI18n();
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [at, setAt] = useState(0);
+  const box = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const needle = q.trim().toLowerCase();
+  const shown = groups.map((g) => ({ ...g, items: g.items.filter((x) => !needle || `${x.name} ${x.description}`.toLowerCase().includes(needle)) }))
+    .filter((g) => g.items.length);
+  const custom: CatalogItem = { key: 'custom', name: t('admin.linkCustom'), description: '', icon: '', url: '' };
+  const flat = [...shown.flatMap((g) => g.items), custom];
+  const pick = (key: string) => { onPick(key); setOpen(false); setQ(''); };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') setOpen(false);
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); setAt((i) => (i + (e.key === 'ArrowDown' ? 1 : flat.length - 1)) % flat.length); }
+    else if (e.key === 'Enter') { e.preventDefault(); pick(flat[Math.min(at, flat.length - 1)].key); }
+  };
+  const row = (x: CatalogItem) => {
+    const i = flat.indexOf(x);
+    return (
+      <button key={x.key} type="button" className={`palette__item${i === at ? ' on' : ''}`} onMouseEnter={() => setAt(i)} onClick={() => pick(x.key)}>
+        <span className="palette__icon">{x.key === 'custom' ? <Icon name="external" /> : <LinkIcon icon={x.icon} size={22} />}</span>
+        <span className="grow" style={{ minWidth: 0 }}>
+          <span className="ellipsis" style={{ display: 'block' }}>{x.name}</span>
+          {x.description && <span className="small muted ellipsis" style={{ display: 'block' }}>{x.description}</span>}
+        </span>
+      </button>
+    );
+  };
+  return (
+    <div className="app-picker" ref={box}>
+      <button type="button" className="select app-picker__button" onClick={() => setOpen(!open)} aria-expanded={open}>
+        {chosen === 'custom' ? <><Icon name="external" /> {t('admin.linkCustom')}</>
+          : chosen ? <><LinkIcon icon={chosen.icon} size={18} /> <span className="ellipsis">{chosen.name}</span></>
+          : <span className="muted">{t('admin.linkPick')}</span>}
+      </button>
+      {open && (
+        <div className="palette app-picker__panel">
+          <div className="palette__input">
+            <Icon name="search" />
+            <input autoFocus value={q} placeholder={t('admin.linkFilter')} onChange={(e) => { setQ(e.target.value); setAt(0); }} onKeyDown={keys} />
+          </div>
+          <div className="palette__list">
+            {shown.map((g) => (
+              <div key={g.label}>
+                <div className="palette__group">{g.label}</div>
+                {g.items.map(row)}
+              </div>
+            ))}
+            <div className="palette__group">{t('admin.linkOther')}</div>
+            {row(custom)}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Pick a Lark feature or one of the company's Lark apps and add it in one click; a custom link is the fallback. */
+function LinkForm({ added, onAdded }: { added: LarkLink[]; onAdded: () => void }) {
+  const { t } = useI18n();
+  const { data: catalog } = useApi<Catalog>('/lark-links/catalog');
   const empty = { name: '', description: '', url: '', icon: '' };
+  const [pick, setPick] = useState('');
   const [f, setF] = useState(empty);
   const { busy, run } = useAction();
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const have = new Set(added.map((l) => l.url));
+  const groups = [
+    { label: t('admin.linkBuiltins'), items: catalog?.builtins.filter((x) => !have.has(x.url)) ?? [] },
+    { label: t('admin.linkInstalled'), items: catalog?.installed.filter((x) => !have.has(x.url)) ?? [] },
+  ];
+  const chosen = groups.flatMap((g) => g.items).find((x) => x.key === pick);
+  const custom = pick === 'custom';
+  const add = () => {
+    const { key: _key, ...item } = chosen ?? { key: '', ...f };
+    return run(() => api.post('/lark-links', item), t('admin.addedToast')).then((ok) => ok && (setPick(''), setF(empty), onAdded()));
+  };
   return (
-    <div className="row" style={{ flexWrap: 'wrap', marginTop: 12 }}>
-      <input className="input" style={{ width: 70 }} placeholder={t('admin.iconPlaceholder')} value={f.icon} onChange={set('icon')} title={t('admin.iconTitle')} />
-      <input className="input" style={{ width: 140 }} placeholder={t('admin.namePlaceholder')} value={f.name} onChange={set('name')} />
-      <input className="input" style={{ width: 160 }} placeholder={t('admin.descPlaceholder')} value={f.description} onChange={set('description')} />
-      <input className="input grow" style={{ minWidth: 200 }} placeholder={t('admin.urlPlaceholder')} value={f.url} onChange={set('url')} />
-      <button className="btn" disabled={busy || !f.name || !f.url} type="button"
-        onClick={() => run(() => api.post('/lark-links', f), t('admin.addedToast')).then((ok) => ok && (setF(empty), onAdded()))}>
-        <Icon name="plus" /> {t('admin.add')}
-      </button>
+    <div className="stack" style={{ gap: 8, marginTop: 12 }}>
+      <div className="row" style={{ flexWrap: 'wrap' }}>
+        <AppPicker groups={groups} chosen={custom ? 'custom' : chosen} onPick={setPick} />
+        {chosen && <span className="small muted grow ellipsis" style={{ minWidth: 0 }}>{chosen.description}</span>}
+        {!custom && (
+          <button className="btn" disabled={busy || !chosen} type="button" onClick={add} style={{ marginLeft: 'auto' }}><Icon name="plus" /> {t('admin.add')}</button>
+        )}
+      </div>
+      {custom && (
+        <div className="row" style={{ flexWrap: 'wrap' }}>
+          <input className="input" style={{ width: 70 }} placeholder={t('admin.iconPlaceholder')} value={f.icon} onChange={set('icon')} title={t('admin.iconTitle')} />
+          <input className="input" style={{ width: 140 }} placeholder={t('admin.namePlaceholder')} value={f.name} onChange={set('name')} />
+          <input className="input" style={{ width: 160 }} placeholder={t('admin.descPlaceholder')} value={f.description} onChange={set('description')} />
+          <input className="input grow" style={{ minWidth: 200 }} placeholder={t('admin.urlPlaceholder')} value={f.url} onChange={set('url')} />
+          <button className="btn" disabled={busy || !f.name || !f.url} type="button" onClick={add}><Icon name="plus" /> {t('admin.add')}</button>
+        </div>
+      )}
+      {catalog?.installedMissing && <p className="small muted" style={{ margin: 0 }}>{t('admin.linkInstalledMissing')}</p>}
     </div>
   );
 }
@@ -39,6 +132,11 @@ export function AdminPage() {
   const { data, error, reload } = useApi<AdminData>(me.user.role === 'admin' ? '/admin' : null);
   const { busy, run } = useAction();
   const toast = useToast();
+  // links like /admin#lark-links land on that section once the page has loaded
+  const loaded = !!data;
+  useEffect(() => {
+    if (loaded && location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [loaded]);
   if (me.user.role !== 'admin') return <div className="empty"><b>{t('admin.onlyAdmins')}</b></div>;
   if (!data) return <Loading error={error} />;
   const sync = () => run(async () => {
@@ -101,16 +199,16 @@ export function AdminPage() {
       )}
 
       {me.hub.features.lark && (
-        <div className="section">
+        <div className="section" id="lark-links">
           <div className="section-title">{t('admin.larkLinks')} <span className="count">{t('admin.larkLinksHint')}</span></div>
           <div className="card pad">
             {data.larkLinks.length === 0 && <p className="small muted" style={{ margin: 0 }}>{t('admin.larkLinksEmpty')}</p>}
             <div className="stack" style={{ gap: 6 }}>
               {data.larkLinks.map((l) => (
                 <div key={l.id} className="row">
-                  <span style={{ width: 28, textAlign: 'center' }}>{/^https?:/.test(l.icon) ? <img src={l.icon} width={20} alt="" /> : l.icon || '🔗'}</span>
+                  <span style={{ width: 28, display: 'grid', placeItems: 'center' }}><LinkIcon icon={l.icon || '🔗'} /></span>
                   <span style={{ fontWeight: 500 }}>{l.name}</span>
-                  <span className="small muted grow ellipsis">{l.url}</span>
+                  <span className="small muted grow ellipsis" style={{ minWidth: 0 }}>{l.url}</span>
                   <label className="row small" style={{ gap: 4, whiteSpace: 'nowrap' }}>
                     <input type="checkbox" checked={!!l.in_sidebar} disabled={busy}
                       onChange={(e) => run(() => api.post(`/lark-links/${l.id}/sidebar`, { on: e.target.checked }), t('admin.sidebarSaved')).then(reload)} />
@@ -120,7 +218,7 @@ export function AdminPage() {
                 </div>
               ))}
             </div>
-            <LinkForm onAdded={reload} />
+            <LinkForm added={data.larkLinks} onAdded={reload} />
           </div>
         </div>
       )}

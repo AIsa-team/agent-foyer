@@ -13,7 +13,7 @@ import { oidcAuthorize, oidcExchange } from './oidc.ts';
 import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
-import { DOCS_WRITE_SCOPE } from '../lark/daily.ts';
+import { DOCS_SCOPES, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
 import { mailboxName, mailConnectUrl } from '../mail.ts';
 import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
@@ -65,12 +65,13 @@ authRoutes.get('/auth/lark/connect', (c) => {
   }
   const state = randomToken(16);
   setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|connect`, { ...cookieOpts, maxAge: 600 });
-  // keep write, document and mail access when reconnecting someone who already granted it
+  // keep write, document, wiki and mail access when reconnecting someone who already granted it
   const had = connection(user.id).scopes ?? [];
   const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
-  const docs = c.req.query('docs') === '1' || had.includes(DOCS_WRITE_SCOPE);
+  const docs = c.req.query('docs') === '1' || DOCS_SCOPES.some((s) => had.includes(s));
+  const wiki = c.req.query('wiki') === '1' || had.includes(WIKI_WRITE_SCOPE);
   const mail = config.mailDrafts === 'lark' && (c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s)));
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? [DOCS_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 

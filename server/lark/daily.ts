@@ -7,12 +7,8 @@
 import { config } from '../config.ts';
 import { get, now, run, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
-import { LarkError, SCOPE_CODES } from './client.ts';
-import { asUser } from './userToken.ts';
+import { allBlocks as docAllBlocks, docCall, larkLink } from './docs.ts';
 import { parseBaseUrl } from './base.ts';
-
-/** Editing documents; asked for only when someone first fills in a report. */
-export const DOCS_WRITE_SCOPE = 'docx:document';
 
 interface DailyConfig { space: string; folder: string; folderTitle: string; title: string; host?: string }
 
@@ -21,16 +17,7 @@ export function dailyConfig(): DailyConfig | null {
   return v ? (JSON.parse(v) as DailyConfig) : null;
 }
 
-async function call<T>(user: User, path: string, init?: RequestInit): Promise<T> {
-  try {
-    return await asUser<T>(user, path, init);
-  } catch (e) {
-    if (e instanceof LarkError && SCOPE_CODES.has(e.code)) {
-      throw new UserError(init?.method && init.method !== 'GET' ? 'err.daily.writeScope' : 'err.lark.scopeMissing', { detail: e.message, url: `${config.hubUrl}/auth/lark/connect?return=%2Fme&docs=1` });
-    }
-    throw e;
-  }
-}
+const call = <T>(user: User, path: string, init?: RequestInit) => docCall<T>(user, path, init);
 
 interface WikiNode { node_token: string; obj_token: string; obj_type: string; title: string; space_id: string; obj_create_time?: string }
 
@@ -89,17 +76,7 @@ function textOf(b: Block, withMentions = true): string {
   return elementsOf(b).map((e) => e.text_run?.content ?? (e.mention_user?.user_id ? (withMentions ? `@${nameOf(e.mention_user.user_id)}` : '') : e.mention_doc?.title ?? '')).join('');
 }
 
-async function allBlocks(user: User, doc: string): Promise<Map<string, Block>> {
-  const out = new Map<string, Block>();
-  let pageToken = '';
-  do {
-    const r = await call<{ data: { items: Block[]; page_token?: string; has_more?: boolean } }>(user,
-      `/docx/v1/documents/${doc}/blocks?page_size=500&user_id_type=open_id${pageToken ? `&page_token=${pageToken}` : ''}`);
-    for (const b of r.data.items) out.set(b.block_id, b);
-    pageToken = r.data.has_more ? r.data.page_token ?? '' : '';
-  } while (pageToken);
-  return out;
-}
+const allBlocks = (user: User, doc: string) => docAllBlocks(user, doc) as Promise<Map<string, Block>>;
 
 interface Row { person: { id: string; name: string } | null; cells: string[]; cellIds: string[] }
 interface Section { name: string; columns: string[]; rows: Row[] }
@@ -138,7 +115,7 @@ async function openReport(user: User, date?: string) {
   const node = await findReport(user, c, title);
   if (!node) throw new UserError('err.daily.notFound', { title, folder: c.folderTitle });
   const blocks = await allBlocks(user, node.obj_token);
-  const url = `https://${c.host ?? (config.lark.domain === 'feishu.cn' ? 'feishu.cn' : 'larksuite.com')}/wiki/${node.node_token}`;
+  const url = c.host ? `https://${c.host}/wiki/${node.node_token}` : larkLink('wiki', node.node_token);
   return { node, title, url, sections: sections(blocks, node.obj_token) };
 }
 

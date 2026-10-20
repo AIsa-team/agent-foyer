@@ -3,6 +3,7 @@ import { getCookie } from 'hono/cookie';
 import * as tar from 'tar';
 import { profileRadar } from './radar.ts';
 import { homePulse } from './pulse.ts';
+import { larkAppCatalog } from './lark/appCatalog.ts';
 import { config, loginName } from './config.ts';
 import { messenger } from './notify.ts';
 import { mailboxName } from './mail.ts';
@@ -26,7 +27,9 @@ import { cachedRead, forgetReads } from './cache.ts';
 import * as okrBoard from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
-import * as feedback from './apps/feedback.ts';
+import * as feedback from './feedback.ts';
+import * as collab from './collab.ts';
+import { usageDetail } from './apps/visits.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
@@ -99,13 +102,14 @@ api.post('/me/locale', async (c) => {
 api.get('/profile', (c) => {
   const u = c.get('user');
   const allApps = apps.listAppsFor(u, localeOf(c));
-  const mySkills = skills.listSkills(u, localeOf(c)).filter((s) => s.owner.id === u.id);
+  // what they look after: their own and what they collaborate on
+  const mySkills = skills.listSkills(u, localeOf(c)).filter((s) => s.myRole);
   const agents = all<{ client_id: string; client_name: string; connected_at: number; last_used_at: number }>(
     'SELECT client_id, client_name, connected_at, last_used_at FROM agent_connections WHERE user_id = ? ORDER BY last_used_at DESC', u.id,
   );
   const installed = get<{ n: number }>('SELECT COUNT(*) AS n FROM skill_installs WHERE user_id = ?', u.id)!.n;
   return c.json({
-    apps: allApps.filter((a) => a.owner?.id === u.id),
+    apps: allApps.filter((a) => a.myRole),
     skills: mySkills,
     installedSkills: installed,
     agents: agents.map((a) => ({ id: a.client_id, name: a.client_name, connectedAt: a.connected_at, lastUsedAt: a.last_used_at })),
@@ -240,14 +244,18 @@ api.get('/apps/:slug', (c) => {
     : [];
   return c.json({
     app: data, releases, lark: config.lark.enabled ? appLark.describeManifest(u, app) : null, larkConsentUrl: appLark.consentUrl(app.slug, '/'),
-    feedback: feedback.feedbackFor(u, app.slug),
-    usage: data.canManage ? feedback.usageDetail(app) : null,
+    feedback: feedback.feedbackFor(u, 'app', app.slug),
+    usage: data.canManage ? usageDetail(app) : null,
   });
 });
 
 api.post('/apps/:slug/feedback', async (c) => {
   const b = await body<{ body?: string }>(c);
-  return c.json(await feedback.addFeedback(c.get('user'), c.req.param('slug'), String(b.body ?? '')));
+  return c.json(await feedback.addFeedback(c.get('user'), 'app', c.req.param('slug'), { body: String(b.body ?? '') }));
+});
+api.post('/skills/:slug/feedback', async (c) => {
+  const b = await body<{ body?: string }>(c);
+  return c.json(await feedback.addFeedback(c.get('user'), 'skill', c.req.param('slug'), { body: String(b.body ?? '') }));
 });
 api.post('/feedback/:id', async (c) => {
   const b = await body<{ status?: string; reply?: string }>(c);
@@ -268,7 +276,7 @@ api.get('/apps/:slug/releases/:version/log', (c) => {
 });
 
 api.patch('/apps/:slug', async (c) => {
-  const b = await body<{ name?: string; description?: string; localized?: Record<string, { name?: string; description?: string }>; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean }>(c);
+  const b = await body<{ name?: string; description?: string; localized?: Record<string, { name?: string; description?: string }>; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean; feedbackButton?: boolean }>(c);
   return c.json({ ok: true, ...apps.updateApp(c.get('user'), c.req.param('slug'), b) });
 });
 
@@ -282,6 +290,18 @@ api.post('/apps/:slug/running', async (c) => {
   const b = await body<{ running: boolean }>(c);
   await apps.setRunning(c.get('user'), c.req.param('slug'), !!b.running);
   return c.json({ ok: true });
+});
+
+// collaborators: { add?: userIds, remove?: userIds }; anyone may remove themselves
+for (const kind of ['app', 'skill'] as const) {
+  api.post(`/${kind}s/:slug/collaborators`, async (c) => {
+    const b = await body<{ add?: string[]; remove?: string[] }>(c);
+    return c.json({ collaborators: collab.setCollaborators(c.get('user'), kind, c.req.param('slug'), { add: b.add, remove: b.remove }) });
+  });
+}
+api.post('/skills/:slug/transfer', async (c) => {
+  const b = await body<{ userId: string }>(c);
+  return c.json({ collaborators: collab.transferOwnership(c.get('user'), 'skill', c.req.param('slug'), b.userId) });
 });
 
 api.post('/apps/:slug/transfer', async (c) => {
@@ -333,7 +353,7 @@ api.get('/skills/:slug', async (c) => {
       else entry.resume();
     },
   });
-  return c.json({ skill: s, versions: skills.skillVersions(s.slug), readme });
+  return c.json({ skill: s, versions: skills.skillVersions(s.slug), readme, feedback: feedback.feedbackFor(c.get('user'), 'skill', s.slug) });
 });
 
 api.patch('/skills/:slug', async (c) => {
@@ -367,6 +387,12 @@ api.post('/lark-links', async (c) => {
   if (!b.name || !b.url || !/^https?:\/\//.test(b.url)) throw new UserError('err.larkLinkInvalid');
   run('INSERT INTO lark_links (name, description, url, icon, sort) VALUES (?, ?, ?, ?, ?)', b.name, b.description ?? '', b.url, b.icon ?? '', b.sort ?? 0);
   return c.json({ ok: true });
+});
+
+/** For the admin's picker: Lark's own features and the apps installed in the company. */
+api.get('/lark-links/catalog', async (c) => {
+  requireAdmin(c.get('user'));
+  return c.json(await larkAppCatalog(localeOf(c)));
 });
 
 api.post('/lark-links/:id/sidebar', async (c) => {

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router';
 import { api, type Agent, type AppInfo, type SkillInfo } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
@@ -7,6 +7,38 @@ import { AppIcon, Avatar, CopyBox, CopyButton, Dialog, Loading, Step, useAction,
 
 interface Profile { apps: AppInfo[]; skills: SkillInfo[]; installedSkills: number; agents: Agent[]; radar: { axes: Axis[]; people: number } }
 interface LarkStatus { connected: boolean; expired?: boolean; until?: number; connectUrl: string; available: boolean }
+
+/** One thing connected to this person's hub account (a service or an agent), all drawn the same way. */
+function ConnectionCard({ logo, title, connected, detail, action, children }: {
+  logo: ReactNode; title: string; connected: boolean; detail?: ReactNode; action: ReactNode; children?: ReactNode;
+}) {
+  const { t } = useI18n();
+  return (
+    <div className="card conn-card">
+      <div className="conn-card__head">
+        {logo}
+        <div className="grow" style={{ minWidth: 0 }}>
+          <div className="conn-card__title">{title}{connected && <span className="badge ok">{t('me.connected')}</span>}</div>
+          {detail && <div className="small muted ellipsis">{detail}</div>}
+        </div>
+        {action}
+      </div>
+      {children && <p className="small muted" style={{ margin: 0 }}>{children}</p>}
+    </div>
+  );
+}
+
+const ServiceLogo = ({ src }: { src: string }) => <span className="conn-logo"><img src={src} alt="" /></span>;
+
+/** Agents name themselves when they connect; the well-known ones get their mark (web/public/agents), others a letter tile. */
+const AGENT_MARKS: [RegExp, string][] = [
+  [/claude code/i, 'claudecode'], [/claude/i, 'claude'], [/codex/i, 'codex'], [/chatgpt|openai/i, 'openai'], [/cursor/i, 'cursor'],
+  [/windsurf/i, 'windsurf'], [/trae/i, 'trae'], [/copilot|vs ?code/i, 'githubcopilot'], [/gemini/i, 'googlegemini'], [/\bzed\b/i, 'zedindustries'],
+];
+function AgentLogo({ name }: { name: string }) {
+  const mark = AGENT_MARKS.find(([re]) => re.test(name))?.[1];
+  return mark ? <ServiceLogo src={`/agents/${mark}.svg`} /> : <AppIcon src={null} name={name} size="sm" />;
+}
 
 /** The person's own Lark data connection: home charts, alerts and agents read Base tables with it. */
 function LarkDataCard() {
@@ -18,17 +50,12 @@ function LarkDataCard() {
     if (confirm(t('me.lark.disconnectConfirm'))) run(() => api.post('/lark/disconnect'), t('me.lark.disconnected')).then(reload);
   };
   return (
-    <div className="card pad" style={{ marginTop: 12 }}>
-      <div className="section-title" style={{ marginBottom: 8 }}>
-        {t('me.lark.title')}
-        {data.connected && <span className="badge ok" style={{ marginLeft: 8 }}>{t('me.connected')}</span>}
-        <span className="spacer" />
-        {data.connected
-          ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.lark.disconnect')}</button>
-          : <a className="btn sm primary" href={data.connectUrl}>{t('me.lark.connect')}</a>}
-      </div>
-      <p className="small muted" style={{ margin: 0 }}>{t(data.connected ? 'me.lark.connectedBody' : data.expired ? 'me.lark.expiredBody' : 'me.lark.body')}</p>
-    </div>
+    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.lark.title')} connected={data.connected}
+      action={data.connected
+        ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.lark.disconnect')}</button>
+        : <a className="btn sm primary" href={data.connectUrl}>{t('me.lark.connect')}</a>}>
+      {t(data.connected ? 'me.lark.connectedBody' : data.expired ? 'me.lark.expiredBody' : 'me.lark.body')}
+    </ConnectionCard>
   );
 }
 
@@ -42,18 +69,13 @@ function GoogleCard() {
     if (confirm(t('me.google.disconnectConfirm'))) run(() => api.post('/google/disconnect'), t('me.google.disconnected')).then(reload);
   };
   return (
-    <div className="card pad" style={{ marginTop: 12 }}>
-      <div className="section-title" style={{ marginBottom: 8 }}>
-        {t('me.google.title')}
-        {data.connected && <span className="badge ok" style={{ marginLeft: 8 }}>{t('me.connected')}</span>}
-        {data.connected && data.email && <span className="small muted" style={{ marginLeft: 8, fontWeight: 400 }}>{data.email}</span>}
-        <span className="spacer" />
-        {data.connected
-          ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.google.disconnect')}</button>
-          : <a className="btn sm" href={data.connectUrl}>{t('me.google.connect')}</a>}
-      </div>
-      <p className="small muted" style={{ margin: 0 }}>{t(data.connected ? 'me.google.connectedBody' : 'me.google.body')}</p>
-    </div>
+    <ConnectionCard logo={<ServiceLogo src="/services/gmail.svg" />} title={t('me.google.title')} connected={data.connected}
+      detail={data.connected && data.email}
+      action={data.connected
+        ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.google.disconnect')}</button>
+        : <a className="btn sm" href={data.connectUrl}>{t('me.google.connect')}</a>}>
+      {t(data.connected ? 'me.google.connectedBody' : 'me.google.body')}
+    </ConnectionCard>
   );
 }
 
@@ -64,18 +86,13 @@ function GitHubCard() {
   const { busy, run } = useAction();
   if (!data?.available) return null;
   return (
-    <div className="card pad" style={{ marginTop: 12 }}>
-      <div className="section-title" style={{ marginBottom: 8 }}>
-        GitHub
-        {data.login && <span className="badge ok" style={{ marginLeft: 8 }}>{t('me.connected')}</span>}
-        {data.login && <span className="small muted mono" style={{ marginLeft: 8, fontWeight: 400 }}>@{data.login}</span>}
-        <span className="spacer" />
-        {data.login
-          ? <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => api.post('/github/disconnect'), t('me.github.disconnected')).then(reload)} type="button">{t('me.github.disconnect')}</button>
-          : <a className="btn sm" href={data.connectUrl}>{t('me.github.connect')}</a>}
-      </div>
-      <p className="small muted" style={{ margin: 0 }}>{t(data.login ? 'me.github.connectedBody' : 'me.github.body', { org: data.org })}</p>
-    </div>
+    <ConnectionCard logo={<ServiceLogo src="/services/github.svg" />} title="GitHub" connected={!!data.login}
+      detail={data.login && <span className="mono">@{data.login}</span>}
+      action={data.login
+        ? <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => api.post('/github/disconnect'), t('me.github.disconnected')).then(reload)} type="button">{t('me.github.disconnect')}</button>
+        : <a className="btn sm" href={data.connectUrl}>{t('me.github.connect')}</a>}>
+      {t(data.login ? 'me.github.connectedBody' : 'me.github.body', { org: data.org })}
+    </ConnectionCard>
   );
 }
 
@@ -204,30 +221,23 @@ export function MePage() {
           <Step n={1} title={t('me.step1.title')}><p>{t('me.step1.body')}</p></Step>
           <Step n={2} title={t('me.step2.title')}>
             <p>{t('me.step2.body')}</p>
-            <CopyBox text={connectPrompt(me, t)} collapsible />
+            <CopyBox text={connectPrompt(me, t)} dialogTitle={t('me.step2.title')} />
           </Step>
           <Step n={3} title={t('me.step3.title', { login: me.hub.login })}><p>{t('me.step3.body')}</p></Step>
         </div>
       </div>
-      {me.hub.features.lark && <LarkDataCard />}
-      {me.hub.mailbox === 'Gmail' && <GoogleCard />}
-      <GitHubCard />
-      {data.agents.length > 0 && (
-        <div className="grid" style={{ marginTop: 12 }}>
-          {data.agents.map((a) => (
-            <div key={a.id} className="card app-card" style={{ minHeight: 0 }}>
-              <div className="head">
-                <AppIcon src={null} name={a.name} size="sm" />
-                <div className="grow"><div className="title">{a.name}</div><span className="small muted">{t('common.usedAgo', { ago: ago(a.lastUsedAt) })}</span></div>
-              </div>
-              <div className="foot">
-                <span className="row"><span className="badge ok">{t('me.connected')}</span> {t('me.connectedOn', { date: fmtDate(a.connectedAt) })}</span>
-                <button className="btn sm ghost danger" onClick={() => disconnect(a)} type="button">{t('me.disconnect')}</button>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="grid wide" style={{ marginTop: 12 }}>
+        {me.hub.features.lark && <LarkDataCard />}
+        {me.hub.mailbox === 'Gmail' && <GoogleCard />}
+        <GitHubCard />
+        {data.agents.map((a) => (
+          <ConnectionCard key={a.id} logo={<AgentLogo name={a.name} />} title={a.name} connected
+            detail={<>{t('common.usedAgo', { ago: ago(a.lastUsedAt) })} · {t('me.connectedOn', { date: fmtDate(a.connectedAt) })}</>}
+            action={<button className="btn sm ghost danger" onClick={() => disconnect(a)} type="button">{t('me.disconnect')}</button>}>
+            {t('me.agentBody')}
+          </ConnectionCard>
+        ))}
+      </div>
 
       <div className="section">
         <div className="section-title">{t('me.myApps')} <span className="count">{t('common.count', { n: data.apps.length })}</span></div>

@@ -27,6 +27,12 @@ const ICONS = {
   library: 'M3 5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v15H4a1 1 0 0 1-1-1zM8 5a1 1 0 0 1 1-1h3a1 1 0 0 1 1 1v15H8zM14.2 6.4l2.9-.8a1 1 0 0 1 1.2.7l3.3 12.4a1 1 0 0 1-.7 1.2l-2.9.8z',
 };
 export type IconName = keyof typeof ICONS;
+/** An icon an admin gave a link: an image (a URL, or a path on the hub), an emoji, or a plain link mark. */
+export function LinkIcon({ icon, size = 20 }: { icon: string; size?: number }) {
+  if (/^(https?:\/\/|\/[^/])/.test(icon)) return <img src={icon} width={size} height={size} style={{ borderRadius: Math.round(size / 4.5), flex: 'none' }} alt="" />;
+  return icon ? <span className="emoji" style={{ fontSize: Math.round(size * 0.8), lineHeight: 1 }}>{icon}</span> : <Icon name="external" size={Math.round(size * 0.8)} />;
+}
+
 export function Icon({ name, size = 16 }: { name: IconName; size?: number }) {
   return (
     <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -157,20 +163,20 @@ export function CopyButton({ text, label }: { text: string; label?: string }) {
   );
 }
 
-export function CopyBox({ text, collapsible = false }: { text: string; collapsible?: boolean }) {
-  const [open, setOpen] = useState(!collapsible);
+/** Text to copy. With `dialogTitle`, only the first lines show and the whole text opens in a dialog. */
+export function CopyBox({ text, dialogTitle }: { text: string; dialogTitle?: string }) {
+  const [open, setOpen] = useState(false);
   const { t } = useI18n();
   return (
     <div className="copybox">
       <div className="grow">
-        <div className={`text ${open ? '' : 'clamp'}`}>{text}</div>
-        {collapsible && (
-          <button className="btn sm ghost" style={{ paddingLeft: 0, marginTop: 4 }} onClick={() => setOpen(!open)} type="button">
-            {open ? t('common.showLess') : t('common.showAll')}
-          </button>
+        <div className={`text ${dialogTitle ? 'clamp' : ''}`}>{text}</div>
+        {dialogTitle && (
+          <button className="btn sm ghost" style={{ paddingLeft: 0, marginTop: 4 }} onClick={() => setOpen(true)} type="button">{t('common.showAll')}</button>
         )}
       </div>
       <CopyButton text={text} />
+      {open && dialogTitle && <Dialog title={dialogTitle} onClose={() => setOpen(false)} width={720}><CopyBox text={text} /></Dialog>}
     </div>
   );
 }

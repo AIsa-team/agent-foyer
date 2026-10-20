@@ -12,4 +12,4 @@ export const skillSharePrompt = (me: Me, t: T) => t('prompt.skillShare', { hub: 
 export const skillInstallPrompt = (me: Me, t: T, slug: string) => t('prompt.skillInstall', { hub: hub(me, t), slug });
 export const skillUpdatePrompt = (me: Me, t: T) => t('prompt.skillUpdate', { hub: hub(me, t) });
 export const iconPrompt = (me: Me, t: T, slug: string) => t('prompt.icon', { hub: hub(me, t), slug });
-export const feedbackPrompt = (me: Me, t: T, slug: string) => t('prompt.feedback', { hub: hub(me, t), slug });
+export const feedbackPrompt = (me: Me, t: T, kind: 'app' | 'skill', slug: string) => t(`prompt.feedback.${kind}`, { hub: hub(me, t), slug });

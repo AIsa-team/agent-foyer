@@ -3,7 +3,7 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod';
 import { appUrl, config } from './config.ts';
 import { messenger } from './notify.ts';
-import { all, type User } from './db.ts';
+import { all, get, type User } from './db.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
@@ -16,11 +16,13 @@ import { listPeriods, userOkrs } from './lark/okr.ts';
 import { okrBoard } from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
-import * as feedback from './apps/feedback.ts';
+import * as feedback from './feedback.ts';
+import * as collab from './collab.ts';
 import { githubEnabled } from './github/app.ts';
 import { githubActivity } from './github/activity.ts';
 import { githubConnectUrl } from './github/link.ts';
 import { fillDailyReport, readDailyReport, setDailyConfig } from './lark/daily.ts';
+import { createDoc, readDoc } from './lark/docs.ts';
 import * as boards from './boards.ts';
 import { createUpload } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -46,10 +48,11 @@ Publishing an app (e.g. "publish this project to the company server"):
    - Browser extensions / desktop tools are not websites: build a static download page that links the packaged zip (included in the upload) with install steps.
 3. create_upload(purpose="app"), then run the returned shell command to tar+upload (exclude node_modules, .git, .env, secrets). On Windows use command_windows_powershell.
 4. publish_app with the upload_id. Report the URL and access setting to the user.
-Improving an app: colleagues leave feedback on the app's page in the hub. When the user asks to improve or fix one of their apps (or asks what people said), call list_app_feedback, go through the items with the user, change and republish the app, then resolve_app_feedback each item with a short reply so the person who asked is told. get_app_status also shows how many colleagues used it in the last 30 days.
+Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app (the owner can hide it with update_app feedback_button=false), or through their agent. When the user asks to improve or fix one of their apps or Skills (or asks what people said), call list_feedback, go through the items with the user, change and republish, then resolve_feedback each item with a short reply so the person who asked is told. When the user runs into a problem with someone else's app or Skill (a Skill misbehaves, an app errors or lacks something) and wants the author to know, draft it with send_feedback: show the user the exact text first and send only after they agree. get_app_status also shows how many colleagues used it in the last 30 days.
 Logged-in users reach apps through the hub gateway. Your app can read the current user from request headers X-Hub-User-Id, X-Hub-User-Name (URI-encoded), X-Hub-User-Email, X-Hub-User-Locale, or from the browser via fetch('/__hub/me') ({ id, name, email, avatar, locale }). Do not build a separate login. App UI text should follow the user's hub language (locale above) with locale files, so English and Chinese colleagues can both use it.
 ${config.designSkills.length ? `Company design: when you build anything visual (apps, pages, decks, charts), install and follow these Skills from the market: ${config.designSkills.join(', ')}.` : 'Company design: if the Skill market has design-system or brand Skills (check list_skills), install and follow them when you build anything visual.'}
 Never put secrets in the upload; use set_app_env for API keys.
+Working together: an app or Skill can have collaborators besides its owner (set_collaborators, find_colleagues to pick people). They publish new versions and change settings like the owner; only the owner (or an admin) deletes it, changes the collaborators or hands it over (transfer_ownership). If publishing fails because a slug or Skill name belongs to someone else, suggest asking that person to add the user as a collaborator.
 ${LARK ? `Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). To prepare an email the person sends themselves (e.g. a confirmation to a client, cc colleagues), declare mail_drafts: true and call hub.lark.mailDraft({to, cc, subject, html}): it lands in their own Lark mailbox as a draft, never sent. Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).\n` : ''}
 
 Sharing a Skill: if it has no icon, draw a simple square SVG icon and pass icon_svg. The folder must have SKILL.md at its root with frontmatter "name" (lowercase-hyphen) and "description". create_upload(purpose="skill"), upload the folder contents, then publish_skill with localized market names/descriptions for every hub language. Republishing the same name creates a new version. To change only the market text later, use update_skill.
@@ -59,7 +62,7 @@ Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase,
 Example, a Metabase question: in Metabase Admin → Authentication → API keys create a key (give it a group that only sees what is needed); set_app_env METABASE_URL and METABASE_API_KEY; a container app with GET /rows that POSTs {METABASE_URL}/api/card/<question id>/query/json with header x-api-key, caches the result 5 minutes, adds _id from the question's unique column and _url {METABASE_URL}/question/<id>, and returns {rows}.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write only after they agree. Ask for tomorrow's plan and blockers rather than inventing them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Lark documents: read_lark_doc reads one as Markdown; create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). The first time, the user is asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write only after they agree. Ask for tomorrow's plan and blockers rather than inventing them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -81,8 +84,10 @@ function resolveColleagues(refs: string[]): string[] {
   });
 }
 
-export function buildMcpServer(user: User): McpServer {
+export function buildMcpServer(user: User, clientId?: string): McpServer {
   const server = new McpServer({ name: config.mcpName, version: '0.1.0' }, { instructions: INSTRUCTIONS });
+  // feedback sent through an agent says which one
+  const agentName = (clientId && get<{ client_name: string }>('SELECT client_name FROM agent_connections WHERE user_id = ? AND client_id = ?', user.id, clientId)?.client_name) || 'Agent';
   // replies use the language this person picked in the hub UI
   const locale = user.locale ?? config.defaultLocale;
   const say = (m: Msg) => tr(locale, m.key, m.params);
@@ -168,18 +173,37 @@ export function buildMcpServer(user: User): McpServer {
     inputSchema: { slug: z.string() },
   }, guard(({ slug }: { slug: string }) => apps.appStatus(user, slug, locale)));
 
-  server.registerTool('list_my_apps', { description: 'Apps you own.' }, guard(() =>
-    apps.listAppsFor(user, locale).filter((a) => a.owner?.id === user.id)));
+  server.registerTool('list_my_apps', { description: 'Apps you own or collaborate on (myRole says which).' }, guard(() =>
+    apps.listAppsFor(user, locale).filter((a) => a.myRole)));
+
+  server.registerTool('set_collaborators', {
+    description: 'Colleagues who look after an app or Skill with its owner: they can publish new versions, change the listing, access and env, and handle feedback; deleting, choosing collaborators and handing it over stay with the owner (and admins). Added people get a Lark message. Call with neither add nor remove to see the list. Anyone can remove themselves.',
+    inputSchema: {
+      kind: z.enum(['app', 'skill']), slug: z.string(),
+      add: z.array(z.string()).optional().describe('names or emails (see find_colleagues)'),
+      remove: z.array(z.string()).optional().describe('names or emails'),
+    },
+  }, guard((a: { kind: 'app' | 'skill'; slug: string; add?: string[]; remove?: string[] }) => ({
+    collaborators: collab.setCollaborators(user, a.kind, a.slug, { add: a.add && resolveColleagues(a.add), remove: a.remove && resolveColleagues(a.remove) }),
+  })));
+
+  server.registerTool('transfer_ownership', {
+    description: 'Hand an app or Skill you own to a colleague, who becomes its owner; you stay on as a collaborator. Confirm with the user first.',
+    inputSchema: { kind: z.enum(['app', 'skill']), slug: z.string(), to: z.string().describe('name or email') },
+  }, guard((a: { kind: 'app' | 'skill'; slug: string; to: string }) => ({
+    collaborators: collab.transferOwnership(user, a.kind, a.slug, resolveColleagues([a.to])[0]),
+  })));
 
   server.registerTool('update_app', {
-    description: 'Change the listing text (per language), name, description or icon of your app.',
+    description: 'Change the listing text (per language), name, description or icon of your app, or hide the 「feedback」 button the hub adds inside it.',
     inputSchema: {
       slug: z.string(), name: z.string().optional(), description: z.string().optional(),
       localized: localizedSchema(), icon_svg: z.string().optional(), icon_png_base64: z.string().optional(),
       related_skill: z.string().optional().describe('link this app to a Skill slug, or "" to remove the link'),
+      feedback_button: z.boolean().optional().describe('show the feedback button inside the app (default true); false if the app has its own feedback'),
     },
-  }, guard((a: { slug: string; name?: string; description?: string; localized?: LocalizedMap; icon_svg?: string; icon_png_base64?: string; related_skill?: string }) => {
-    return apps.updateApp(user, a.slug, { name: a.name, description: a.description, localized: a.localized, iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, relatedSkill: a.related_skill });
+  }, guard((a: { slug: string; name?: string; description?: string; localized?: LocalizedMap; icon_svg?: string; icon_png_base64?: string; related_skill?: string; feedback_button?: boolean }) => {
+    return apps.updateApp(user, a.slug, { name: a.name, description: a.description, localized: a.localized, iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, relatedSkill: a.related_skill, feedbackButton: a.feedback_button });
   }));
 
   server.registerTool('set_app_access', {
@@ -201,18 +225,32 @@ export function buildMcpServer(user: User): McpServer {
     return { keys, restarted: app.kind === 'container' && !!app.current_release };
   }));
 
-  server.registerTool('list_app_feedback', {
-    description: 'What colleagues said about the apps you own (bugs, missing features, confusing steps), newest first, with who said it. Default: open items on all your apps.',
+  server.registerTool('list_feedback', {
+    description: 'What colleagues said about the apps and Skills you own (bugs, missing features, confusing steps), newest first, with who said it, where from (hub page, the button inside the app, or their agent) and any details the sender added (context). Default: open items on everything you own.',
     inputSchema: {
-      slug: z.string().optional().describe('one app; default: all apps you own'),
+      kind: z.enum(['app', 'skill']).optional().describe('only apps or only Skills'),
+      slug: z.string().optional().describe('one app or Skill; default: all you own'),
       status: z.enum(['open', 'done', 'declined', 'all']).optional().describe('default open'),
     },
-  }, guard((a: { slug?: string; status?: 'open' | 'done' | 'declined' | 'all' }) => {
+  }, guard((a: { kind?: feedback.Kind; slug?: string; status?: 'open' | 'done' | 'declined' | 'all' }) => {
     const items = feedback.feedbackToHandle(user, a);
-    return { items, hint: items.length ? 'Fix what the user agrees to, publish the update, then resolve_app_feedback each item (the person is told).' : undefined };
+    return { items, hint: items.length ? 'Fix what the user agrees to, publish the update, then resolve_feedback each item (the person is told).' : undefined };
   }));
 
-  server.registerTool('resolve_app_feedback', {
+  server.registerTool('send_feedback', {
+    description: 'Tell the owner of an app or Skill about a problem or wish, as the user. Only after the user has seen and agreed to the exact text. The owner gets a message and the user is told when it is handled.',
+    inputSchema: {
+      kind: z.enum(['app', 'skill']),
+      slug: z.string().describe('the app subdomain or the Skill name'),
+      body: z.string().min(2).max(2000).describe("what went wrong or what is missing, in the user's language and words"),
+      context: z.string().max(4000).optional().describe('details that help the owner reproduce it: what was being done, the step, error messages, the Skill version. Never secrets, tokens or private data.'),
+    },
+  }, guard(async (a: { kind: feedback.Kind; slug: string; body: string; context?: string }) => {
+    const item = await feedback.addFeedback(user, a.kind, a.slug, { body: a.body, context: a.context, via: 'agent', agent: agentName });
+    return { id: item.id, status: item.status, message: say({ key: 'note.feedbackSent' }) };
+  }));
+
+  server.registerTool('resolve_feedback', {
     description: 'Mark a feedback item done (fixed and published) or declined (will not change), with a short reply in the language the person wrote in. The person who sent it gets a message.',
     inputSchema: { id: z.number().int(), status: z.enum(['done', 'declined', 'open']), reply: z.string().max(2000).optional() },
   }, guard((a: { id: number; status: 'done' | 'declined' | 'open'; reply?: string }) => feedback.resolveFeedback(user, a.id, a.status, a.reply)));
@@ -521,6 +559,20 @@ export function buildMcpServer(user: User): McpServer {
       description: 'Lark OKR periods (id, name, date range when it can be read from the name).',
     }, guard(async () => ({ periods: await listPeriods(user, locale) })));
 
+    server.registerTool('read_lark_doc', {
+      description: 'Reads a Lark document (or the document behind a wiki page) as Markdown, with the user\'s own Lark access: policies, SOPs, meeting notes, specs. Give its link.',
+      inputSchema: { url: z.string().describe('link to a Lark document (/docx/...) or wiki page (/wiki/...)') },
+    }, guard((a: { url: string }) => readDoc(user, a.url)));
+
+    server.registerTool('create_lark_doc', {
+      description: 'Creates a Lark document from Markdown as the user (they own it) and returns its link. Headings, lists, tables, quotes, code and links carry over; images are left out. Without parent it goes to the user\'s own space; parent can be a wiki page (the document becomes a page under it) or a Drive folder. Show the user the outline first if they have not seen the content, and send them the link afterwards.',
+      inputSchema: {
+        title: z.string(),
+        markdown: z.string().describe('the body, without repeating the title as a heading'),
+        parent: z.string().optional().describe('link to a wiki page or Drive folder to put it in'),
+      },
+    }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
+
     server.registerTool('get_daily_report', {
       description: 'The team\'s daily report for a day (default: today, company time zone), read with the user\'s Lark access: each section\'s table (columns, and each person\'s row), the user\'s own rows, and who has not filled theirs in yet. Read it before fill_daily_report to see the sections and columns.',
       inputSchema: { date: z.string().optional().describe('YYYY-MM-DD; default: today') },
@@ -575,7 +627,7 @@ export function buildMcpServer(user: User): McpServer {
 }
 
 export async function handleMcp(req: Request, user: User, clientId: string, token: string): Promise<Response> {
-  const server = buildMcpServer(user);
+  const server = buildMcpServer(user, clientId);
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
   try {

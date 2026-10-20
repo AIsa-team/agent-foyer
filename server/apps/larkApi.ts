@@ -23,7 +23,7 @@ import { createRecord, fetchRecords, listFields, parseBaseUrl, plainText, resolv
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
 import { mailboxName, mailConnectUrl, saveDraft } from '../mail.ts';
-import { canAccessApp } from './access.ts';
+import { canAccessApp, canManageApp } from './access.ts';
 
 // ---------------------------------------------------------------- declaration
 export const manifestSchema = z.object({
@@ -59,7 +59,7 @@ const hashOf = (m: Manifest) => sha256(JSON.stringify({
 
 /** Saves an app's declaration after checking that its owner can open every table. `people` are already open_ids. */
 export async function setManifest(owner: User, app: App, input: ManifestInput, people: string[]): Promise<Manifest | null> {
-  if (app.owner_id !== owner.id && owner.role !== 'admin') throw new UserError('err.notAppOwner', { slug: app.slug });
+  if (!canManageApp(app, owner)) throw new UserError('err.notAppOwner', { slug: app.slug });
   if (!input.tables.length && !people.length && !input.notify?.chats?.length && !input.mail_drafts) {
     run('UPDATE apps SET lark_manifest = NULL WHERE slug = ?', app.slug);
     return null;

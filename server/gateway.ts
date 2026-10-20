@@ -8,7 +8,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Duplex } from 'node:stream';
 import path from 'node:path';
 import { createProxyServer } from 'http-proxy-3';
-import { config } from './config.ts';
+import { appUrl, config } from './config.ts';
 import type { App, User } from './db.ts';
 import { UserError } from './i18n/index.ts';
 import { escapeHtml, page } from './html.ts';
@@ -17,8 +17,10 @@ import { localize } from './localized.ts';
 import { canAccessApp } from './apps/access.ts';
 import { getApp, staticRoot } from './apps/service.ts';
 import { handleAppLark, issueTicket } from './apps/larkApi.ts';
-import { recordVisit } from './apps/feedback.ts';
+import { recordVisit } from './apps/visits.ts';
 import { SDK_JS } from './apps/sdk.ts';
+import { injectWidget, widgetJs } from './apps/feedbackWidget.ts';
+import { addFeedback } from './feedback.ts';
 import { APP_COOKIE, appCookieHeader, createSession, deleteSession, parseCookies, safeReturnPath, sessionUser } from './auth/session.ts';
 import { redeemLoginCode } from './auth/routes.ts';
 
@@ -30,6 +32,38 @@ proxy.on('error', (err, _req, res) => {
     res.end(notice(_req as IncomingMessage, 'gw.noResponse.title', escapeHtml(tr(localeOf(_req as IncomingMessage), 'gw.noResponse.body'))));
   } else if (res && 'destroy' in res) res.destroy();
 });
+
+// pages that get the feedback button: the response comes back here to have the script tag added
+const pageProxy = createProxyServer({ xfwd: true, proxyTimeout: 120_000, selfHandleResponse: true });
+pageProxy.on('error', (err, req, res) => proxy.emit('error', err, req, res));
+pageProxy.on('proxyRes', (proxyRes, _req, res) => {
+  const headers = { ...proxyRes.headers };
+  delete headers['transfer-encoding'];
+  delete headers.connection;
+  const status = proxyRes.statusCode ?? 502;
+  const type = String(headers['content-type'] ?? '');
+  const encoded = headers['content-encoding'] && headers['content-encoding'] !== 'identity';
+  if (status !== 200 || !/^text\/html/i.test(type) || (/charset=/i.test(type) && !/charset=utf-?8/i.test(type)) || encoded) {
+    res.writeHead(status, proxyRes.statusMessage, headers);
+    proxyRes.pipe(res);
+    return;
+  }
+  const chunks: Buffer[] = [];
+  proxyRes.on('data', (d: Buffer) => chunks.push(d));
+  proxyRes.on('end', () => {
+    let html = Buffer.concat(chunks);
+    if (html.length <= 5 * 1024 * 1024) html = Buffer.from(injectWidget(html.toString('utf8')));
+    headers['content-length'] = String(html.length);
+    res.writeHead(status, proxyRes.statusMessage, headers);
+    res.end(html);
+  });
+  proxyRes.on('error', () => res.destroy());
+});
+
+/** Whether this response should carry the feedback button: a signed-in person opening a page of an app that has it on. */
+const wantsWidget = (app: App, user: User | undefined, req: IncomingMessage) =>
+  !!user && !!app.feedback_button && req.method === 'GET' &&
+  (req.headers['sec-fetch-dest'] ? req.headers['sec-fetch-dest'] === 'document' : String(req.headers.accept ?? '').includes('text/html'));
 
 const localeOf = (req: IncomingMessage) => requestLocale((h) => {
   const v = req.headers[h];
@@ -65,7 +99,7 @@ function send(res: ServerResponse, status: number, html: string, headers: Record
   res.end(html);
 }
 
-function serveStatic(app: App, req: IncomingMessage, res: ServerResponse) {
+function serveStatic(app: App, req: IncomingMessage, res: ServerResponse, widget = false) {
   const root = staticRoot(app);
   if (!root) return send(res, 503, notice(req, 'gw.filesMissing.title', escapeHtml(tr(localeOf(req), 'gw.filesMissing.body'))));
   let urlPath: string;
@@ -84,9 +118,10 @@ function serveStatic(app: App, req: IncomingMessage, res: ServerResponse) {
   }
   const ext = path.extname(file).toLowerCase();
   const st = statSync(file);
+  const page = widget && ext === '.html' ? Buffer.from(injectWidget(readFileSync(file, 'utf8'))) : null;
   // Revalidate every load so a republish shows up at once (304 when unchanged), and keep files that
   // sit behind a login out of shared caches such as Cloudflare.
-  const etag = `"${app.current_release ?? 0}-${st.size}-${Math.round(st.mtimeMs)}"`;
+  const etag = `"${app.current_release ?? 0}-${st.size}-${Math.round(st.mtimeMs)}${page ? '-fb' : ''}"`;
   const headers = { 'cache-control': 'private, no-cache', etag, 'x-content-type-options': 'nosniff' };
   if (req.headers['if-none-match'] === etag) {
     res.writeHead(304, headers);
@@ -95,9 +130,10 @@ function serveStatic(app: App, req: IncomingMessage, res: ServerResponse) {
   res.writeHead(200, {
     ...headers,
     'content-type': MIME[ext] ?? 'application/octet-stream',
-    'content-length': String(st.size),
+    'content-length': String(page ? page.length : st.size),
   });
   if (req.method === 'HEAD') return res.end();
+  if (page) return res.end(page);
   createReadStream(file).pipe(res);
 }
 
@@ -152,6 +188,38 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
     res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache' });
     return res.end(SDK_JS);
   }
+  if (url.pathname === '/__hub/feedback.js') {
+    const user = sessionUser(cookies[APP_COOKIE], slug);
+    res.writeHead(200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'private, no-cache' });
+    return res.end(user ? widgetJs(user.locale ?? config.defaultLocale) : '');
+  }
+  if (url.pathname === '/__hub/feedback') {
+    // the custom header keeps other sites' forms from posting here with the visitor's cookie
+    if (req.method !== 'POST' || req.headers['x-hub-feedback'] !== '1') return send(res, 405, 'method not allowed');
+    const user = sessionUser(cookies[APP_COOKIE], slug);
+    const reply = (status: number, data: unknown) => {
+      res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(data));
+    };
+    if (!user) return reply(401, { error: 'unauthenticated' });
+    let raw = '';
+    req.setEncoding('utf8');
+    req.on('data', (d: string) => {
+      raw += d;
+      if (raw.length > 16_384) req.destroy();
+    });
+    req.on('end', () => {
+      let b: { body?: unknown; page?: unknown } = {};
+      try {
+        b = JSON.parse(raw);
+      } catch { /* empty body: rejected below */ }
+      const page = typeof b.page === 'string' ? b.page.slice(0, 500) : '';
+      addFeedback(user, 'app', slug, { body: String(b.body ?? ''), via: 'app', context: page ? `URL: ${appUrl(slug).replace(/\/$/, '')}${page.startsWith('/') ? page : '/' + page}` : undefined })
+        .then((item) => reply(200, { id: item.id }))
+        .catch((e) => reply(400, { error: e instanceof UserError ? e.localized(user.locale ?? config.defaultLocale) : 'error' }));
+    });
+    return;
+  }
   if (url.pathname === '/__hub/lark' || url.pathname.startsWith('/__hub/lark/') || url.pathname === '/__hub/notify') {
     if (!config.lark.enabled) return send(res, 404, 'this hub is not connected to Lark');
     const app = getApp(slug);
@@ -192,8 +260,13 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
     }
     case 'ok':
       if (r.user) recordVisit(slug, r.user.id);
-      if (r.app.kind === 'static') return serveStatic(r.app, req, res);
+      if (r.app.kind === 'static') return serveStatic(r.app, req, res, wantsWidget(r.app, r.user, req));
       prepareForwardHeaders(req, r.user, slug);
+      if (wantsWidget(r.app, r.user, req)) {
+        // plain text back from the app, so the script tag can go in
+        delete req.headers['accept-encoding'];
+        return pageProxy.web(req, res, { target: r.app.upstream! });
+      }
       return proxy.web(req, res, { target: r.app.upstream! });
   }
 }

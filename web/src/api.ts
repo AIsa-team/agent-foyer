@@ -28,12 +28,22 @@ export interface AppInfo {
   /** colleagues who opened it in the last 30 days */
   usage30: number;
   openFeedback?: number;
+  feedbackButton: boolean;
+  /** may delete it, choose collaborators and hand it over */
+  canAdminister: boolean;
+  myRole: 'owner' | 'collaborator' | null;
+  collaborators: Person[];
 }
 
 export interface Feedback {
   id: number;
-  app: string;
+  kind: 'app' | 'skill';
+  slug: string;
   body: string;
+  /** details the sender (or their agent, or the in-app button) added for the owner */
+  context: string | null;
+  via: 'web' | 'app' | 'agent';
+  agent: string | null;
   status: 'open' | 'done' | 'declined';
   reply: string | null;
   at: number;
@@ -53,6 +63,9 @@ export interface SkillInfo {
   myVersion: number | null;
   hasUpdate: boolean;
   canManage: boolean;
+  canAdminister: boolean;
+  myRole: 'owner' | 'collaborator' | null;
+  collaborators: Person[];
   localized?: LocalizedMap;
   icon: string | null;
   relatedApp: { slug: string; name: string; url: string; canOpen: boolean; icon: string | null } | null;

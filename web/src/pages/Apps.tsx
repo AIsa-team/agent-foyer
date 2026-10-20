@@ -3,7 +3,7 @@ import { Link } from 'react-router';
 import type { Agent, AppInfo, LarkLink } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
 import { publishPrompt } from '../prompts';
-import { AgentStep, AppIcon, Avatar, CopyBox, Dialog, Icon, Loading, Step, useApi, useMe } from '../ui';
+import { AgentStep, AppIcon, Avatar, CopyBox, Dialog, Icon, LinkIcon, Loading, Step, useApi, useMe } from '../ui';
 
 export function AppCard({ app }: { app: AppInfo }) {
   const { t } = useI18n();
@@ -37,10 +37,9 @@ export function AppCard({ app }: { app: AppInfo }) {
 }
 
 export function LarkTile({ link }: { link: LarkLink }) {
-  const isImg = /^https?:\/\//.test(link.icon);
   return (
     <a className="card link-tile" href={link.url} target="_blank" rel="noreferrer">
-      {isImg ? <img src={link.icon} alt="" width={28} height={28} style={{ borderRadius: 6 }} /> : <span className="emoji">{link.icon || '🔗'}</span>}
+      <LinkIcon icon={link.icon || '🔗'} size={28} />
       <div className="grow">
         <div className="ellipsis" style={{ fontWeight: 500 }}>{link.name}</div>
         {link.description && <div className="small muted ellipsis">{link.description}</div>}
@@ -73,6 +72,7 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
 
 export function AppsPage() {
   const { t } = useI18n();
+  const me = useMe();
   const { data, error } = useApi<{ apps: AppInfo[]; larkLinks: LarkLink[] }>('/apps');
   const [q, setQ] = useState('');
   const [publishing, setPublishing] = useState(false);
@@ -97,11 +97,21 @@ export function AppsPage() {
         <div className="card"><div className="empty"><b>{q ? t('apps.noneFound') : t('apps.none')}</b>{!q && <span className="small">{t('apps.noneHint')}</span>}</div></div>
       )}
 
-      {links.length > 0 && (
+      {/* Lark apps the company uses, added by admins; admins see the section even before there are any */}
+      {me.hub.features.lark && (links.length > 0 || (me.user.role === 'admin' && !q)) && (
         <div className="section">
           <div className="section-title">{t('apps.lark')} <span className="count">{t('common.count', { n: links.length })}</span></div>
           <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
             {links.map((l) => <LarkTile key={l.id} link={l} />)}
+            {me.user.role === 'admin' && (
+              <Link to="/admin#lark-links" className="card link-tile link-tile--add">
+                <Icon name="plus" size={16} />
+                <div className="grow">
+                  <div style={{ fontWeight: 500 }}>{t('apps.larkAdd')}</div>
+                  {links.length === 0 && <div className="small muted">{t('apps.larkAddHint')}</div>}
+                </div>
+              </Link>
+            )}
           </div>
         </div>
       )}

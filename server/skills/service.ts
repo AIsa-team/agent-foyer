@@ -11,6 +11,10 @@ import { canAccessApp } from '../apps/access.ts';
 import { appUrl } from '../config.ts';
 import type { App } from '../db.ts';
 import { extractTarball, takeUpload } from '../uploads.ts';
+import { collaboratingOn, collaboratorsOf, isCollaborator } from '../collab.ts';
+
+/** Publish versions, change the listing, handle feedback: the owner, collaborators and admins. */
+export const canManageSkill = (s: Skill, user: User) => s.owner_id === user.id || user.role === 'admin' || isCollaborator('skill', s.slug, user.id);
 
 const SKILL_SLUG_RE = /^[a-z0-9][a-z0-9-]{0,62}$/;
 export const skillFile = (slug: string, version: number) => path.join(paths.skills, slug, `v${version}.tgz`);
@@ -62,7 +66,7 @@ export async function publishSkill(user: User, input: {
     publishing.add(slug);
     lockedSlug = slug;
     const existing = get<Skill>('SELECT * FROM skills WHERE slug = ?', slug);
-    if (existing && existing.owner_id !== user.id && user.role !== 'admin') throw new UserError('err.skill.ownedByOther', { slug });
+    if (existing && !canManageSkill(existing, user)) throw new UserError('err.skill.ownedByOther', { slug });
     const version = (existing?.latest_version ?? 0) + 1;
 
     writeFileSync(path.join(root, '.hub-skill.json'), JSON.stringify({ slug, version, hub: config.hubUrl }, null, 2));
@@ -105,7 +109,7 @@ function recordInstall(userId: string, slug: string, version: number) {
 
 export function installInstructions(user: User, slug: string) {
   const skill = get<Skill>('SELECT * FROM skills WHERE slug = ?', slug);
-  if (!skill || (!skill.listed && skill.owner_id !== user.id)) throw new UserError('err.skill.notFound', { slug });
+  if (!skill || (!skill.listed && !canManageSkill(skill, user))) throw new UserError('err.skill.notFound', { slug });
   const v = skill.latest_version;
   const url = `${config.hubUrl}/skills/${slug}/v${v}.tgz?t=${signToken(`skill:${slug}:${v}`, 15 * 60 * 1000)}`;
   recordInstall(user.id, slug, v);
@@ -141,10 +145,10 @@ export function checkUpdates(user: User, installed: { slug: string; version: num
   return updates;
 }
 
-export function requireOwnSkill(user: User, slug: string): Skill {
+export function requireManageableSkill(user: User, slug: string): Skill {
   const s = get<Skill>('SELECT * FROM skills WHERE slug = ?', slug);
   if (!s) throw new UserError('err.skill.notFound', { slug });
-  if (s.owner_id !== user.id && user.role !== 'admin') throw new UserError('err.skill.ownerOnly');
+  if (!canManageSkill(s, user)) throw new UserError('err.skill.ownerOnly');
   return s;
 }
 
@@ -164,7 +168,7 @@ export function updateSkill(user: User, slug: string, patch: {
   name?: string; description?: string; listed?: boolean; localized?: LocalizedMap;
   iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean; relatedApp?: string | null;
 }) {
-  const skill = requireOwnSkill(user, slug);
+  const skill = requireManageableSkill(user, slug);
   if (patch.iconSvg || patch.iconPngBase64) setSkillIcon(slug, saveIcon(slug, { svg: patch.iconSvg, pngBase64: patch.iconPngBase64 }));
   else if (patch.removeIcon) setSkillIcon(slug, null);
   if (patch.relatedApp !== undefined) setRelatedApp(user, slug, patch.relatedApp);
@@ -175,7 +179,8 @@ export function updateSkill(user: User, slug: string, patch: {
 }
 
 export function deleteSkill(user: User, slug: string) {
-  requireOwnSkill(user, slug);
+  const s = requireManageableSkill(user, slug);
+  if (s.owner_id !== user.id && user.role !== 'admin') throw new UserError('err.collab.ownerOnlyDelete');
   run('DELETE FROM skills WHERE slug = ?', slug);
   rmSync(path.join(paths.skills, slug), { recursive: true, force: true });
 }
@@ -187,22 +192,27 @@ export function listSkills(viewer: User, locale: string) {
        (SELECT COUNT(*) FROM skill_installs i WHERE i.skill_slug = s.slug) AS installs,
        (SELECT version FROM skill_installs i WHERE i.skill_slug = s.slug AND i.user_id = ?) AS my_version
      FROM skills s JOIN users u ON u.id = s.owner_id
-     WHERE s.listed = 1 OR s.owner_id = ? ORDER BY s.updated_at DESC`,
-    viewer.id, viewer.id,
+     WHERE s.listed = 1 OR s.owner_id = ? OR s.slug IN (SELECT slug FROM collaborators WHERE kind = 'skill' AND user_id = ?) ORDER BY s.updated_at DESC`,
+    viewer.id, viewer.id, viewer.id,
   );
+  const mine = collaboratingOn('skill', viewer.id);
   return rows.map((s) => ({
     slug: s.slug,
     ...localize(s, s.i18n, locale),
     icon: s.icon ? `${config.hubUrl}/icons/${s.icon}` : null,
     relatedApp: relatedApp(viewer, s.slug, locale),
-    localized: s.owner_id === viewer.id || viewer.role === 'admin' ? parseLocalized(s.i18n) : undefined,
+    localized: s.owner_id === viewer.id || viewer.role === 'admin' || mine.has(s.slug) ? parseLocalized(s.i18n) : undefined,
     version: s.latest_version,
     listed: !!s.listed,
     owner: { id: s.owner_id, name: s.owner_name, avatar: s.owner_avatar },
     installs: s.installs,
     myVersion: s.my_version,
     hasUpdate: s.my_version !== null && s.my_version < s.latest_version,
-    canManage: s.owner_id === viewer.id || viewer.role === 'admin',
+    canManage: s.owner_id === viewer.id || viewer.role === 'admin' || mine.has(s.slug),
+    /** may delete it, choose collaborators and hand it over */
+    canAdminister: s.owner_id === viewer.id || viewer.role === 'admin',
+    myRole: s.owner_id === viewer.id ? 'owner' as const : mine.has(s.slug) ? 'collaborator' as const : null,
+    collaborators: collaboratorsOf('skill', s.slug).filter((c) => c.role === 'collaborator'),
     updatedAt: s.updated_at,
   }));
 }

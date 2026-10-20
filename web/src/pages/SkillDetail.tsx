@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { api, type AppInfo, type LocalizedMap, type SkillInfo } from '../api';
+import { api, type AppInfo, type Feedback, type LocalizedMap, type SkillInfo } from '../api';
+import { FeedbackCard } from '../feedback';
+import { CollaboratorsCard } from '../collab';
 import { useI18n } from '../i18n';
 import { skillInstallPrompt } from '../prompts';
 import { SkillIcon } from './Skills';
@@ -27,13 +29,17 @@ function ManageCard({ skill, reload }: { skill: SkillInfo; reload: () => void })
         <button className="btn" disabled={busy || sameLocalized(localized, skill.localized)}
           onClick={() => run(() => api.patch(`/skills/${skill.slug}`, { localized }), t('common.saved')).then(reload)} type="button">{t('common.save')}</button>
       </div>
-      <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '16px 0' }} />
-      <span className="label">{t('skill.deleteLabel')}</span>
-      <div className="row">
-        <input className="input" placeholder={t('common.confirmPlaceholder', { slug: skill.slug })} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-        <button className="btn danger" disabled={busy || confirm !== skill.slug}
-          onClick={() => run(() => api.del(`/skills/${skill.slug}`), t('common.deleted')).then((ok) => ok && nav('/skills'))} type="button">{t('common.delete')}</button>
-      </div>
+      {skill.canAdminister && (
+        <>
+          <hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '16px 0' }} />
+          <span className="label">{t('skill.deleteLabel')}</span>
+          <div className="row">
+            <input className="input" placeholder={t('common.confirmPlaceholder', { slug: skill.slug })} value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+            <button className="btn danger" disabled={busy || confirm !== skill.slug}
+              onClick={() => run(() => api.del(`/skills/${skill.slug}`), t('common.deleted')).then((ok) => ok && nav('/skills'))} type="button">{t('common.delete')}</button>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -52,7 +58,7 @@ export function SkillDetailPage() {
   const me = useMe();
   const { t, ago } = useI18n();
   const { slug } = useParams();
-  const { data, error, reload } = useApi<{ skill: SkillInfo; versions: Version[]; readme: string }>(`/skills/${slug}`);
+  const { data, error, reload } = useApi<{ skill: SkillInfo; versions: Version[]; readme: string; feedback: Feedback[] }>(`/skills/${slug}`);
   if (!data) return <Loading error={error} />;
   const { skill, versions, readme } = data;
   return (
@@ -70,6 +76,7 @@ export function SkillDetailPage() {
               <span className={`badge ${skill.hasUpdate ? 'warn' : 'ok'}`}>{skill.hasUpdate ? t('skill.youHave', { version: skill.myVersion }) : t('skill.upToDate')}</span>
             )}
             <span className="row muted"><Avatar person={skill.owner} /> {skill.owner.name}</span>
+            {skill.collaborators.length > 0 && <span className="muted">{t('collab.with', { names: skill.collaborators.map((p) => p.name).join(t('common.listSeparator')) })}</span>}
             <span className="muted">{t('skills.installs', { n: skill.installs })}</span>
           </div>
           {skill.description && <p>{skill.description}</p>}
@@ -102,9 +109,11 @@ export function SkillDetailPage() {
               ))}
             </div>
           </div>
+          <FeedbackCard kind="skill" slug={skill.slug} canSend canManage={skill.canManage} items={data.feedback} reload={reload} />
           {skill.canManage && (
             <>
               <IconEditor src={skill.icon} name={skill.name} endpoint={`/skills/${skill.slug}`} prompt={t('prompt.skillIcon', { hub: t('prompt.hub', { company: me.hub.companyName, mcp: me.hub.mcpName }), slug: skill.slug })} onSaved={reload} fallback={<SkillIcon skill={skill} size="lg" />} />
+              <CollaboratorsCard kind="skill" slug={skill.slug} owner={skill.owner} collaborators={skill.collaborators} canAdminister={skill.canAdminister} reload={reload} />
               <AppLinkCard skill={skill} reload={reload} />
               <ManageCard skill={skill} reload={reload} />
             </>

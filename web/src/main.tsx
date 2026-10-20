@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router';
 import { api, type Me } from './api';
 import { I18nProvider, LocaleSelect, useI18n } from './i18n';
-import { Avatar, Icon, Loading, MeProvider, ToastHost, useMe } from './ui';
+import { Avatar, Icon, LinkIcon, Loading, MeProvider, ToastHost, useMe } from './ui';
 import { HomePage } from './pages/Home';
 import { AppsPage } from './pages/Apps';
 import { SkillsPage } from './pages/Skills';
@@ -67,7 +67,7 @@ function Shell() {
           {me.sidebarLinks.length > 0 && <div className="nav-sep" />}
           {me.sidebarLinks.map((l) => (
             <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className="nav-ext">
-              {/^https?:/.test(l.icon) ? <img src={l.icon} width={16} height={16} alt="" /> : l.icon ? <span className="nav-ext__emoji">{l.icon}</span> : <Icon name="external" />}
+              {l.icon && !/^(https?:\/\/|\/[^/])/.test(l.icon) ? <span className="nav-ext__emoji">{l.icon}</span> : <LinkIcon icon={l.icon} size={16} />}
               <span className="grow ellipsis">{l.name}</span><Icon name="external" size={12} />
             </a>
           ))}

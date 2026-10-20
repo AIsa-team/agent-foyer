@@ -12,6 +12,10 @@ point.
   `https://<name>.<apps domain>`, behind Lark sign-in. Four visibility levels: only me / chosen colleagues / the
   company / everyone (public needs an admin's approval).
 - **Skill market**: share and install Skills with versions; people who installed one are told when it updates.
+- **Working together**: an app or Skill can have collaborators who publish and change it with the owner; only the
+  owner (or an admin) deletes it, picks the collaborators or hands it over.
+- **Feedback to authors**: colleagues tell an app's or Skill's owner what is wrong, from the hub page, a button inside
+  every app (owners can turn it off) or their own agent; the owner's agent works through it and the sender is told.
 - **Personal home pages**: everyone's agent can rebuild their home page from modules (charts, OKRs, alerts, links).
 - **Data**: Lark Base tables, and rows served by apps (so Metabase, a database or a CRM come in through a small app,
   see [docs/DATA_APPS.md](docs/DATA_APPS.md)). Shared boards, metric alerts sent by the Lark bot, and data checks that
