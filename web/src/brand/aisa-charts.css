@@ -1,0 +1,151 @@
+/* AIsa charts chrome: figure, legend, tooltip, table view, stat tile, meter. Requires aisa-tokens.css. */
+.aisa-chart { margin: 0; font-family: var(--aisa-font-sans); color: var(--aisa-text); min-width: 0; }
+.aisa-chart__head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--aisa-space-3); margin-bottom: var(--aisa-space-2); }
+.aisa-chart__title { font-size: var(--aisa-text-sm); font-weight: 600; line-height: var(--aisa-leading-snug); color: var(--aisa-text); }
+.aisa-chart__subtitle { font-size: 11.5px; color: var(--aisa-text-muted); margin-top: 1px; }
+.aisa-chart__toggle {
+  flex: none; font: inherit; font-size: var(--aisa-text-xs); color: var(--aisa-text-secondary); background: transparent;
+  border: 1px solid var(--aisa-line); border-radius: var(--aisa-radius-pill); padding: 1px 9px; cursor: pointer; font-size: 11px;
+}
+.aisa-chart__toggle:hover { color: var(--aisa-text); border-color: var(--aisa-line-strong); }
+.aisa-chart__toggle:focus-visible, .aisa-chart__key:focus-visible, .aisa-chart__svg:focus-visible { outline: none; box-shadow: var(--aisa-focus-ring); border-radius: var(--aisa-radius-sm); }
+
+.aisa-chart__legend { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-bottom: var(--aisa-space-2); }
+.aisa-chart__legend[hidden] { display: none; }
+.aisa-chart__key {
+  display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11px; color: var(--aisa-text-secondary);
+  background: none; border: 0; padding: 2px 0; cursor: pointer;
+}
+.aisa-chart__key:disabled { cursor: default; }
+.aisa-chart__key.is-off { opacity: 0.4; }
+.aisa-chart__swatch { display: inline-block; flex: none; }
+.aisa-chart__swatch--rect { width: 8px; height: 8px; border-radius: 2px; }
+.aisa-chart__swatch--line { width: 12px; height: 2px; border-radius: 1px; }
+
+.aisa-chart__plot { position: relative; }
+.aisa-chart__svg { display: block; max-width: 100%; overflow: visible; }
+.aisa-chart__tick { font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.aisa-chart__ref-label { font-size: 10px; font-variant-numeric: tabular-nums; }
+.aisa-chart__value { font-size: 10.5px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.aisa-chart__center { font-size: 20px; font-weight: 600; letter-spacing: -0.02em; }
+.aisa-chart__center-sub { font-size: 11px; }
+.aisa-chart__bar, .aisa-chart__seg, .aisa-chart__cell { transition: opacity var(--aisa-duration-fast) var(--aisa-ease-out); }
+.aisa-chart__marks:has(+ g .is-hot) .aisa-chart__bar { opacity: 0.9; }
+.aisa-chart__seg:hover, .aisa-chart__cell:hover { opacity: 0.85; }
+.aisa-chart__cross { opacity: 0; }
+.aisa-chart__cross.is-on { opacity: 1; }
+
+.aisa-chart__tooltip {
+  position: absolute; z-index: 5; pointer-events: none; opacity: 0; transform: translateY(2px);
+  transition: opacity var(--aisa-duration-fast) var(--aisa-ease-out), transform var(--aisa-duration-fast) var(--aisa-ease-out);
+  min-width: 120px; max-width: 260px; padding: 8px 10px; border-radius: var(--aisa-radius-sm);
+  background: var(--aisa-surface-raised); border: 1px solid var(--aisa-line); box-shadow: var(--aisa-shadow-3); font-size: var(--aisa-text-xs);
+}
+.aisa-chart__tooltip.is-on { opacity: 1; transform: none; }
+.aisa-chart__tip-title { color: var(--aisa-text-muted); margin-bottom: 4px; }
+.aisa-chart__tip-row { display: grid; grid-template-columns: 14px auto 1fr; align-items: center; gap: 6px; line-height: 1.6; }
+.aisa-chart__tip-row strong { font-weight: 600; color: var(--aisa-text); font-variant-numeric: tabular-nums; }
+.aisa-chart__tip-name { color: var(--aisa-text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.aisa-chart__tip-key--line { height: 2px; width: 12px; border-radius: 1px; }
+.aisa-chart__tip-key--rect { height: 8px; width: 8px; border-radius: 2px; }
+
+.aisa-chart__table { display: none; overflow-x: auto; }
+.aisa-chart--table .aisa-chart__plot, .aisa-chart--table .aisa-chart__legend { display: none; }
+.aisa-chart--table .aisa-chart__table { display: block; }
+.aisa-chart__table table { border-collapse: collapse; width: 100%; font-size: var(--aisa-text-xs); font-variant-numeric: tabular-nums; }
+.aisa-chart__table th, .aisa-chart__table td { padding: 6px 10px; border-bottom: 1px solid var(--aisa-line); text-align: right; white-space: nowrap; }
+.aisa-chart__table th:first-child { text-align: left; font-weight: 500; }
+.aisa-chart__table thead th { color: var(--aisa-text-muted); font-weight: 500; }
+
+/* entrance animation (opt-in with animate: true; used by slides) */
+.aisa-chart--animate .aisa-chart__bar { transform-box: fill-box; animation: aisa-grow var(--aisa-duration-slow) var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.aisa-chart--horizontal .aisa-chart__bar { transform-origin: left center; }
+.aisa-chart--animate .aisa-chart__line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: aisa-draw 900ms var(--aisa-ease-out) forwards; }
+.aisa-chart--animate .aisa-chart__area, .aisa-chart--animate .aisa-chart__seg, .aisa-chart--animate .aisa-chart__cell { animation: aisa-fade 600ms var(--aisa-ease-out) both; }
+.aisa-chart--bar.aisa-chart--animate .aisa-chart__bar { transform-origin: center bottom; }
+@keyframes aisa-grow { from { transform: scaleY(0); } }
+@keyframes aisa-draw { to { stroke-dashoffset: 0; } }
+@keyframes aisa-fade { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .aisa-chart--animate * { animation: none !important; }
+  .aisa-chart--animate .aisa-chart__line { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+
+/* stat tile: label · value · delta (· sparkline) */
+.aisa-stat { font-family: var(--aisa-font-sans); }
+.aisa-stat__label { font-size: var(--aisa-text-sm); color: var(--aisa-text-secondary); }
+.aisa-stat__row { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px var(--aisa-space-3); margin-top: 4px; }
+/* the sparkline gives way to a long value instead of dropping to its own line */
+.aisa-stat__row .aisa-spark { flex: 0 1 96px; min-width: 40px; height: auto; }
+.aisa-stat__value { white-space: nowrap; font-size: var(--aisa-text-3xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: var(--aisa-text); }
+.aisa-stat__delta { display: inline-flex; gap: 4px; align-items: baseline; margin-top: 6px; font-size: var(--aisa-text-xs); color: var(--aisa-text-secondary); font-variant-numeric: tabular-nums; }
+.aisa-stat__delta.is-good > span:nth-child(-n + 2) { color: var(--aisa-success-text); font-weight: 600; }
+.aisa-stat__delta.is-bad > span:nth-child(-n + 2) { color: var(--aisa-danger-text); font-weight: 600; }
+.aisa-stat__period { color: var(--aisa-text-muted); }
+.aisa-spark { flex: none; }
+
+/* meter: severity in the fill, a lighter step of the same ramp in the track */
+.aisa-meter__head { display: flex; justify-content: space-between; gap: var(--aisa-space-3); font-size: var(--aisa-text-sm); margin-bottom: 6px; }
+.aisa-meter__label { color: var(--aisa-text-secondary); }
+.aisa-meter__value { color: var(--aisa-text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.aisa-meter__track { height: 6px; border-radius: var(--aisa-radius-pill); background: var(--aisa-accent-soft); overflow: hidden; }
+.aisa-meter__fill { height: 100%; border-radius: inherit; background: var(--aisa-accent); transition: width var(--aisa-duration-slow) var(--aisa-ease-out); }
+.aisa-meter--ink .aisa-meter__track { background: var(--aisa-chart-track); }
+.aisa-meter--ink .aisa-meter__fill { background: var(--aisa-chart-single); }
+.aisa-meter--warning .aisa-meter__track { background: var(--aisa-warning-soft); }
+.aisa-meter--warning .aisa-meter__fill { background: var(--aisa-warning); }
+.aisa-meter--danger .aisa-meter__track { background: var(--aisa-danger-soft); }
+.aisa-meter--danger .aisa-meter__fill { background: var(--aisa-danger); }
+
+/* ring gauges: alone or a row (e.g. three half-year KPIs) */
+.aisa-rings-row { display: flex; flex-wrap: wrap; justify-content: space-around; gap: var(--aisa-space-4); }
+.aisa-ring-gauge { display: grid; justify-items: center; gap: 6px; text-align: center; min-width: 0; border-radius: var(--aisa-radius-sm); }
+.aisa-ring-gauge:focus-visible { outline: none; box-shadow: var(--aisa-focus-ring); }
+.aisa-ring__svg { display: block; overflow: visible; }
+.aisa-ring__arc { transition: stroke-dasharray var(--aisa-duration-slow) var(--aisa-ease-out); }
+.aisa-ring__value { font-weight: 600; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.aisa-ring__label { font-size: var(--aisa-text-xs); color: var(--aisa-text); font-weight: 500; }
+.aisa-ring__sub { font-size: 11px; color: var(--aisa-text-muted); font-variant-numeric: tabular-nums; }
+.aisa-rings-row--inline { justify-content: flex-start; }
+.aisa-rings-row--inline .aisa-ring-gauge { grid-template-columns: auto 1fr; justify-items: start; text-align: left; align-items: center; gap: 10px; }
+.aisa-ring__pct { font-size: var(--aisa-text-sm); font-weight: 600; color: var(--aisa-text); font-variant-numeric: tabular-nums; }
+.aisa-chart--animate .aisa-ring__arc { animation: aisa-fade 600ms var(--aisa-ease-out) both; }
+
+/* waffle */
+.aisa-waffle { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--aisa-space-4); }
+.aisa-waffle__value { font-size: var(--aisa-text-3xl); font-weight: 600; letter-spacing: -0.03em; line-height: 1; color: var(--aisa-text); }
+.aisa-waffle__label { margin-top: 6px; font-size: var(--aisa-text-xs); color: var(--aisa-text-secondary); }
+.aisa-waffle__sub { font-size: 11px; color: var(--aisa-text-muted); }
+
+/* rank list (leaderboard) */
+.aisa-rank { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; counter-reset: none; }
+.aisa-rank__row { display: grid; grid-template-columns: 22px auto 1fr; align-items: center; gap: 10px; min-width: 0; }
+.aisa-rank__row:not(:has(.aisa-rank__avatar)) { grid-template-columns: 22px 1fr; }
+.aisa-rank__no { font-family: var(--aisa-font-mono); font-size: 11px; color: var(--aisa-text-muted); font-variant-numeric: tabular-nums; }
+.aisa-rank__row.is-emph .aisa-rank__no { color: var(--aisa-chart-emph); font-weight: 600; }
+.aisa-rank__avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover; display: grid; place-items: center; font-size: 10.5px; font-weight: 600; background: var(--aisa-surface-sunken); color: var(--aisa-text-secondary); border: 1px solid var(--aisa-line); }
+.aisa-rank__main { display: grid; gap: 4px; min-width: 0; }
+.aisa-rank__top { display: flex; justify-content: space-between; gap: 10px; font-size: var(--aisa-text-sm); min-width: 0; }
+.aisa-rank__name { color: var(--aisa-text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aisa-rank__value { color: var(--aisa-text); font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.aisa-rank__sub { font-size: 11px; color: var(--aisa-text-muted); margin-top: -2px; }
+.aisa-rank__bar { height: 3px; border-radius: 2px; background: var(--aisa-chart-track); overflow: hidden; }
+.aisa-rank__fill { display: block; height: 100%; border-radius: inherit; }
+
+/* progress list (key results) */
+.aisa-progress-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.aisa-progress-list__head { display: flex; align-items: baseline; gap: 10px; font-size: var(--aisa-text-sm); margin-bottom: 5px; min-width: 0; }
+.aisa-progress-list__label { flex: 1; min-width: 0; color: var(--aisa-text); }
+.aisa-progress-list__label small { display: block; font-size: 11px; color: var(--aisa-text-muted); }
+.aisa-progress-list__value { color: var(--aisa-text-muted); font-size: 11.5px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.aisa-progress-list__pct { min-width: 38px; text-align: right; font-weight: 600; color: var(--aisa-text); font-variant-numeric: tabular-nums; }
+.aisa-progress-list__track { height: 4px; border-radius: 2px; background: var(--aisa-chart-track); overflow: hidden; }
+.aisa-progress-list__fill { height: 100%; border-radius: inherit; background: var(--aisa-chart-single); transition: width var(--aisa-duration-slow) var(--aisa-ease-out); }
+.aisa-progress-list__row--accent .aisa-progress-list__fill { background: var(--aisa-chart-emph); }
+.aisa-progress-list__row--warning .aisa-progress-list__fill { background: var(--aisa-warning); }
+.aisa-progress-list__row--danger .aisa-progress-list__fill { background: var(--aisa-danger); }
+
+/* gantt */
+.aisa-gantt__name { font-size: 12px; font-weight: 500; }
+.aisa-gantt__today { font-size: 10px; font-weight: 600; }
+.aisa-gantt__task:hover rect:first-child { stroke: var(--aisa-text-muted); }

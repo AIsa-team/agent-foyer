@@ -1,0 +1,19 @@
+# Alternative to nginx. Caddy must be built with the Cloudflare DNS module (or another DNS provider)
+# to issue the wildcard certificate for apps; CF_API_TOKEN needs Zone:DNS:Edit on the zone.
+# Replace the names and email with your own.
+{
+	email admin@example.com
+}
+
+hub.example.com {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8090
+}
+
+*.example.net {
+	tls {
+		dns cloudflare {env.CF_API_TOKEN}
+	}
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8090
+}

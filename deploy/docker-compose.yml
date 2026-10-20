@@ -1,0 +1,18 @@
+# Run from the repo root:  docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
+services:
+  hub:
+    build: ..
+    image: ${HUB_IMAGE:-agent-hub}:latest
+    container_name: ${HUB_CONTAINER:-agent-hub}
+    restart: unless-stopped
+    env_file: ../.env
+    environment:
+      DATA_DIR: /data
+      APP_UPSTREAM_MODE: network
+      HUB_CONTAINER: ${HUB_CONTAINER:-agent-hub}
+    volumes:
+      - ${HOST_DATA_DIR:?set HOST_DATA_DIR in .env}:/data
+      # The hub builds and runs app containers through the host's Docker. This is root-equivalent; see SECURITY.md.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - 127.0.0.1:${HUB_PORT:-8090}:8080

@@ -1,0 +1,108 @@
+import { useState } from 'react';
+import { Link } from 'react-router';
+import type { Agent, AppInfo, LarkLink } from '../api';
+import { useI18n, type MessageKey } from '../i18n';
+import { publishPrompt } from '../prompts';
+import { AgentStep, AppIcon, Avatar, CopyBox, Dialog, Icon, Loading, Step, useApi, useMe } from '../ui';
+
+export function AppCard({ app }: { app: AppInfo }) {
+  const { t } = useI18n();
+  const status = app.status !== 'online' ? t(`status.${app.status}` as MessageKey) : null;
+  return (
+    <Link to={`/apps/${app.slug}`} className="card app-card">
+      <div className="head">
+        <AppIcon src={app.icon} name={app.name} />
+        <div className="grow">
+          <div className="title ellipsis">{app.name}</div>
+          {/* not an <a>: the whole card is already a link */}
+          <span
+            className="host" role="link" tabIndex={0}
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); window.open(app.url, '_blank', 'noopener'); }}
+          >
+            {app.host} <Icon name="external" size={12} />
+          </span>
+        </div>
+        {status && <span className={`badge ${app.status === 'failed' ? 'danger' : 'warn'}`}>{status}</span>}
+      </div>
+      <div className="desc">{app.description || <span className="muted">{t('common.noDescription')}</span>}</div>
+      <div className="foot">
+        <span className="row"><Avatar person={app.owner} /> {app.owner?.name}</span>
+        <span>{t(`visibility.${app.visibility}` as MessageKey)}{app.publicStatus === 'pending' ? t('visibility.pendingSuffix') : ''}</span>
+      </div>
+    </Link>
+  );
+}
+
+export function LarkTile({ link }: { link: LarkLink }) {
+  const isImg = /^https?:\/\//.test(link.icon);
+  return (
+    <a className="card link-tile" href={link.url} target="_blank" rel="noreferrer">
+      {isImg ? <img src={link.icon} alt="" width={28} height={28} style={{ borderRadius: 6 }} /> : <span className="emoji">{link.icon || '🔗'}</span>}
+      <div className="grow">
+        <div className="ellipsis" style={{ fontWeight: 500 }}>{link.name}</div>
+        {link.description && <div className="small muted ellipsis">{link.description}</div>}
+      </div>
+      <span className="muted"><Icon name="external" size={13} /></span>
+    </a>
+  );
+}
+
+export function PublishDialog({ onClose }: { onClose: () => void }) {
+  const me = useMe();
+  const { t } = useI18n();
+  const profile = useApi<{ agents: Agent[] }>('/profile');
+  return (
+    <Dialog title={t('publish.title')} subtitle={t('publish.subtitle')} onClose={onClose}>
+      <div className="steps">
+        <AgentStep agents={profile.data?.agents ?? null} />
+        <Step n={2} title={t('publish.step2.title')}>
+          <p>{t('publish.step2.intro')}</p>
+          <CopyBox text={publishPrompt(me, t)} />
+          <p style={{ marginTop: 10 }}>{t('publish.step2.after')}</p>
+        </Step>
+        <Step n={3} title={t('publish.step3.title')}>
+          <p>{t('publish.step3.body', { domain: me.hub.appsDomain })}</p>
+        </Step>
+      </div>
+    </Dialog>
+  );
+}
+
+export function AppsPage() {
+  const { t } = useI18n();
+  const { data, error } = useApi<{ apps: AppInfo[]; larkLinks: LarkLink[] }>('/apps');
+  const [q, setQ] = useState('');
+  const [publishing, setPublishing] = useState(false);
+  if (!data) return <Loading error={error} />;
+  const match = (s: string) => s.toLowerCase().includes(q.trim().toLowerCase());
+  const apps = data.apps.filter((a) => match(a.name) || match(a.description) || match(a.slug));
+  const links = data.larkLinks.filter((l) => match(l.name));
+  return (
+    <>
+      <div className="page-head">
+        <h1>{t('apps.title')}</h1>
+        <div className="row">
+          <input className="input" style={{ width: 200 }} placeholder={t('apps.search')} value={q} onChange={(e) => setQ(e.target.value)} />
+          <button className="btn primary" onClick={() => setPublishing(true)} type="button">{t('apps.publish')}</button>
+        </div>
+      </div>
+
+      <div className="section-title">{t('apps.own')} <span className="count">{t('common.count', { n: apps.length })}</span></div>
+      {apps.length ? (
+        <div className="grid">{apps.map((a) => <AppCard key={a.slug} app={a} />)}</div>
+      ) : (
+        <div className="card"><div className="empty"><b>{q ? t('apps.noneFound') : t('apps.none')}</b>{!q && <span className="small">{t('apps.noneHint')}</span>}</div></div>
+      )}
+
+      {links.length > 0 && (
+        <div className="section">
+          <div className="section-title">{t('apps.lark')} <span className="count">{t('common.count', { n: links.length })}</span></div>
+          <div className="grid" style={{ gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))' }}>
+            {links.map((l) => <LarkTile key={l.id} link={l} />)}
+          </div>
+        </div>
+      )}
+      {publishing && <PublishDialog onClose={() => setPublishing(false)} />}
+    </>
+  );
+}

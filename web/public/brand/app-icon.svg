@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Hub">
+  <rect width="512" height="512" rx="112" fill="#1A1A18"/>
+  <g transform="translate(96 96) scale(8)">
+    <g stroke="#fff" stroke-width="3" stroke-linecap="round"><path d="M20 20 9 9M20 20l11-11M20 20 9 31M20 20l11 11"/></g>
+    <circle cx="20" cy="20" r="6" fill="#F76918"/>
+    <g fill="#1A1A18" stroke="#fff" stroke-width="3"><circle cx="8" cy="8" r="4"/><circle cx="32" cy="8" r="4"/><circle cx="8" cy="32" r="4"/><circle cx="32" cy="32" r="4"/></g>
+  </g>
+</svg>

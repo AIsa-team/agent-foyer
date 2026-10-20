@@ -1,0 +1,297 @@
+/*
+ * AIsa design tokens — the single source of brand values for web apps, slides and documents.
+ * Three layers: primitives (raw palette) → semantic roles (what a color is for) → used by components.
+ * Write components against the semantic roles only; dark mode swaps the roles, never the components.
+ *
+ * Dark mode: follows the OS by default; force it with <html data-theme="dark"> or <html data-theme="light">.
+ */
+:root {
+  /* ---------- primitives: brand orange (500 is the logo color) ---------- */
+  --aisa-orange-50: #fff7f1;
+  --aisa-orange-100: #fff1e8;
+  --aisa-orange-200: #ffdcc4;
+  --aisa-orange-300: #ffbc93;
+  --aisa-orange-400: #ff934f;
+  --aisa-orange-500: #f76918;
+  --aisa-orange-600: #e8590c;
+  --aisa-orange-700: #c2470a;
+  --aisa-orange-800: #9a390d;
+  --aisa-orange-900: #6f2b0e;
+  --aisa-orange-950: #451a08;
+
+  /* ---------- primitives: warm ink (neutrals tinted toward the brand hue) ---------- */
+  --aisa-ink-0: #fdfcfa;
+  --aisa-ink-50: #f7f6f2;
+  --aisa-ink-100: #f0eee9;
+  --aisa-ink-200: #e6e3dc;
+  --aisa-ink-300: #d6d1c7;
+  --aisa-ink-400: #b3aea4;
+  --aisa-ink-500: #736f68;
+  --aisa-ink-600: #6b6862;
+  --aisa-ink-700: #48463f;
+  --aisa-ink-800: #2d2d2b;
+  --aisa-ink-900: #1a1a18;
+  --aisa-ink-950: #121211;
+
+  /* ---------- semantic roles (light) ---------- */
+  color-scheme: light;
+  --aisa-bg: var(--aisa-ink-50);              /* page */
+  --aisa-surface: var(--aisa-ink-0);          /* cards, panels */
+  --aisa-surface-sunken: var(--aisa-ink-100); /* wells, code, table header */
+  --aisa-surface-raised: #ffffff;             /* popovers, dialogs */
+  --aisa-line: var(--aisa-ink-200);
+  --aisa-line-strong: var(--aisa-ink-300);
+  --aisa-text: var(--aisa-ink-900);
+  --aisa-text-body: var(--aisa-ink-700);
+  --aisa-text-secondary: var(--aisa-ink-600);
+  --aisa-text-muted: var(--aisa-ink-500);
+  --aisa-text-disabled: var(--aisa-ink-400);
+
+  --aisa-accent: var(--aisa-orange-500);          /* brand fills: primary buttons, active marks */
+  --aisa-accent-hover: #ff7a2b;
+  --aisa-accent-pressed: var(--aisa-orange-600);
+  --aisa-accent-soft: var(--aisa-orange-100);     /* tinted chips, selected rows */
+  --aisa-accent-soft-line: var(--aisa-orange-200);
+  --aisa-accent-text: var(--aisa-orange-700);     /* orange text/links at body size (4.6:1 on page) */
+  --aisa-on-accent: #ffffff;                      /* text on accent fills (use ≥ 15px semibold) */
+
+  --aisa-inverse: var(--aisa-ink-900);            /* dark buttons, tooltips */
+  --aisa-on-inverse: var(--aisa-ink-0);
+
+  /* status: fill for icons/dots, text for words, soft for backgrounds. Never color alone — pair with an icon or label. */
+  --aisa-success: #0ca30c;  --aisa-success-text: #0b7a2b; --aisa-success-soft: #e8f6ea;
+  --aisa-warning: #fab219;  --aisa-warning-text: #8a5a00; --aisa-warning-soft: #fdf3dc;
+  --aisa-serious: #ec835a;  --aisa-serious-text: #a2420f; --aisa-serious-soft: #fdeee6;
+  --aisa-danger: #d03b3b;   --aisa-danger-text: #b42323;  --aisa-danger-soft: #fbeaea;
+  --aisa-info: #2a78d6;     --aisa-info-text: #1f5fae;    --aisa-info-soft: #e9f1fb;
+
+  /* charts: categorical slots in fixed order (validated for colour-blind separation, adjacent pairs, both modes).
+     For scatter/maps/small multiples use at most the first three. Never reuse status colours as series. */
+  --aisa-chart-surface: var(--aisa-surface);
+  --aisa-series-1: #f76918; /* orange */
+  --aisa-series-2: #2a78d6; /* blue */
+  --aisa-series-3: #1baf7a; /* aqua */
+  --aisa-series-4: #eda100; /* yellow */
+  --aisa-series-5: #e87ba4; /* magenta */
+  --aisa-series-6: #008300; /* green */
+  --aisa-series-7: #6250d6; /* violet */
+  --aisa-series-8: #e34948; /* red */
+  --aisa-chart-grid: var(--aisa-ink-200);
+  --aisa-chart-axis: var(--aisa-ink-500);
+  --aisa-chart-muted: var(--aisa-ink-300); /* de-emphasis grey for "the rest" when one series is the point */
+  /* chart themes: "ink" (default) — one series in ink, orange only for the highlight/current/you;
+     "brand" — one series in brand orange. Switch with data-aisa-chart-theme="brand" on <html> or any container.
+     Multi-series comparisons use the categorical slots above in both themes. */
+  --aisa-chart-single: var(--aisa-ink-800);
+  --aisa-chart-emph: var(--aisa-accent);
+  --aisa-chart-track: var(--aisa-ink-100); /* unfilled part of rings, meters, gantt bars */
+  /* sequential (heatmaps: lightest = near zero, may recede into the surface) */
+  --aisa-seq-1: #f0eee9; --aisa-seq-2: #d6d1c7; --aisa-seq-3: #b3aea4; --aisa-seq-4: #8a867e;
+  --aisa-seq-5: #6b6862; --aisa-seq-6: #48463f; --aisa-seq-7: #2d2d2b;
+  /* ordinal (discrete ordered marks: funnel stages, tiers) — every step clears 2:1 on the surface */
+  --aisa-ord-1: #b3aea4; --aisa-ord-2: #8a867e; --aisa-ord-3: #6b6862; --aisa-ord-4: #48463f; --aisa-ord-5: #2d2d2b;
+  /* diverging: orange (negative/below) ↔ blue (positive/above), neutral grey midpoint */
+  --aisa-div-neg: #e8590c; --aisa-div-neg-soft: #ffbc93; --aisa-div-mid: #ebe8e1; --aisa-div-pos-soft: #9ec5f4; --aisa-div-pos: #2a78d6;
+
+  /* ---------- typography ---------- */
+  --aisa-font-cjk: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", "Noto Sans CJK SC";
+  --aisa-font-display: "Plus Jakarta Sans", var(--aisa-font-cjk), system-ui, sans-serif;
+  --aisa-font-sans: "Inter", var(--aisa-font-cjk), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --aisa-font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* app UI scale (fixed rem, 1.2 ratio near the body) */
+  --aisa-text-xs: 0.75rem;   /* 12 — captions, table meta */
+  --aisa-text-sm: 0.8125rem; /* 13 — secondary UI */
+  --aisa-text-md: 0.875rem;  /* 14 — default UI text */
+  --aisa-text-lg: 1rem;      /* 16 — reading text */
+  --aisa-text-xl: 1.25rem;   /* 20 — card titles */
+  --aisa-text-2xl: 1.5rem;   /* 24 — page titles */
+  --aisa-text-3xl: 2rem;     /* 32 */
+  --aisa-text-4xl: 2.75rem;  /* 44 — hero numbers */
+  /* display scale for marketing/hero (fluid) */
+  --aisa-display-sm: clamp(2rem, 1.4rem + 2.4vw, 3rem);
+  --aisa-display-md: clamp(2.5rem, 1.6rem + 3.6vw, 4.25rem);
+  --aisa-display-lg: clamp(3rem, 1.8rem + 5vw, 5.75rem);
+  --aisa-leading-tight: 1.1;
+  --aisa-leading-snug: 1.35;
+  --aisa-leading-normal: 1.6;
+  --aisa-tracking-display: -0.035em; /* headlines are set tight, like the website */
+  --aisa-tracking-label: 0.08em;     /* uppercase mono labels */
+
+  /* ---------- space (4px grid) ---------- */
+  --aisa-space-1: 0.25rem;
+  --aisa-space-2: 0.5rem;
+  --aisa-space-3: 0.75rem;
+  --aisa-space-4: 1rem;
+  --aisa-space-5: 1.25rem;
+  --aisa-space-6: 1.5rem;
+  --aisa-space-8: 2rem;
+  --aisa-space-10: 2.5rem;
+  --aisa-space-12: 3rem;
+  --aisa-space-16: 4rem;
+  --aisa-space-24: 6rem;
+
+  /* ---------- shape ---------- */
+  --aisa-radius-xs: 4px;
+  --aisa-radius-sm: 8px;
+  --aisa-radius-md: 12px;   /* inputs, small cards */
+  --aisa-radius-lg: 16px;   /* cards */
+  --aisa-radius-xl: 24px;   /* hero panels */
+  --aisa-radius-pill: 999px; /* buttons, chips */
+  --aisa-border: 1px;
+
+  /* ---------- elevation (warm, low) ---------- */
+  --aisa-shadow-1: 0 1px 2px rgb(26 26 24 / 0.05);
+  --aisa-shadow-2: 0 2px 8px -2px rgb(26 26 24 / 0.08), 0 1px 2px rgb(26 26 24 / 0.04);
+  --aisa-shadow-3: 0 12px 32px -12px rgb(26 26 24 / 0.18), 0 2px 6px rgb(26 26 24 / 0.05);
+  --aisa-shadow-glow: 0 0 0 6px rgb(247 105 24 / 0.12); /* the soft orange halo around the "AIsa node" */
+  --aisa-focus-ring: 0 0 0 3px rgb(247 105 24 / 0.35);
+
+  /* ---------- motion ---------- */
+  --aisa-ease-out: cubic-bezier(0.25, 1, 0.5, 1);     /* ease-out-quart */
+  --aisa-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --aisa-duration-fast: 120ms;
+  --aisa-duration: 200ms;
+  --aisa-duration-slow: 360ms;
+
+  --aisa-z-sticky: 10;
+  --aisa-z-overlay: 50;
+  --aisa-z-toast: 100;
+}
+
+/* dark roles: declared for the OS setting and for an explicit data-theme toggle (which wins both ways) */
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --aisa-bg: var(--aisa-ink-950);
+    --aisa-surface: #1a1a18;
+    --aisa-surface-sunken: #151513;
+    --aisa-surface-raised: #232321;
+    --aisa-line: #2e2d2a;
+    --aisa-line-strong: #3d3c38;
+    --aisa-text: #f3f1ec;
+    --aisa-text-body: #d9d6ce;
+    --aisa-text-secondary: #b3afa6;
+    --aisa-text-muted: #8a867e;
+    --aisa-text-disabled: #5c5a55;
+    --aisa-accent: var(--aisa-orange-500);
+    --aisa-accent-hover: #ff7a2b;
+    --aisa-accent-pressed: var(--aisa-orange-600);
+    --aisa-accent-soft: #2e1d12;
+    --aisa-accent-soft-line: #4a2a16;
+    --aisa-accent-text: #ff934f;
+    --aisa-on-accent: #ffffff;
+    --aisa-inverse: #f3f1ec;
+    --aisa-on-inverse: #1a1a18;
+    --aisa-success-text: #4cc86a; --aisa-success-soft: #13261a;
+    --aisa-warning-text: #f5c25a; --aisa-warning-soft: #2b2312;
+    --aisa-serious-text: #f2a07e; --aisa-serious-soft: #2c1c14;
+    --aisa-danger-text: #f07a7a;  --aisa-danger-soft: #2c1616;
+    --aisa-info-text: #7fb2ef;    --aisa-info-soft: #14212f;
+    --aisa-series-1: #e8590c;
+    --aisa-series-2: #3987e5;
+    --aisa-series-3: #199e70;
+    --aisa-series-4: #c98500;
+    --aisa-series-5: #d55181;
+    --aisa-series-6: #008300;
+    --aisa-series-7: #9085e9;
+    --aisa-series-8: #e66767;
+    --aisa-chart-grid: #2e2d2a;
+    --aisa-chart-axis: #8a867e;
+    --aisa-chart-muted: #4a4843;
+    --aisa-chart-single: #e6e3dc;
+    --aisa-chart-emph: var(--aisa-orange-500);
+    --aisa-chart-track: #262624;
+    --aisa-seq-1: #262624; --aisa-seq-2: #3d3c38; --aisa-seq-3: #5c5a55; --aisa-seq-4: #8a867e;
+    --aisa-seq-5: #b3afa6; --aisa-seq-6: #d9d6ce; --aisa-seq-7: #f3f1ec;
+    --aisa-ord-1: #5c5a55; --aisa-ord-2: #8a867e; --aisa-ord-3: #b3afa6; --aisa-ord-4: #d9d6ce; --aisa-ord-5: #f3f1ec;
+    --aisa-div-neg: #e8590c; --aisa-div-neg-soft: #8a4214; --aisa-div-mid: #383733; --aisa-div-pos-soft: #1c5cab; --aisa-div-pos: #3987e5;
+    --aisa-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+    --aisa-shadow-2: 0 2px 8px -2px rgb(0 0 0 / 0.5);
+    --aisa-shadow-3: 0 16px 40px -12px rgb(0 0 0 / 0.6);
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --aisa-bg: var(--aisa-ink-950);
+  --aisa-surface: #1a1a18;
+  --aisa-surface-sunken: #151513;
+  --aisa-surface-raised: #232321;
+  --aisa-line: #2e2d2a;
+  --aisa-line-strong: #3d3c38;
+  --aisa-text: #f3f1ec;
+  --aisa-text-body: #d9d6ce;
+  --aisa-text-secondary: #b3afa6;
+  --aisa-text-muted: #8a867e;
+  --aisa-text-disabled: #5c5a55;
+  --aisa-accent: var(--aisa-orange-500);
+  --aisa-accent-hover: #ff7a2b;
+  --aisa-accent-pressed: var(--aisa-orange-600);
+  --aisa-accent-soft: #2e1d12;
+  --aisa-accent-soft-line: #4a2a16;
+  --aisa-accent-text: #ff934f;
+  --aisa-on-accent: #ffffff;
+  --aisa-inverse: #f3f1ec;
+  --aisa-on-inverse: #1a1a18;
+  --aisa-success-text: #4cc86a; --aisa-success-soft: #13261a;
+  --aisa-warning-text: #f5c25a; --aisa-warning-soft: #2b2312;
+  --aisa-serious-text: #f2a07e; --aisa-serious-soft: #2c1c14;
+  --aisa-danger-text: #f07a7a;  --aisa-danger-soft: #2c1616;
+  --aisa-info-text: #7fb2ef;    --aisa-info-soft: #14212f;
+  --aisa-series-1: #e8590c;
+  --aisa-series-2: #3987e5;
+  --aisa-series-3: #199e70;
+  --aisa-series-4: #c98500;
+  --aisa-series-5: #d55181;
+  --aisa-series-6: #008300;
+  --aisa-series-7: #9085e9;
+  --aisa-series-8: #e66767;
+  --aisa-chart-grid: #2e2d2a;
+  --aisa-chart-axis: #8a867e;
+  --aisa-chart-muted: #4a4843;
+  --aisa-chart-single: #e6e3dc;
+  --aisa-chart-emph: var(--aisa-orange-500);
+  --aisa-chart-track: #262624;
+  --aisa-seq-1: #262624; --aisa-seq-2: #3d3c38; --aisa-seq-3: #5c5a55; --aisa-seq-4: #8a867e;
+  --aisa-seq-5: #b3afa6; --aisa-seq-6: #d9d6ce; --aisa-seq-7: #f3f1ec;
+  --aisa-ord-1: #5c5a55; --aisa-ord-2: #8a867e; --aisa-ord-3: #b3afa6; --aisa-ord-4: #d9d6ce; --aisa-ord-5: #f3f1ec;
+  --aisa-div-neg: #e8590c; --aisa-div-neg-soft: #8a4214; --aisa-div-mid: #383733; --aisa-div-pos-soft: #1c5cab; --aisa-div-pos: #3987e5;
+  --aisa-shadow-1: 0 1px 2px rgb(0 0 0 / 0.4);
+  --aisa-shadow-2: 0 2px 8px -2px rgb(0 0 0 / 0.5);
+  --aisa-shadow-3: 0 16px 40px -12px rgb(0 0 0 / 0.6);
+}
+
+/* ---------- brand chart theme: single series and ramps in brand orange ---------- */
+[data-aisa-chart-theme="brand"] {
+  --aisa-chart-single: var(--aisa-series-1);
+  --aisa-seq-1: #ffdcc4; --aisa-seq-2: #ffbc93; --aisa-seq-3: #ff934f; --aisa-seq-4: #f76918;
+  --aisa-seq-5: #c2470a; --aisa-seq-6: #9a390d; --aisa-seq-7: #6f2b0e;
+  --aisa-ord-1: #ff934f; --aisa-ord-2: #f76918; --aisa-ord-3: #c2470a; --aisa-ord-4: #9a390d; --aisa-ord-5: #6f2b0e;
+  --aisa-chart-track: var(--aisa-accent-soft);
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"]))[data-aisa-chart-theme="brand"],
+  :root:where(:not([data-theme="light"])) [data-aisa-chart-theme="brand"] {
+    --aisa-chart-single: var(--aisa-series-1);
+    --aisa-seq-1: #3a2416; --aisa-seq-2: #5c3218; --aisa-seq-3: #8a4214; --aisa-seq-4: #c8500d;
+    --aisa-seq-5: #f76918; --aisa-seq-6: #ff934f; --aisa-seq-7: #ffbc93;
+    --aisa-ord-1: #9a3f10; --aisa-ord-2: #c8500d; --aisa-ord-3: #f76918; --aisa-ord-4: #ff934f; --aisa-ord-5: #ffbc93;
+    --aisa-chart-track: #2e1d12;
+  }
+}
+:root[data-theme="dark"][data-aisa-chart-theme="brand"],
+:root[data-theme="dark"] [data-aisa-chart-theme="brand"] {
+  --aisa-chart-single: var(--aisa-series-1);
+  --aisa-seq-1: #3a2416; --aisa-seq-2: #5c3218; --aisa-seq-3: #8a4214; --aisa-seq-4: #c8500d;
+  --aisa-seq-5: #f76918; --aisa-seq-6: #ff934f; --aisa-seq-7: #ffbc93;
+  --aisa-ord-1: #9a3f10; --aisa-ord-2: #c8500d; --aisa-ord-3: #f76918; --aisa-ord-4: #ff934f; --aisa-ord-5: #ffbc93;
+  --aisa-chart-track: #2e1d12;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --aisa-duration-fast: 0ms;
+    --aisa-duration: 0ms;
+    --aisa-duration-slow: 0ms;
+  }
+}
