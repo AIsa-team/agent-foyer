@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
-import { api, VISIBILITY_KEYS, type AppInfo, type LocalizedMap, type Person, type SkillInfo, type Visibility } from '../api';
+import { api, VISIBILITY_KEYS, type AppInfo, type Feedback, type LocalizedMap, type Person, type SkillInfo, type Visibility } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
-import { iconPrompt } from '../prompts';
-import { AppIcon, Avatar, Icon, IconEditor, LinkEditor, LocalizedFields, Loading, PersonPicker, sameLocalized, useAction, useApi, useMe } from '../ui';
+import { feedbackPrompt, iconPrompt } from '../prompts';
+import { AppIcon, Avatar, CopyBox, Icon, IconEditor, LinkEditor, LocalizedFields, Loading, PersonPicker, sameLocalized, useAction, useApi, useMe } from '../ui';
 
+interface Usage { days: { day: string; people: number }[]; last30: number; total: number }
 interface Release { version: number; status: string; created_at: number; created_by_name: string; kind: string }
-interface LarkAccess { tables: { name: string; url: string; access: 'read' | 'write' }[]; notify: { people: string[]; chats: string[] }; consented: boolean }
+interface LarkAccess { tables: { name: string; url: string; access: 'read' | 'write' }[]; notify: { people: string[]; chats: string[] }; mailDrafts: boolean; consented: boolean }
 
 /** What the app may do in Lark as the person using it, and whether this person agreed (with a way to take it back). */
 function LarkCard({ lark, consentUrl, slug, reload }: { lark: LarkAccess; consentUrl: string; slug: string; reload: () => void }) {
@@ -26,6 +27,7 @@ function LarkCard({ lark, consentUrl, slug, reload }: { lark: LarkAccess; consen
           </div>
         ))}
         {who.length > 0 && <div className="small">{t('appDetail.lark.notify', { who: who.join(t('common.listSeparator')) })}</div>}
+        {lark.mailDrafts && <div className="small">{t('appDetail.lark.mail')}</div>}
       </div>
       <div className="row" style={{ marginTop: 12 }}>
         {lark.consented
@@ -186,10 +188,81 @@ function Releases({ app, releases }: { app: AppInfo; releases: Release[] }) {
   );
 }
 
+/** What colleagues said about the app. Everyone can add to it; the owner sees all of it and resolves items. */
+function FeedbackCard({ app, items, reload }: { app: AppInfo; items: Feedback[]; reload: () => void }) {
+  const { t, ago } = useI18n();
+  const me = useMe();
+  const { busy, run } = useAction();
+  const [text, setText] = useState('');
+  const open = items.filter((f) => f.status === 'open').length;
+  const send = () => run(() => api.post(`/apps/${app.slug}/feedback`, { body: text }), t('feedback.sent')).then((ok) => ok && (setText(''), reload()));
+  const resolve = (f: Feedback, status: Feedback['status']) => {
+    const reply = status === 'open' ? undefined : prompt(t('feedback.replyPrompt'));
+    if (reply === null) return;
+    run(() => api.post(`/feedback/${f.id}`, { status, reply }), t('feedback.updated')).then(reload);
+  };
+  return (
+    <div className="card pad" id="feedback">
+      <h3>{t('feedback.title')} {app.canManage && open > 0 && <span className="count">{t('feedback.openCount', { n: open })}</span>}</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>{t(app.canManage ? 'feedback.ownerHint' : 'feedback.hint')}</p>
+      {app.canManage && open > 0 && <div style={{ marginBottom: 12 }}><CopyBox text={feedbackPrompt(me, t, app.slug)} /></div>}
+      {(app.canOpen || app.canManage) && (
+        <div className="stack" style={{ gap: 8, marginBottom: items.length ? 14 : 0 }}>
+          <textarea className="input" rows={3} value={text} maxLength={2000} placeholder={t('feedback.placeholder')} onChange={(e) => setText(e.target.value)} />
+          <div className="row" style={{ justifyContent: 'flex-end' }}>
+            <button className="btn sm primary" disabled={busy || text.trim().length < 2} onClick={send} type="button">{t('feedback.send')}</button>
+          </div>
+        </div>
+      )}
+      <div className="stack" style={{ gap: 0 }}>
+        {items.map((f) => (
+          <div key={f.id} className="feedback-item">
+            <div className="row small">
+              <Avatar person={f.author} /> <b>{f.author?.name}</b> <span className="muted">{ago(f.at)}</span>
+              <span className="spacer" />
+              <span className={`badge ${f.status === 'open' ? 'warn' : f.status === 'done' ? 'ok' : ''}`}>{t(`feedback.status.${f.status}` as MessageKey)}</span>
+            </div>
+            <p className="feedback-body">{f.body}</p>
+            {f.reply && <p className="small muted feedback-reply">{t('feedback.reply', { name: f.resolvedBy?.name ?? '', text: f.reply })}</p>}
+            {app.canManage && (
+              <div className="row" style={{ gap: 6 }}>
+                {f.status === 'open' ? (
+                  <>
+                    <button className="btn sm" disabled={busy} onClick={() => resolve(f, 'done')} type="button">{t('feedback.markDone')}</button>
+                    <button className="btn sm ghost" disabled={busy} onClick={() => resolve(f, 'declined')} type="button">{t('feedback.markDeclined')}</button>
+                  </>
+                ) : <button className="btn sm ghost" disabled={busy} onClick={() => resolve(f, 'open')} type="button">{t('feedback.reopen')}</button>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** For the owner: how many colleagues opened the app, per day over the last 30 days. */
+function UsageCard({ usage }: { usage: Usage }) {
+  const { t, fmtDate } = useI18n();
+  const max = Math.max(1, ...usage.days.map((d) => d.people));
+  return (
+    <div className="card pad">
+      <h3>{t('usage.title')}</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>{t('usage.summary', { n: usage.last30, total: usage.total })}</p>
+      <div className="usage-bars" role="img" aria-label={t('usage.summary', { n: usage.last30, total: usage.total })}>
+        {usage.days.map((d) => (
+          <span key={d.day} title={`${fmtDate(new Date(d.day + 'T00:00:00Z').getTime())} · ${t('usage.people', { n: d.people })}`}
+            style={{ height: `${Math.max(d.people ? 8 : 2, (d.people / max) * 100)}%` }} className={d.people ? '' : 'is-zero'} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function AppDetailPage() {
   const { t } = useI18n();
   const { slug } = useParams();
-  const { data, error, reload } = useApi<{ app: AppInfo; releases: Release[]; lark: LarkAccess | null; larkConsentUrl: string }>(`/apps/${slug}`);
+  const { data, error, reload } = useApi<{ app: AppInfo; releases: Release[]; lark: LarkAccess | null; larkConsentUrl: string; feedback: Feedback[]; usage: Usage | null }>(`/apps/${slug}`);
   // poll while a deployment is running
   useEffect(() => {
     if (data?.app.status !== 'building') return;
@@ -223,11 +296,14 @@ export function AppDetailPage() {
         <div className="stack">
           <div className="card pad"><p style={{ margin: 0 }}>{app.description || t('common.noDescription')}</p></div>
           {data.lark && <LarkCard lark={data.lark} consentUrl={data.larkConsentUrl} slug={app.slug} reload={reload} />}
+          <FeedbackCard app={app} items={data.feedback} reload={reload} />
         </div>
       ) : (
         <div className="two-col">
           <div className="stack">
             <AccessCard app={app} reload={reload} />
+            <FeedbackCard app={app} items={data.feedback} reload={reload} />
+            {data.usage && <UsageCard usage={data.usage} />}
             <Releases app={app} releases={releases} />
           </div>
           <div className="stack">

@@ -61,6 +61,47 @@ function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (
   );
 }
 
+/**
+ * The person at the centre, their agents on the inner ring, apps on the middle one and Skills on the outer one.
+ * Agents are named; apps and Skills are dots with their name on hover.
+ */
+function Orbit({ agents, apps, skills }: { agents: string[]; apps: string[]; skills: string[] }) {
+  const { t } = useI18n();
+  const size = 240;
+  const c = size / 2;
+  const rings = [
+    { r: 38, items: agents, label: t('me.orbit.agents', { n: agents.length }), named: true },
+    { r: 70, items: apps, label: t('me.orbit.apps', { n: apps.length }), named: false },
+    { r: 102, items: skills, label: t('me.orbit.skills', { n: skills.length }), named: false },
+  ];
+  // spread items over the ring, leaving the upper-left quarter (where the ring labels are) free
+  const at = (r: number, i: number, n: number, offset: number) => {
+    const a = -Math.PI / 3 + offset + ((i + 0.5) / Math.max(n, 1)) * (Math.PI * 1.4);
+    return { x: c + r * Math.cos(a), y: c + r * Math.sin(a), a };
+  };
+  return (
+    <svg className="me-orbit" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={rings.map((g) => g.label).join(' · ')}>
+      {rings.map((g, gi) => (
+        <g key={gi}>
+          <circle cx={c} cy={c} r={g.r} className={`me-orbit__ring ${gi ? 'dashed' : ''}`} />
+          <text x={c - g.r * 0.71 - 4} y={c - g.r * 0.71 - 4} textAnchor="end" className="me-orbit__label">{g.label}</text>
+          {g.items.map((name, i) => {
+            const p = at(g.r, i, g.items.length, gi * 0.15);
+            return (
+              <g key={i}>
+                {g.named && <line x1={c} y1={c} x2={p.x} y2={p.y} className="me-orbit__spoke" />}
+                <rect x={p.x - 3.5} y={p.y - 3.5} width={7} height={7} className="me-orbit__dot"><title>{name}</title></rect>
+                {g.named && <text x={p.x + (Math.cos(p.a) >= 0 ? 8 : -8)} y={p.y + 4} textAnchor={Math.cos(p.a) >= 0 ? 'start' : 'end'} className="me-orbit__name">{name}</text>}
+              </g>
+            );
+          })}
+        </g>
+      ))}
+      <circle cx={c} cy={c} r={5} className="me-orbit__me" />
+    </svg>
+  );
+}
+
 export function MePage() {
   const me = useMe();
   const { t, ago, fmtDate } = useI18n();
@@ -75,7 +116,8 @@ export function MePage() {
   const publish = publishPrompt(me, t);
   return (
     <>
-      <div className="hero" style={{ paddingTop: 8 }}>
+      <div className="hero me-hero" style={{ paddingTop: 8 }}>
+        <Orbit agents={data.agents.map((a) => a.name)} apps={data.apps.map((a) => a.name)} skills={data.skills.map((s) => s.name)} />
         <span className="muted small">{me.user.role === 'admin' ? t('nav.roleAdmin') : me.user.email}</span>
         <div className="row" style={{ gap: 14, marginTop: 6 }}>
           <Avatar person={me.user} size="lg" />

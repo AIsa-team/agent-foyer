@@ -16,6 +16,7 @@ import { listPeriods, userOkrs } from './lark/okr.ts';
 import { okrBoard } from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
+import * as feedback from './apps/feedback.ts';
 import * as boards from './boards.ts';
 import { createUpload } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -41,10 +42,11 @@ Publishing an app (e.g. "publish this project to the company server"):
    - Browser extensions / desktop tools are not websites: build a static download page that links the packaged zip (included in the upload) with install steps.
 3. create_upload(purpose="app"), then run the returned shell command to tar+upload (exclude node_modules, .git, .env, secrets). On Windows use command_windows_powershell.
 4. publish_app with the upload_id. Report the URL and access setting to the user.
+Improving an app: colleagues leave feedback on the app's page in the hub. When the user asks to improve or fix one of their apps (or asks what people said), call list_app_feedback, go through the items with the user, change and republish the app, then resolve_app_feedback each item with a short reply so the person who asked is told. get_app_status also shows how many colleagues used it in the last 30 days.
 Logged-in users reach apps through the hub gateway. Your app can read the current user from request headers X-Hub-User-Id, X-Hub-User-Name (URI-encoded), X-Hub-User-Email, X-Hub-User-Locale, or from the browser via fetch('/__hub/me') ({ id, name, email, avatar, locale }). Do not build a separate login. App UI text should follow the user's hub language (locale above) with locale files, so English and Chinese colleagues can both use it.
 ${config.designSkills.length ? `Company design: when you build anything visual (apps, pages, decks, charts), install and follow these Skills from the market: ${config.designSkills.join(', ')}.` : 'Company design: if the Skill market has design-system or brand Skills (check list_skills), install and follow them when you build anything visual.'}
 Never put secrets in the upload; use set_app_env for API keys.
-${LARK ? `Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).\n` : ''}
+${LARK ? `Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). To prepare an email the person sends themselves (e.g. a confirmation to a client, cc colleagues), declare mail_drafts: true and call hub.lark.mailDraft({to, cc, subject, html}): it lands in their own Lark mailbox as a draft, never sent. Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).\n` : ''}
 
 Sharing a Skill: if it has no icon, draw a simple square SVG icon and pass icon_svg. The folder must have SKILL.md at its root with frontmatter "name" (lowercase-hyphen) and "description". create_upload(purpose="skill"), upload the folder contents, then publish_skill with localized market names/descriptions for every hub language. Republishing the same name creates a new version. To change only the market text later, use update_skill.
 ${LARK ? `Lark data (Base tables): the hub reads Lark Base with each person's own Lark access, so everyone only sees rows they could open in Lark. If a tool says Lark data is not connected, give the user the link it returns (they approve once in Lark) and continue after they confirm.\n` : ''}
@@ -194,6 +196,22 @@ export function buildMcpServer(user: User): McpServer {
     if (app.kind === 'container' && app.current_release) await apps.restartApp(user, a.slug);
     return { keys, restarted: app.kind === 'container' && !!app.current_release };
   }));
+
+  server.registerTool('list_app_feedback', {
+    description: 'What colleagues said about the apps you own (bugs, missing features, confusing steps), newest first, with who said it. Default: open items on all your apps.',
+    inputSchema: {
+      slug: z.string().optional().describe('one app; default: all apps you own'),
+      status: z.enum(['open', 'done', 'declined', 'all']).optional().describe('default open'),
+    },
+  }, guard((a: { slug?: string; status?: 'open' | 'done' | 'declined' | 'all' }) => {
+    const items = feedback.feedbackToHandle(user, a);
+    return { items, hint: items.length ? 'Fix what the user agrees to, publish the update, then resolve_app_feedback each item (the person is told).' : undefined };
+  }));
+
+  server.registerTool('resolve_app_feedback', {
+    description: 'Mark a feedback item done (fixed and published) or declined (will not change), with a short reply in the language the person wrote in. The person who sent it gets a message.',
+    inputSchema: { id: z.number().int(), status: z.enum(['done', 'declined', 'open']), reply: z.string().max(2000).optional() },
+  }, guard((a: { id: number; status: 'done' | 'declined' | 'open'; reply?: string }) => feedback.resolveFeedback(user, a.id, a.status, a.reply)));
 
   server.registerTool('set_app_running', {
     description: 'Stop or start your app without deleting it.',
@@ -427,7 +445,7 @@ export function buildMcpServer(user: User): McpServer {
   // ---- apps that use Lark as the person using them ----
   if (LARK) {
     server.registerTool('set_app_lark', {
-      description: 'Declare which Lark Base tables an app may use (read or write) and whom it may notify through the hub bot. Each colleague agrees once before the app can act as them; changing the declaration asks again. Send empty lists to remove it.',
+      description: 'Declare which Lark Base tables an app may use (read or write), whom it may notify through the hub bot, and whether it may save email drafts in the person\'s mailbox. Each colleague agrees once before the app can act as them; changing the declaration asks again. Send empty lists to remove it.',
       inputSchema: { slug: z.string(), lark: appLark.manifestSchema },
     }, guard(async (a: { slug: string; lark: appLark.ManifestInput }) => {
       const app = apps.getApp(a.slug);

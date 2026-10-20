@@ -19,6 +19,8 @@ import { userOkrs } from './lark/okr.ts';
 import * as okrBoard from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
+import * as feedback from './apps/feedback.ts';
+import { publicDecided } from './apps/approvals.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
 import { isSupportedLocale, requestLocale, tr, UserError } from './i18n/index.ts';
@@ -70,6 +72,8 @@ api.get('/me', (c) => {
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
       features: { lark: config.lark.enabled, messages: !!messenger },
     },
+    // Lark apps an admin pinned under the sidebar navigation (e.g. Approval)
+    sidebarLinks: larkLinks().filter((l) => l.in_sidebar).map((l) => ({ id: l.id, name: l.name, url: l.url, icon: l.icon })),
   });
 });
 
@@ -191,7 +195,21 @@ api.get('/apps/:slug', (c) => {
       `SELECT r.version, r.status, r.created_at, r.kind, u.name AS created_by_name FROM app_releases r JOIN users u ON u.id = r.created_by
        WHERE r.app_slug = ? ORDER BY r.version DESC LIMIT 20`, app.slug)
     : [];
-  return c.json({ app: data, releases, lark: config.lark.enabled ? appLark.describeManifest(u, app) : null, larkConsentUrl: appLark.consentUrl(app.slug, '/') });
+  return c.json({
+    app: data, releases, lark: config.lark.enabled ? appLark.describeManifest(u, app) : null, larkConsentUrl: appLark.consentUrl(app.slug, '/'),
+    feedback: feedback.feedbackFor(u, app.slug),
+    usage: data.canManage ? feedback.usageDetail(app) : null,
+  });
+});
+
+api.post('/apps/:slug/feedback', async (c) => {
+  const b = await body<{ body?: string }>(c);
+  return c.json(await feedback.addFeedback(c.get('user'), c.req.param('slug'), String(b.body ?? '')));
+});
+api.post('/feedback/:id', async (c) => {
+  const b = await body<{ status?: string; reply?: string }>(c);
+  const status = b.status === 'done' || b.status === 'declined' ? b.status : 'open';
+  return c.json(await feedback.resolveFeedback(c.get('user'), Number(c.req.param('id')), status, b.reply));
 });
 
 /** Take back an app's permission to use your Lark data. */
@@ -297,7 +315,7 @@ api.delete('/agents/:id', (c) => {
 });
 
 // ---- Lark native app shortcuts ----
-interface LarkLink { id: number; name: string; description: string; url: string; icon: string; sort: number }
+interface LarkLink { id: number; name: string; description: string; url: string; icon: string; sort: number; in_sidebar: number }
 const larkLinks = () => (config.lark.enabled ? all<LarkLink>('SELECT * FROM lark_links ORDER BY sort, id') : []);
 
 api.post('/lark-links', async (c) => {
@@ -305,6 +323,13 @@ api.post('/lark-links', async (c) => {
   const b = await body<Partial<LarkLink>>(c);
   if (!b.name || !b.url || !/^https?:\/\//.test(b.url)) throw new UserError('err.larkLinkInvalid');
   run('INSERT INTO lark_links (name, description, url, icon, sort) VALUES (?, ?, ?, ?, ?)', b.name, b.description ?? '', b.url, b.icon ?? '', b.sort ?? 0);
+  return c.json({ ok: true });
+});
+
+api.post('/lark-links/:id/sidebar', async (c) => {
+  requireAdmin(c.get('user'));
+  const b = await body<{ on?: boolean }>(c);
+  run('UPDATE lark_links SET in_sidebar = ? WHERE id = ?', b.on ? 1 : 0, Number(c.req.param('id')));
   return c.json({ ok: true });
 });
 
@@ -332,8 +357,9 @@ api.post('/admin/alerts', async (c) => {
 api.post('/admin/apps/:slug/public', async (c) => {
   requireAdmin(c.get('user'));
   const b = await body<{ approve: boolean }>(c);
-  run("UPDATE apps SET public_status = ?, visibility = CASE WHEN ? THEN 'public' ELSE 'company' END, updated_at = ? WHERE slug = ? AND visibility = 'public'",
+  const changed = run("UPDATE apps SET public_status = ?, visibility = CASE WHEN ? THEN 'public' ELSE 'company' END, updated_at = ? WHERE slug = ? AND visibility = 'public'",
     b.approve ? 'approved' : 'rejected', b.approve ? 1 : 0, now(), c.req.param('slug'));
+  if (changed.changes) publicDecided(c.req.param('slug'), !!b.approve, c.get('user'));
   return c.json({ ok: true });
 });
 

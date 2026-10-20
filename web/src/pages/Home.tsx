@@ -5,6 +5,7 @@ import { barChart, calendarHeatmap, divergingBar, donutChart, funnelChart, gantt
 import { useI18n, type MessageKey } from '../i18n';
 import { AgentStep, CopyBox, Dialog, Empty, Icon, Loading, Step, useAction, useApi, useMe } from '../ui';
 import { AppCard, LarkTile } from './Apps';
+import { openSearch, searchShortcut } from '../Search';
 import { SkillUpdatesBanner } from './Skills';
 import { LEVEL_BADGE, type IssuesData } from './Issues';
 
@@ -466,9 +467,16 @@ export function HomePage() {
           <Link to="/" className="btn sm">{t('home.preview.exit')}</Link>
         </div>
       )}
-      <div className="hero">
-        <span className="muted">{date}</span>
-        <h1>{t('home.greeting', { greeting: t(greetingKey(now)), name: me.user.name })}</h1>
+      <div className="hero hero--home">
+        <div className="hero__main">
+          <span className="muted">{date}</span>
+          <h1>{t('home.greeting', { greeting: t(greetingKey(now)), name: me.user.name })}</h1>
+          <button className="hero-search" onClick={openSearch} type="button">
+            <Icon name="search" /><span className="grow">{t('home.search')}</span><kbd>{searchShortcut()}</kbd>
+          </button>
+        </div>
+        {/* the company's mark drawn in dots */}
+        <div className="hero-art" aria-hidden="true" />
       </div>
 
       {profile.data && profile.data.agents.length === 0 && (

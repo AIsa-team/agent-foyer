@@ -71,6 +71,7 @@ const lark = {
   refreshes: 0,
   messages: [] as { type: string; id: string; text: string }[],
   scopesAsked: '',
+  drafts: [] as string[],
   searchCalls: 0,
   hideApi: false,
   denyOrders: false,
@@ -143,6 +144,21 @@ const larkServer = http.createServer(async (req, res) => {
     lark.rejectOnce = false;
     return send({ code: 99991668, msg: 'invalid user token (once)' });
   }
+  if (p === '/mail/v1/user_mailboxes/me/profile') return send({ code: 0, data: { primary_email_address: 'alex@example.com' } });
+  if (p === '/mail/v1/user_mailboxes/me/drafts' && req.method === 'POST') {
+    lark.drafts.push(Buffer.from((JSON.parse(raw) as { raw: string }).raw, 'base64url').toString('utf8'));
+    return send({ code: 0, data: { draft_id: `draft${lark.drafts.length}` } });
+  }
+  const progress = p.match(/^\/okr\/v1\/progress_records\/([^/]+)$/);
+  if (progress) {
+    const texts: Record<string, { at: number; blocks: unknown[] }> = {
+      pr1: { at: NOW - 3 * DAY, blocks: [{ type: 'paragraph', paragraph: { elements: [{ type: 'textRun', textRun: { text: '调用量本周破 1.3 亿，' } }, { type: 'person', person: { openId: 'ou_dev_alice' } }, { type: 'textRun', textRun: { text: ' 在跟进' } }] } }] },
+      pr2: { at: NOW - DAY, blocks: [{ type: 'paragraph', paragraph: { elements: [{ type: 'textRun', textRun: { text: '新签 12 家' } }] } }] },
+      pr3: { at: NOW - 2 * DAY, blocks: [{ type: 'paragraph', paragraph: { elements: [{ type: 'docsLink', docsLink: { title: '渠道周报', url: 'https://x.larksuite.com/docx/1' } }] } }] },
+    };
+    const t = texts[progress[1]];
+    return t ? send({ code: 0, data: { progress_id: progress[1], modify_time: String(t.at), content: { blocks: t.blocks } } }) : send({ code: 1001002, msg: 'No permission.' });
+  }
   const okrUser = p.match(/^\/okr\/v1\/users\/([^/]+)\/okrs$/);
   if (okrUser) {
     if (okrUser[1] === 'ou_dev_bob') return send({ code: 1001002, msg: 'No permission.' });
@@ -152,20 +168,20 @@ const larkServer = http.createServer(async (req, res) => {
     const entries = [
       { id: 'okr-last', period_id: 'p-last', name: `${q ? y : y - 1} 年 ${lastQ * 3 + 1} - ${lastQ * 3 + 3} 月`, objective_list: [{ id: 'o0', content: '上季度目标', progress_rate: { percent: 100 }, kr_list: [] }] },
       { id: 'okr-now', period_id: 'p-now', name: `${y} 年 ${q * 3 + 1} - ${q * 3 + 3} 月`, objective_list: [
-        { id: 'o1', content: '让 Acme 成为 Agent 默认的资源入口', progress_rate: { percent: 62 }, kr_list: [
+        { id: 'o1', content: '让 Acme 成为 Agent 默认的资源入口', progress_rate: { percent: 62 }, progress_record_list: [{ id: 'pr1' }], kr_list: [
           { id: 'k1', content: '月调用量 2 亿次', progress_rate: { percent: 65 } },
           { id: 'k2', content: '上架 60 个官方 Skill', progress_rate: { percent: 72 } },
         ] },
         // no objective progress: the hub averages the key results
         { id: 'o2', content: '新增 400 家企业客户', kr_list: [
-          { id: 'k3', content: '出海电商渠道 150 家', progress_rate: { percent: 30 } },
+          { id: 'k3', content: '出海电商渠道 150 家', progress_rate: { percent: 30 }, progress_record_list: [{ id: 'pr2' }] },
           { id: 'k4', content: '内容团队 100 家', progress_rate: { percent: 10 } },
         ] },
       ] },
     ];
     // Alice's objective supports Alex's first company objective
     const alice = [{ id: 'okr-alice', period_id: 'p-now', name: entries[1].name, objective_list: [
-      { id: 'a1', content: '出海电商渠道做到 150 家', progress_rate: { percent: 40 }, aligned_objective_list: [{ id: 'o1', owner: { open_id: 'ou_dev_alex' } }], kr_list: [] },
+      { id: 'a1', content: '出海电商渠道做到 150 家', progress_rate: { percent: 40 }, aligned_objective_list: [{ id: 'o1', owner: { open_id: 'ou_dev_alex' } }], kr_list: [], progress_record_list: [{ id: 'pr3' }] },
     ] }];
     const mine = okrUser[1] === 'ou_dev_alice' ? alice : entries;
     const only = url.searchParams.getAll('period_ids');
@@ -548,6 +564,31 @@ try {
   check((appInfo.body.lark as { consented: boolean }).consented === true, 'the app page shows the person agreed');
   await api(alex.jar, 'DELETE', '/apps/invoice/lark-consent', {});
   check((await appFetch('invoice', '/__hub/lark/tables/projects/records', app)).status === 403, 'after taking it back, the app must ask again');
+
+  // mail drafts: declared, agreed to, and saved in the person's own mailbox (never sent)
+  check((await post('/__hub/lark/mail/drafts', { to: ['a@b.com'], subject: 's', text: 't' })).status === 403, 'mail drafts need consent first');
+  await tool(alex.token, 'set_app_lark', { slug: 'invoice', lark: {
+    tables: [{ name: 'projects', url: 'https://x.larksuite.com/base/appOrders?table=tblProjects', access: 'read' }], mail_drafts: true,
+  } });
+  const mailPage = await (await fetch(`${HUB}/auth/app-lark?app=invoice&return=/`, { headers: { cookie: alex.jar.header() } })).text();
+  check(mailPage.includes('draft') || mailPage.includes('草稿'), 'the consent page says the app saves mail drafts');
+  const mailCsrf = /name="csrf" value="([^"]+)"/.exec(mailPage)![1];
+  const mailAllow = await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'invoice', return: '/', decision: 'allow', csrf: mailCsrf }) });
+  const mailLoc = mailAllow.headers.get('location') ?? '';
+  check(mailLoc.includes('mail=1'), 'mail drafts send the person to grant Lark mail access');
+  const startM = await fetch(`${HUB}${mailLoc}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
+  alex.jar.store(startM);
+  const authM = await fetch(startM.headers.get('location')!, { redirect: 'manual' });
+  check(lark.scopesAsked.includes('mail:user_mailbox.message:modify') && lark.scopesAsked.includes('bitable:app'), 'it asks for the mail scopes and keeps the write access already granted');
+  alex.jar.store(await fetch(authM.headers.get('location')!, { redirect: 'manual', headers: { cookie: alex.jar.header() } }));
+  const drafted = await post('/__hub/lark/mail/drafts', { to: ['client@example.com'], cc: ['林小雨'], subject: '合作确认函', html: '<p>感谢您的支持</p>' });
+  const draftBody = await drafted.json() as { saved: boolean; draftId: string };
+  const eml = lark.drafts[0] ?? '';
+  check(drafted.status === 200 && draftBody.saved && draftBody.draftId === 'draft1', 'the app saves a draft');
+  check(eml.includes('From: alex@example.com') && eml.includes('To: client@example.com') && eml.includes('Cc: alice@example.com') && eml.includes('Subject: =?UTF-8?B?')
+    && Buffer.from(eml.split('\n\n').slice(1).join('').replace(/\n/g, ''), 'base64').toString('utf8').includes('感谢您的支持'),
+    'as EML from the person\'s own address, colleagues by name turned into their email, non-ASCII encoded');
+  check((await post('/__hub/lark/mail/drafts', { to: ['nobody-here'], subject: 's', text: 't' })).status === 400, 'unknown recipients are refused');
   rmSync(appDir, { recursive: true, force: true });
 
   // data boards, organisation, search
@@ -616,6 +657,10 @@ try {
   check(b.company?.owner?.name === 'Alex' && b.company.objectives.join() === 'o1,o2', 'company objectives: whoever the most objectives align to');
   check(b.nodes.find((n) => n.id === 'a1')?.alignsTo.join() === 'o1' && b.unaligned.length === 0, 'Alice\'s objective hangs under the company objective it supports');
   check(b.people.hidden.some((p) => p.name === '周明') && b.pace.length === 2, 'people whose OKRs Lark hides are listed as hidden; pace per person');
+  const prog = (board.body as { progress: { total: number; people: number; recent: { text: string; owner: { name: string }; on: string }[] } }).progress;
+  check(prog.total === 3 && prog.people === 2, 'the OKR board counts progress updates and who wrote them');
+  check(prog.recent.map((r) => r.text).join('|') === '新签 12 家|渠道周报|调用量本周破 1.3 亿，@林小雨 在跟进' && prog.recent[0].on === '出海电商渠道 150 家' && prog.recent[0].owner.name === 'Alex',
+    'recent progress, newest first, as text (links by title, people as @name) with what it was written on');
   check((await api(alice.jar, 'POST', '/admin/okr-owner', { owner: 'ou_dev_alice' })).status === 400, 'only admins choose whose OKRs are the company\'s');
   await api(alex.jar, 'POST', '/admin/okr-owner', { owner: 'ou_dev_alice' });
   const b2 = (await api(alex.jar, 'GET', '/okr/board')).body as typeof b;
@@ -638,6 +683,55 @@ try {
   // disconnect
   await api(alex.jar, 'POST', '/lark/disconnect', {});
   check((await api(alex.jar, 'GET', '/lark/status')).body.connected === false, 'disconnect forgets the tokens');
+
+  // feedback on apps and who uses them
+  const aliceInvoice = await loginToApp('invoice', alice.jar);
+  await appFetch('invoice', '/', aliceInvoice);
+  const appList = (await api(alice.jar, 'GET', '/apps')).body.apps as { slug: string; usage30: number; isNew: boolean }[];
+  check(appList.find((x) => x.slug === 'invoice')?.usage30 === 1 && appList.find((x) => x.slug === 'invoice')?.isNew, 'app cards count colleagues who opened it (not the owner) and mark new apps');
+  lark.messages = [];
+  const fb = await api(alice.jar, 'POST', '/apps/invoice/feedback', { body: '开票类型里缺少“专票”' });
+  check(fb.status === 200 && fb.body.status === 'open', 'a colleague leaves feedback on an app');
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alex' && lark.messages[0].text.includes('专票'), 'the owner is messaged');
+  check((await api(alice.jar, 'POST', '/apps/invoice/feedback', { body: 'x' })).status === 400, 'feedback that is too short is refused');
+  const bobFb = await api(bob.jar, 'GET', '/apps/invoice');
+  check((bobFb.body.feedback as unknown[]).length === 0 && bobFb.body.usage === null, "others see neither someone else's feedback nor usage details");
+  const ownerView = await api(alex.jar, 'GET', '/apps/invoice');
+  check((ownerView.body.feedback as { body: string }[])[0]?.body.includes('专票') && (ownerView.body.usage as { last30: number }).last30 === 1 && (ownerView.body.app as { openFeedback: number }).openFeedback === 1,
+    'the owner sees all feedback, usage per day and the open count');
+  const todo = await tool(alex.token, 'list_app_feedback', {});
+  check(todo.items?.length === 1 && todo.items[0].author.name === '林小雨', "the owner's agent lists open feedback on their apps");
+  check(String((await tool(alice.token, 'resolve_app_feedback', { id: todo.items[0].id, status: 'done' })).error).length > 0, 'only the owner can resolve it');
+  lark.messages = [];
+  const resolved = await tool(alex.token, 'resolve_app_feedback', { id: todo.items[0].id, status: 'done', reply: '加上了' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(resolved.status === 'done' && lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice' && lark.messages[0].text.includes('加上了'), 'resolving it tells the colleague, with the reply');
+  check((await tool(alex.token, 'list_app_feedback', {})).items.length === 0, 'and it leaves the open list');
+
+  // asking to open an app to everyone messages the admins; their decision messages the owner
+  lark.messages = [];
+  const pubDir = mkdtempSync(path.join(tmpdir(), 'hub-pub-'));
+  (await import('node:fs')).writeFileSync(path.join(pubDir, 'index.html'), '<h1>open</h1>');
+  execFileSync(process.execPath, ['scripts/admin.ts', 'publish-app', pubDir, '--owner', 'alice@example.com', '--slug', 'open-demo', '--visibility', 'company',
+    '--localized', JSON.stringify({ 'zh-CN': { name: '公开演示', description: '演示' }, en: { name: 'Open demo', description: 'Demo' } })],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
+  rmSync(pubDir, { recursive: true, force: true });
+  check((await tool(alice.token, 'set_app_access', { slug: 'open-demo', visibility: 'public' })).publicStatus === 'pending', 'the owner asks to open it to everyone');
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alex' && lark.messages[0].text.includes('/admin'), 'a public request messages the admins with a link to approve');
+  lark.messages = [];
+  check((await api(alex.jar, 'POST', '/admin/apps/open-demo/public', { approve: true })).status === 200, 'the admin approves it');
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice', 'and the owner is told');
+
+  // an admin pins a Lark shortcut under the sidebar navigation
+  await api(alex.jar, 'POST', '/lark-links', { name: '审批', url: 'https://applink.larksuite.com/approval', icon: '✅' });
+  const link = ((await api(alex.jar, 'GET', '/admin')).body.larkLinks as { id: number; name: string }[]).find((l) => l.name === '审批')!;
+  check(((await api(alice.jar, 'GET', '/me')).body.sidebarLinks as unknown[]).length === 0, 'shortcuts are not in the sidebar until an admin puts them there');
+  check((await api(alice.jar, 'POST', `/lark-links/${link.id}/sidebar`, { on: true })).status === 400, 'only admins pin shortcuts');
+  await api(alex.jar, 'POST', `/lark-links/${link.id}/sidebar`, { on: true });
+  check(((await api(alice.jar, 'GET', '/me')).body.sidebarLinks as { name: string }[])[0]?.name === '审批', 'a pinned shortcut shows in everyone\'s sidebar');
 
   if (KEEP) {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert

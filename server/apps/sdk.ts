@@ -7,6 +7,7 @@
  *   await hub.lark.addRecord('invoices', { 项目: '春季投放', 金额: 12000 });
  *   await hub.lark.updateRecord('invoices', recordId, { 状态: '已开票' });
  *   await hub.notify({ to: ['finance'], text: '有一张新的开票申请', link: location.href });
+ *   await hub.lark.mailDraft({ to: ['client@example.com'], cc: ['林小雨'], subject: '合作确认', html: '<p>…</p>' });
  *
  * When the person has not agreed to the app's Lark access yet, calls send them to the hub's consent page and come
  * back afterwards.
@@ -48,6 +49,8 @@ export const SDK_JS = `(function () {
       records: function (table, opts) { return call('GET', '/lark/tables/' + table + '/records' + q(opts)); },
       addRecord: function (table, fields) { return call('POST', '/lark/tables/' + table + '/records', { fields: fields }); },
       updateRecord: function (table, id, fields) { return call('PATCH', '/lark/tables/' + table + '/records/' + id, { fields: fields }); },
+      /** saves an email in the person's own Lark mailbox as a draft (never sends); to/cc/bcc: emails or colleague names */
+      mailDraft: function (mail) { return call('POST', '/lark/mail/drafts', mail); },
     },
     /** to: declared colleagues (name, email or open_id) or group aliases */
     notify: function (msg) { return call('POST', '/notify', msg); },

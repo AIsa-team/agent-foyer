@@ -62,6 +62,13 @@ function Shell() {
           {nav.map((n) => (
             <NavLink key={n.to} to={n.to} end={n.end}><Icon name={n.icon} />{n.label}</NavLink>
           ))}
+          {me.sidebarLinks.length > 0 && <div className="nav-sep" />}
+          {me.sidebarLinks.map((l) => (
+            <a key={l.id} href={l.url} target="_blank" rel="noreferrer" className="nav-ext">
+              {/^https?:/.test(l.icon) ? <img src={l.icon} width={16} height={16} alt="" /> : l.icon ? <span className="nav-ext__emoji">{l.icon}</span> : <Icon name="external" />}
+              <span className="grow ellipsis">{l.name}</span><Icon name="external" size={12} />
+            </a>
+          ))}
         </nav>
         <div className="sidebar-foot">
           <LocaleSelect />

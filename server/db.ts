@@ -330,6 +330,28 @@ const MIGRATIONS: string[] = [
   ALTER TABLE data_sources ADD COLUMN app_path TEXT;
   ALTER TABLE data_issues ADD COLUMN url TEXT;
   `,
+  // what colleagues say about an app (its owner's agent reads and resolves it), and who opened which app on which day
+  `
+  CREATE TABLE app_feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    app_slug TEXT NOT NULL REFERENCES apps(slug) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    body TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',   -- open | done | declined
+    reply TEXT,
+    created_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    resolved_by TEXT REFERENCES users(id) ON DELETE SET NULL
+  );
+  CREATE INDEX app_feedback_app ON app_feedback (app_slug, status);
+  CREATE TABLE app_visits (
+    app_slug TEXT NOT NULL REFERENCES apps(slug) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,                     -- YYYY-MM-DD (UTC)
+    PRIMARY KEY (app_slug, day, user_id)
+  );
+  ALTER TABLE lark_links ADD COLUMN in_sidebar INTEGER NOT NULL DEFAULT 0;  -- also pinned under the sidebar navigation
+  `,
 ];
 
 {

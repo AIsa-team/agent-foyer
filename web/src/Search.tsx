@@ -14,6 +14,10 @@ interface Results {
 }
 interface Hit { key: string; group: MessageKey; label: string; sub?: string; icon: React.ReactNode; go: () => void }
 
+const OPEN_EVENT = 'hub:search';
+export const openSearch = () => window.dispatchEvent(new Event(OPEN_EVENT));
+export const searchShortcut = () => (/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K');
+
 /** Hub-wide search (⌘K / Ctrl+K): pages, apps, Skills, resources, colleagues and data boards. */
 export function SearchBox({ pages }: { pages: { to: string; label: string; icon: IconName }[] }) {
   const { t } = useI18n();
@@ -32,8 +36,14 @@ export function SearchBox({ pages }: { pages: { to: string; label: string; icon:
         setOpen((o) => !o);
       }
     };
+    // other places (the home page) open it with openSearch()
+    const onOpen = () => setOpen(true);
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
+    window.addEventListener(OPEN_EVENT, onOpen);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener(OPEN_EVENT, onOpen);
+    };
   }, []);
   useEffect(() => {
     if (open) setTimeout(() => input.current?.focus(), 0);

@@ -12,6 +12,7 @@ import { exchangeCode, larkAuthorizeUrl } from '../lark/auth.ts';
 import { oidcAuthorize, oidcExchange } from './oidc.ts';
 import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
+import { MAIL_SCOPES } from '../lark/mail.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
 export const authRoutes = new Hono();
@@ -59,9 +60,11 @@ authRoutes.get('/auth/lark/connect', (c) => {
   }
   const state = randomToken(16);
   setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|connect`, { ...cookieOpts, maxAge: 600 });
-  // keep write access when reconnecting someone who already granted it
-  const write = c.req.query('write') === '1' || !!connection(user.id).scopes?.includes(WRITE_SCOPE);
-  const scopes = write ? [...DATA_SCOPES, WRITE_SCOPE] : DATA_SCOPES;
+  // keep write and mail access when reconnecting someone who already granted it
+  const had = connection(user.id).scopes ?? [];
+  const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
+  const mail = c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s));
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 
@@ -85,6 +88,7 @@ authRoutes.get('/auth/app-lark', (c) => {
   const items = [
     ...d.tables.map((t) => `<li>${trHtml(L, t.access === 'write' ? 'appLark.consent.write' : 'appLark.consent.read', { name: t.name })} <a href="${escapeHtml(t.url)}" target="_blank" rel="noreferrer">${escapeHtml(tr(L, 'appLark.consent.openTable'))}</a></li>`),
     ...(d.notify.people.length || d.notify.chats.length ? [`<li>${trHtml(L, 'appLark.consent.notify', { who: [...d.notify.people, ...d.notify.chats].join(L.startsWith('zh') ? '、' : ', ') })}</li>`] : []),
+    ...(d.mailDrafts ? [`<li>${escapeHtml(tr(L, 'appLark.consent.mail'))}</li>`] : []),
   ];
   const csrf = signToken(`app-lark|${user.id}|${slug}`, 10 * 60_000);
   return c.html(page(tr(L, 'appLark.consent.title', { app: name }), `
@@ -119,7 +123,7 @@ authRoutes.post('/auth/app-lark', async (c) => {
   grantConsent(user, app);
   const need = needsConnect(user, m);
   const go = `/auth/app-lark/go?app=${encodeURIComponent(slug)}&return=${encodeURIComponent(ret)}`;
-  if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(go)}${need.write ? '&write=1' : ''}`);
+  if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(go)}${need.write ? '&write=1' : ''}${need.mail ? '&mail=1' : ''}`);
   return c.redirect(go);
 });
 

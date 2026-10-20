@@ -1,6 +1,7 @@
 /**
- * Lark for apps: a colleague's app can read and write the Lark Base tables it declared, and ask the hub bot to notify
- * the people / groups it declared, always as the person using the app and only after that person agreed.
+ * Lark for apps: a colleague's app can read and write the Lark Base tables it declared, ask the hub bot to notify
+ * the people / groups it declared, and save email drafts in the person's own Lark mailbox (never send them), always
+ * as the person using the app and only after that person agreed.
  *
  * - Declaration (manifest): set by the app's owner (usually their agent, via set_app_lark). Tables are named by an
  *   alias the app code uses, each read or write. The owner must be able to open every table.
@@ -20,6 +21,7 @@ import { localize } from '../localized.ts';
 import { larkMessenger } from '../lark/messenger.ts';
 import { createRecord, fetchRecords, listFields, parseBaseUrl, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
+import { createDraft, MAIL_SCOPES } from '../lark/mail.ts';
 import { canAccessApp } from './access.ts';
 
 // ---------------------------------------------------------------- declaration
@@ -34,11 +36,12 @@ export const manifestSchema = z.object({
     chats: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_-]{0,30}$/), id: z.string().startsWith('oc_') })).max(10).optional()
       .describe('Lark groups the hub bot is in, by alias'),
   }).optional(),
+  mail_drafts: z.boolean().optional().describe('may save email drafts in the person\'s own Lark mailbox (it never sends; they review and send)'),
 });
 export type ManifestInput = z.infer<typeof manifestSchema>;
 
 interface Table { name: string; url: string; app: string; table: string; view: string | null; access: 'read' | 'write' }
-export interface Manifest { tables: Table[]; notify: { people: { id: string; name: string }[]; chats: { name: string; id: string }[] } }
+export interface Manifest { tables: Table[]; notify: { people: { id: string; name: string }[]; chats: { name: string; id: string }[] }; mailDrafts?: boolean }
 
 export function manifestOf(app: Pick<App, 'lark_manifest'>): Manifest | null {
   return app.lark_manifest ? (JSON.parse(app.lark_manifest) as Manifest) : null;
@@ -49,12 +52,14 @@ const hashOf = (m: Manifest) => sha256(JSON.stringify({
   t: m.tables.map((t) => [t.name, t.app, t.table, t.access]).sort(),
   p: m.notify.people.map((p) => p.id).sort(),
   c: m.notify.chats.map((c) => c.id).sort(),
+  // only present when declared, so consents given before mail drafts existed stay valid
+  ...(m.mailDrafts ? { m: 1 } : {}),
 }));
 
 /** Saves an app's declaration after checking that its owner can open every table. `people` are already open_ids. */
 export async function setManifest(owner: User, app: App, input: ManifestInput, people: string[]): Promise<Manifest | null> {
   if (app.owner_id !== owner.id && owner.role !== 'admin') throw new UserError('err.notAppOwner', { slug: app.slug });
-  if (!input.tables.length && !people.length && !input.notify?.chats?.length) {
+  if (!input.tables.length && !people.length && !input.notify?.chats?.length && !input.mail_drafts) {
     run('UPDATE apps SET lark_manifest = NULL WHERE slug = ?', app.slug);
     return null;
   }
@@ -70,7 +75,7 @@ export async function setManifest(owner: User, app: App, input: ManifestInput, p
     tables.push({ name: t.name, url: t.url, app: appToken, table: ref.table, view: ref.view ?? null, access: t.access });
   }
   const users = people.map((id) => get<{ id: string; name: string }>('SELECT id, name FROM users WHERE id = ?', id)!).filter(Boolean);
-  const m: Manifest = { tables, notify: { people: users, chats: input.notify?.chats ?? [] } };
+  const m: Manifest = { tables, notify: { people: users, chats: input.notify?.chats ?? [] }, ...(input.mail_drafts ? { mailDrafts: true } : {}) };
   run('UPDATE apps SET lark_manifest = ?, updated_at = ? WHERE slug = ?', JSON.stringify(m), now(), app.slug);
   return m;
 }
@@ -93,11 +98,12 @@ export function revokeConsent(user: User, slug: string) {
   run('DELETE FROM app_lark_consents WHERE user_id = ? AND app_slug = ?', user.id, slug);
 }
 
-/** Write tables need the person's write scope; everything needs Lark data connected. */
-export function needsConnect(user: User, m: Manifest): { write: boolean } | null {
+/** Write tables need the person's write scope, mail drafts the mail scopes; everything needs Lark data connected. */
+export function needsConnect(user: User, m: Manifest): { write: boolean; mail: boolean } | null {
   const c = connection(user.id);
   const write = m.tables.some((t) => t.access === 'write');
-  if (!c.connected || (write && !c.scopes?.includes(WRITE_SCOPE))) return { write };
+  const mail = !!m.mailDrafts;
+  if (!c.connected || (write && !c.scopes?.includes(WRITE_SCOPE)) || (mail && !MAIL_SCOPES.every((s) => c.scopes?.includes(s)))) return { write, mail };
   return null;
 }
 
@@ -110,6 +116,7 @@ export function describeManifest(user: User | undefined, app: App) {
   return {
     tables: m.tables.map((t) => ({ name: t.name, url: t.url, access: t.access })),
     notify: { people: m.notify.people.map((p) => p.name), chats: m.notify.chats.map((c) => c.name) },
+    mailDrafts: !!m.mailDrafts,
     consented: user ? hasConsent(user, app) : false,
   };
 }
@@ -192,6 +199,10 @@ export async function handleAppLark(app: App, sessionUser: User | undefined, req
     if (!hasConsent(user, app) || needsConnect(user, m)) return json(res, 403, { error: 'consent_required', consentUrl: consent });
 
     if (url.pathname === '/__hub/notify' && req.method === 'POST') return json(res, 200, await notify(app, m, user, await readJson(req), locale));
+    if (url.pathname === '/__hub/lark/mail/drafts' && req.method === 'POST') {
+      if (!m.mailDrafts) throw new UserError('err.appLark.mailNotDeclared');
+      return json(res, 200, await mailDraft(user, await readJson(req)));
+    }
 
     const t = url.pathname.match(/^\/__hub\/lark\/tables\/([a-z][a-z0-9_-]*)(\/fields|\/records(?:\/([A-Za-z0-9]+))?)$/);
     if (!t) return json(res, 404, { error: 'unknown endpoint' });
@@ -267,4 +278,24 @@ async function notify(app: App, m: Manifest, user: User, body: Record<string, un
 export function consentsOf(user: User, locale: string) {
   return all<App & { at: number }>('SELECT a.*, c.at FROM app_lark_consents c JOIN apps a ON a.slug = c.app_slug WHERE c.user_id = ? ORDER BY c.at DESC', user.id)
     .map((a) => ({ slug: a.slug, name: localize(a, a.i18n, locale).name, at: a.at }));
+}
+
+/** Addresses as given, or colleagues by name / English name, turned into their email. */
+function addresses(v: unknown): string[] {
+  const list = (Array.isArray(v) ? v : v === undefined || v === null || v === '' ? [] : [v]).map((x) => String(x).trim()).filter(Boolean);
+  return list.slice(0, 50).map((x) => {
+    if (/^[^\s@<>,;"]+@[^\s@<>,;"]+\.[^\s@<>,;"]+$/.test(x)) return x;
+    const hit = all<{ email: string | null }>('SELECT email FROM users WHERE name = ? OR en_name = ? OR id = ?', x, x, x).filter((u) => u.email);
+    if (hit.length !== 1) throw new UserError(hit.length ? 'err.colleagueAmbiguous' : 'err.colleagueNotFound', { query: x });
+    return hit[0].email!;
+  });
+}
+
+/** Saves an email in the person's own Lark mailbox as a draft; they review and send it themselves. */
+async function mailDraft(user: User, body: Record<string, unknown>) {
+  const subject = String(body.subject ?? '').trim().slice(0, 500);
+  const html = typeof body.html === 'string' ? body.html.slice(0, 200_000) : undefined;
+  const text = typeof body.text === 'string' ? body.text.slice(0, 200_000) : undefined;
+  if (!subject || (!html && !text)) throw new UserError('err.mail.incomplete');
+  return { saved: true, ...(await createDraft(user, { to: addresses(body.to), cc: addresses(body.cc), bcc: addresses(body.bcc), subject, html, text })) };
 }

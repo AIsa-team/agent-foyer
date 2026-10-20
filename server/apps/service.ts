@@ -5,6 +5,8 @@ import { decrypt, encrypt, randomToken } from '../crypto.ts';
 import { all, get, now, run, tx, type App, type User } from '../db.ts';
 import { extractTarball, takeUpload } from '../uploads.ts';
 import { canAccessApp, canManageApp } from './access.ts';
+import { openFeedbackCount, usageBySlug } from './feedback.ts';
+import { publicRequested } from './approvals.ts';
 import * as docker from './docker.ts';
 import { UserError, type Msg } from '../i18n/index.ts';
 import { localize, mergeLocalized, missingLocales, parseLocalized, type LocalizedMap } from '../localized.ts';
@@ -149,6 +151,7 @@ export async function publishApp(user: User, input: PublishInput): Promise<Publi
     });
 
     if (existing && input.visibility) setVisibility(user, slug, input.visibility, input.memberIds);
+    else if (!existing && visibility === 'public') publicRequested(getApp(slug)!, user);
     if (input.relatedSkill !== undefined) linkSkill(user, slug, input.relatedSkill);
 
     const log = (s: string) => run('UPDATE app_releases SET log = substr(log || ?, -20000) WHERE id = ?', s, releaseId);
@@ -255,6 +258,7 @@ export function setVisibility(user: User, slug: string, visibility: Visibility, 
     run('UPDATE apps SET visibility = ?, public_status = ?, updated_at = ? WHERE slug = ?', visibility, publicStatus, now(), slug);
     if (memberIds) setMembers(slug, memberIds);
   });
+  if (visibility === 'public' && app.public_status !== 'pending' && getApp(slug)!.public_status === 'pending') publicRequested(getApp(slug)!, user);
 }
 
 export function updateApp(user: User, slug: string, patch: {
@@ -364,7 +368,7 @@ function relatedSkill(skillSlug: string | null, locale: string) {
 }
 
 /** App as shown to `viewer`, with name and description in `locale`. */
-export function serializeApp(app: App, viewer: User, locale: string) {
+export function serializeApp(app: App, viewer: User, locale: string, usage?: Map<string, number>) {
   const owner = get<User>('SELECT id, name, avatar FROM users WHERE id = ?', app.owner_id);
   const manageable = canManageApp(app, viewer);
   const text = localize(app, app.i18n, locale);
@@ -390,11 +394,17 @@ export function serializeApp(app: App, viewer: User, locale: string) {
       : undefined,
     envKeys: manageable ? Object.keys(readEnv(app.slug)) : undefined,
     updatedAt: app.updated_at,
+    /** listed in the last 7 days */
+    isNew: now() - app.created_at < 7 * 86_400_000,
+    /** colleagues (not the owner) who opened it in the last 30 days */
+    usage30: usage?.get(app.slug) ?? usageBySlug().get(app.slug) ?? 0,
+    openFeedback: manageable ? openFeedbackCount(app.slug) : undefined,
   };
 }
 
 export function listAppsFor(user: User, locale: string) {
+  const usage = usageBySlug();
   return all<App>('SELECT * FROM apps ORDER BY updated_at DESC')
     .filter((a) => canAccessApp(a, user) || canManageApp(a, user))
-    .map((a) => serializeApp(a, user, locale));
+    .map((a) => serializeApp(a, user, locale, usage));
 }

@@ -17,9 +17,10 @@ import { larkFetch } from './client.ts';
 
 interface LarkPeriod { id: string; zh_name?: string; en_name?: string; status?: number }
 interface LarkProgress { percent?: number; status?: number | string }
-interface LarkKr { id: string; content?: string; progress_rate?: LarkProgress; weight?: number; kr_weight?: number }
+interface ProgressRef { id: string }
+export interface LarkKr { id: string; content?: string; progress_rate?: LarkProgress; weight?: number; kr_weight?: number; progress_record_list?: ProgressRef[] }
 interface AlignRef { id: string; owner?: { open_id?: string; user_id?: string } }
-export interface LarkObjective { id: string; content?: string; progress_rate?: LarkProgress; weight?: number; kr_list?: LarkKr[]; aligned_objective_list?: AlignRef[]; aligning_objective_list?: AlignRef[] }
+export interface LarkObjective { id: string; content?: string; progress_rate?: LarkProgress; weight?: number; kr_list?: LarkKr[]; aligned_objective_list?: AlignRef[]; aligning_objective_list?: AlignRef[]; progress_record_list?: ProgressRef[] }
 export interface LarkOkr { id: string; name?: string; period_id?: string; objective_list?: LarkObjective[] }
 
 async function call<T>(user: User, path: string): Promise<T> {
@@ -81,6 +82,22 @@ export async function okrList(user: User, target: string, locale: string, period
     if (page.length < 10 || out.length >= (r.data.total ?? 0)) break;
   }
   return out;
+}
+
+interface Element { type?: string; textRun?: { text?: string }; docsLink?: { title?: string; url?: string }; person?: { openId?: string } }
+interface Block { type?: string; paragraph?: { elements?: Element[] } }
+
+/** A progress update as plain text: paragraphs joined by line breaks, links by their titles, people as @name. */
+function progressText(blocks: Block[], nameOf: (openId: string) => string | undefined): string {
+  return blocks.map((b) => (b.paragraph?.elements ?? []).map((e) =>
+    e.textRun?.text ?? e.docsLink?.title ?? e.docsLink?.url ?? (e.person?.openId ? `@${nameOf(e.person.openId) ?? ''}` : ''),
+  ).join('')).filter((t) => t.trim()).join('\n').trim();
+}
+
+/** One progress update (written in Lark OKR on an objective or key result), read with the viewer's access. */
+export async function progressRecord(user: User, id: string, nameOf: (openId: string) => string | undefined) {
+  const r = await call<{ data: { progress_id: string; modify_time?: string; content?: { blocks?: Block[] } } }>(user, `/okr/v1/progress_records/${encodeURIComponent(id)}?user_id_type=open_id`);
+  return { id: r.data.progress_id ?? id, at: Number(r.data.modify_time) || 0, text: progressText(r.data.content?.blocks ?? [], nameOf) };
 }
 
 export const periodOf = (o: LarkOkr) => ({ id: o.period_id ?? o.id, name: o.name ?? '', range: periodRange(o.name ?? '') });

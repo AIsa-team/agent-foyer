@@ -111,6 +111,11 @@ export function AdminPage() {
                   <span style={{ width: 28, textAlign: 'center' }}>{/^https?:/.test(l.icon) ? <img src={l.icon} width={20} alt="" /> : l.icon || '🔗'}</span>
                   <span style={{ fontWeight: 500 }}>{l.name}</span>
                   <span className="small muted grow ellipsis">{l.url}</span>
+                  <label className="row small" style={{ gap: 4, whiteSpace: 'nowrap' }}>
+                    <input type="checkbox" checked={!!l.in_sidebar} disabled={busy}
+                      onChange={(e) => run(() => api.post(`/lark-links/${l.id}/sidebar`, { on: e.target.checked }), t('admin.sidebarSaved')).then(reload)} />
+                    {t('admin.inSidebar')}
+                  </label>
                   <button className="btn sm ghost danger" onClick={() => run(() => api.del(`/lark-links/${l.id}`)).then(reload)} type="button">{t('common.delete')}</button>
                 </div>
               ))}

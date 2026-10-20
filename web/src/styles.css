@@ -440,3 +440,53 @@ kbd { font: 11px/1 var(--aisa-font-mono, ui-monospace, monospace); padding: 3px 
 .home-preview-banner { background: var(--accent-soft); color: var(--accent-text); }
 .home-preview-banner .grow { color: var(--fg); }
 .skill-icon { background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--line); }
+
+/* ---------- app feedback & usage ---------- */
+.feedback-item { border-top: 1px solid var(--line); padding: 12px 0; display: flex; flex-direction: column; gap: 6px; }
+.feedback-body { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.feedback-reply { margin: 0; padding-left: 10px; border-left: 2px solid var(--line); }
+.usage-bars { display: flex; align-items: flex-end; gap: 2px; height: 56px; }
+.usage-bars span { flex: 1; background: var(--fg); border-radius: 2px 2px 0 0; min-width: 2px; }
+.usage-bars span.is-zero { background: var(--line); }
+h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left: 4px; }
+
+/* ---------- OKR progress feed ---------- */
+.okr-feed { display: flex; flex-direction: column; }
+.okr-feed__item { display: flex; gap: 10px; align-items: flex-start; padding: 12px 0; border-top: 1px solid var(--line); }
+.okr-feed__item:first-child { border-top: 0; }
+.okr-feed__text { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* ---------- home hero: search and the company mark in dots ---------- */
+.hero--home { display: flex; align-items: center; gap: 24px; }
+.hero__main { flex: 1; min-width: 0; }
+.hero-search {
+  display: flex; align-items: center; gap: 8px; width: min(420px, 100%); margin-top: 18px; padding: 9px 12px;
+  border: 1px solid var(--line); border-radius: var(--aisa-radius-md, 10px); background: var(--surface); color: var(--muted);
+  font: inherit; font-size: 14px; cursor: text; text-align: left;
+}
+.hero-search:hover { border-color: var(--fg-2, var(--muted)); }
+.hero-search kbd { font-size: 11px; }
+.hero-art {
+  flex: none; width: 240px; height: 200px; opacity: 0.5;
+  background-image: radial-gradient(circle, var(--fg) 1px, transparent 1.4px); background-size: 6px 6px;
+  -webkit-mask: url(/brand/logo.svg) center / contain no-repeat; mask: url(/brand/logo.svg) center / contain no-repeat;
+}
+@media (max-width: 760px) { .hero-art { display: none; } }
+
+/* ---------- me page: agents, apps and Skills around the person ---------- */
+.me-hero { min-height: 216px; }
+.me-orbit { position: absolute; right: 0; top: -12px; width: 240px; height: 240px; overflow: visible; pointer-events: none; }
+.me-orbit__ring { fill: none; stroke: var(--line); }
+.me-orbit__ring.dashed { stroke-dasharray: 2 4; stroke: var(--muted); opacity: .5; }
+.me-orbit__spoke { stroke: var(--fg); stroke-width: 1; }
+.me-orbit__dot { fill: var(--fg); pointer-events: auto; }
+.me-orbit__me { fill: var(--fg); }
+.me-orbit__label { font-size: 10px; fill: var(--muted); }
+.me-orbit__name { font-size: 11px; fill: var(--fg); }
+@media (max-width: 760px) { .me-orbit { display: none; } }
+
+/* ---------- sidebar shortcuts to Lark apps ---------- */
+.nav-sep { height: 1px; background: var(--line); margin: 8px 10px; }
+.nav a.nav-ext { color: var(--fg-2, var(--muted)); }
+.nav a.nav-ext svg:last-child { color: var(--muted); }
+.nav-ext__emoji { width: 16px; text-align: center; font-size: 14px; line-height: 1; }

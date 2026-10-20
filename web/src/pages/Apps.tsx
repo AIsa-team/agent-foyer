@@ -22,12 +22,15 @@ export function AppCard({ app }: { app: AppInfo }) {
             {app.host} <Icon name="external" size={12} />
           </span>
         </div>
-        {status && <span className={`badge ${app.status === 'failed' ? 'danger' : 'warn'}`}>{status}</span>}
+        {status ? <span className={`badge ${app.status === 'failed' ? 'danger' : 'warn'}`}>{status}</span> : app.isNew && <span className="badge">{t('apps.new')}</span>}
       </div>
       <div className="desc">{app.description || <span className="muted">{t('common.noDescription')}</span>}</div>
       <div className="foot">
         <span className="row"><Avatar person={app.owner} /> {app.owner?.name}</span>
-        <span>{t(`visibility.${app.visibility}` as MessageKey)}{app.publicStatus === 'pending' ? t('visibility.pendingSuffix') : ''}</span>
+        <span>
+          {app.usage30 > 0 && <>{t('apps.usage30', { n: app.usage30 })} · </>}
+          {t(`visibility.${app.visibility}` as MessageKey)}{app.publicStatus === 'pending' ? t('visibility.pendingSuffix') : ''}
+        </span>
       </div>
     </Link>
   );

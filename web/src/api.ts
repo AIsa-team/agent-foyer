@@ -24,6 +24,22 @@ export interface AppInfo {
   localized?: LocalizedMap;
   relatedSkill: { slug: string; name: string; icon: string | null } | null;
   updatedAt: number;
+  isNew: boolean;
+  /** colleagues who opened it in the last 30 days */
+  usage30: number;
+  openFeedback?: number;
+}
+
+export interface Feedback {
+  id: number;
+  app: string;
+  body: string;
+  status: 'open' | 'done' | 'declined';
+  reply: string | null;
+  at: number;
+  resolvedAt: number | null;
+  author: Person | null;
+  resolvedBy: Person | null;
 }
 
 export interface SkillInfo {
@@ -43,7 +59,7 @@ export interface SkillInfo {
   updatedAt: number;
 }
 
-export interface LarkLink { id: number; name: string; description: string; url: string; icon: string }
+export interface LarkLink { id: number; name: string; description: string; url: string; icon: string; in_sidebar?: number }
 
 export interface Agent { id: string; name: string; connectedAt: number; lastUsedAt: number }
 
@@ -56,6 +72,7 @@ export interface Me {
     /** lark: Base data, OKRs, directory and apps acting in Lark; messages: alerts can message people */
     features: { lark: boolean; messages: boolean };
   };
+  sidebarLinks: { id: number; name: string; url: string; icon: string }[];
 }
 
 export class ApiError extends Error {

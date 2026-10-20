@@ -6,7 +6,7 @@
  */
 import { all, get, now, run, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
-import { current, okrList, pct, periodOf, type LarkObjective } from './okr.ts';
+import { current, okrList, pct, periodOf, progressRecord, type LarkObjective } from './okr.ts';
 
 interface Person { id: string; name: string; avatar: string | null }
 interface Node {
@@ -63,6 +63,8 @@ async function build(viewer: User, locale: string, periodId?: string) {
 
   const byId = new Map(people.map((p) => [p.id, { id: p.id, name: p.name, avatar: p.avatar }]));
   const nodes: Node[] = [];
+  // progress updates written this period, on objectives and key results
+  const progressRefs: { id: string; owner: Person; on: string }[] = [];
   const hidden: Person[] = [];
   const without: Person[] = [];
   for (const p of people) {
@@ -75,6 +77,8 @@ async function build(viewer: User, locale: string, periodId?: string) {
       const krs = o.kr_list ?? [];
       const fromKrs = krs.length ? krs.reduce((a, k) => a + (pct(k.progress_rate) ?? 0), 0) / krs.length : 0;
       nodes.push({ id: o.id, owner: byId.get(p.id)!, content: (o.content ?? '').trim(), progress: pct(o.progress_rate) ?? fromKrs, krs: krs.length, alignsTo: (o.aligned_objective_list ?? []).map((a) => a.id) });
+      for (const r of o.progress_record_list ?? []) progressRefs.push({ id: r.id, owner: byId.get(p.id)!, on: (o.content ?? '').trim() });
+      for (const k of krs) for (const r of k.progress_record_list ?? []) progressRefs.push({ id: r.id, owner: byId.get(p.id)!, on: (k.content ?? '').trim() });
     }
   }
   // links can be recorded on either side
@@ -105,6 +109,7 @@ async function build(viewer: User, locale: string, periodId?: string) {
     const mine = nodes.filter((n) => n.owner.id === id);
     return { person: byId.get(id)!, objectives: mine.length, done: Math.round(avg(mine.map((n) => n.progress)) * 1000) / 1000 };
   }).sort((a, b) => a.done - b.done);
+  const recent = await recentProgress(viewer, progressRefs, (id) => byId.get(id)?.name);
   return {
     period: period ? { id: period.id, name: period.name, start: period.range?.start ?? null, end: period.range?.end ?? null } : null,
     periods: allPeriods.map((p) => ({ id: p.id, name: p.name })),
@@ -115,6 +120,24 @@ async function build(viewer: User, locale: string, periodId?: string) {
     unaligned: nodes.filter((n) => n.owner.id !== companyId && !n.alignsTo.length).map((n) => n.id),
     pace,
     people: { total: people.length, withOkrs: pace.length, without, hidden },
+    progress: { total: progressRefs.length, people: new Set(progressRefs.map((r) => r.owner.id)).size, recent },
     checkedAt: now(),
   };
+}
+
+/** The newest progress updates (at most 20), reading at most 200 of them, five at a time. */
+async function recentProgress(viewer: User, refs: { id: string; owner: Person; on: string }[], nameOf: (id: string) => string | undefined) {
+  const queue = refs.slice(0, 200);
+  const out: { id: string; at: number; text: string; owner: Person; on: string }[] = [];
+  await Promise.all(Array.from({ length: 5 }, async () => {
+    for (let r = queue.shift(); r; r = queue.shift()) {
+      try {
+        const rec = await progressRecord(viewer, r.id, nameOf);
+        if (rec.text) out.push({ ...rec, owner: r.owner, on: r.on.length > 80 ? r.on.slice(0, 80) + '…' : r.on });
+      } catch {
+        // one unreadable update does not hide the others
+      }
+    }
+  }));
+  return out.sort((a, b) => b.at - a.at).slice(0, 20).map((r) => ({ ...r, text: r.text.length > 400 ? r.text.slice(0, 400) + '…' : r.text }));
 }

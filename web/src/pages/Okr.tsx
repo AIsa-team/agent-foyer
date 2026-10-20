@@ -17,6 +17,7 @@ interface Board {
   unaligned: string[];
   pace: { person: Person; objectives: number; done: number }[];
   people: { total: number; withOkrs: number; without: Person[]; hidden: Person[] };
+  progress: { total: number; people: number; recent: { id: string; at: number; text: string; owner: Person; on: string }[] };
 }
 
 const pct = (n: number) => `${Math.round(n * 100)}%`;
@@ -45,7 +46,7 @@ function Branch({ n, nodes, elapsed, me, onMe, depth }: { n: Node; nodes: Node[]
 
 export function OkrPage() {
   const me = useMe();
-  const { t } = useI18n();
+  const { t, ago } = useI18n();
   const [params, setParams] = useSearchParams();
   const tab = params.get('tab') === 'me' ? 'me' : 'company';
   const [data, setData] = useState<Board | null>(null);
@@ -83,6 +84,7 @@ export function OkrPage() {
           <div>
             <div className="okr__mood">{t(data.elapsed !== null && data.elapsed >= 1 ? 'okr.closed' : 'okr.summary', { done: pct(data.done) })}</div>
             <div className="small muted">{t('okr.stats', { n: data.people.withOkrs, total: data.people.total, elapsed: data.elapsed === null ? '—' : pct(data.elapsed) })}</div>
+            <div className="small muted">{t('okr.progressStats', { n: data.progress.people, total: data.people.withOkrs, updates: data.progress.total })}</div>
           </div>
         </div>
       )}
@@ -128,6 +130,23 @@ export function OkrPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      <div className="card pad" style={{ marginTop: 16 }}>
+        <div className="section-title" style={{ marginBottom: 4 }}>{t('okr.recent')}</div>
+        {data.progress.recent.length === 0 ? <p className="small muted" style={{ margin: '6px 0 0' }}>{t('okr.recentNone')}</p> : (
+          <div className="okr-feed">
+            {data.progress.recent.map((r) => (
+              <div key={r.id} className="okr-feed__item">
+                <Avatar person={r.owner} />
+                <div className="grow">
+                  <div className="small"><b>{r.owner.name}</b> <span className="muted">{t('okr.recentOn', { on: r.on })} · {ago(r.at)}</span></div>
+                  <p className="okr-feed__text">{r.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       <div className="two-col" style={{ marginTop: 16 }}>

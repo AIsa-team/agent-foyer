@@ -17,6 +17,7 @@ import { localize } from './localized.ts';
 import { canAccessApp } from './apps/access.ts';
 import { getApp, staticRoot } from './apps/service.ts';
 import { handleAppLark, issueTicket } from './apps/larkApi.ts';
+import { recordVisit } from './apps/feedback.ts';
 import { SDK_JS } from './apps/sdk.ts';
 import { APP_COOKIE, appCookieHeader, createSession, deleteSession, parseCookies, safeReturnPath, sessionUser } from './auth/session.ts';
 import { redeemLoginCode } from './auth/routes.ts';
@@ -190,6 +191,7 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
       return send(res, 503, page(name, `<h1>${escapeHtml(name)}</h1><p>${escapeHtml(msg)}</p>`, L), { 'retry-after': '10' });
     }
     case 'ok':
+      if (r.user) recordVisit(slug, r.user.id);
       if (r.app.kind === 'static') return serveStatic(r.app, req, res);
       prepareForwardHeaders(req, r.user, slug);
       return proxy.web(req, res, { target: r.app.upstream! });
