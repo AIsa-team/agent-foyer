@@ -364,6 +364,34 @@ const MIGRATIONS: string[] = [
     updated_at INTEGER NOT NULL
   );
   `,
+  // the GitHub account each person linked (who they are on GitHub; the hub keeps no GitHub token of theirs)
+  `
+  ALTER TABLE users ADD COLUMN github_login TEXT;
+  ALTER TABLE users ADD COLUMN github_id INTEGER;
+  `,
+  // commits GitHub pushed to the hub (any branch), so work that has no pull request yet still shows up
+  `
+  CREATE TABLE github_commits (
+    repo TEXT NOT NULL,
+    sha TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    author_login TEXT,              -- lower case; null when the commit email is not tied to a GitHub account
+    author_email TEXT,
+    message TEXT NOT NULL,          -- first line
+    url TEXT NOT NULL,
+    at INTEGER NOT NULL,            -- author time (ms)
+    PRIMARY KEY (repo, sha)
+  );
+  CREATE INDEX github_commits_author ON github_commits (author_login, at);
+  `,
+  // slow reads (e.g. everyone's OKRs from Lark) kept between restarts; see cache.ts
+  `
+  CREATE TABLE cached_reads (
+    key TEXT PRIMARY KEY,
+    at INTEGER NOT NULL,
+    value TEXT NOT NULL
+  );
+  `,
 ];
 
 {
@@ -416,6 +444,7 @@ export interface User {
   locale: string | null;
   created_at: number;
   last_seen_at: number | null;
+  github_login?: string | null;
 }
 
 export interface App {

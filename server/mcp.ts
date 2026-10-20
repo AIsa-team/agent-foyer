@@ -17,6 +17,10 @@ import { okrBoard } from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
 import * as feedback from './apps/feedback.ts';
+import { githubEnabled } from './github/app.ts';
+import { githubActivity } from './github/activity.ts';
+import { githubConnectUrl } from './github/link.ts';
+import { fillDailyReport, readDailyReport, setDailyConfig } from './lark/daily.ts';
 import * as boards from './boards.ts';
 import { createUpload } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -55,7 +59,7 @@ Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase,
 Example, a Metabase question: in Metabase Admin → Authentication → API keys create a key (give it a group that only sees what is needed); set_app_env METABASE_URL and METABASE_API_KEY; a container app with GET /rows that POSTs {METABASE_URL}/api/card/<question id>/query/json with header x-api-key, caches the result 5 minutes, adds _id from the question's unique column and _url {METABASE_URL}/question/<id>, and returns {rows}.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write only after they agree. Ask for tomorrow's plan and blockers rather than inventing them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -516,6 +520,42 @@ export function buildMcpServer(user: User): McpServer {
     server.registerTool('list_okr_periods', {
       description: 'Lark OKR periods (id, name, date range when it can be read from the name).',
     }, guard(async () => ({ periods: await listPeriods(user, locale) })));
+
+    server.registerTool('get_daily_report', {
+      description: 'The team\'s daily report for a day (default: today, company time zone), read with the user\'s Lark access: each section\'s table (columns, and each person\'s row), the user\'s own rows, and who has not filled theirs in yet. Read it before fill_daily_report to see the sections and columns.',
+      inputSchema: { date: z.string().optional().describe('YYYY-MM-DD; default: today') },
+    }, guard((a: { date?: string }) => readDailyReport(user, a.date)));
+
+    server.registerTool('fill_daily_report', {
+      description: 'Writes the user\'s own rows in the daily report, as the user. Draft the text first (e.g. from github_activity and what the user tells you), show it to the user and write only after they agree. Each row names a section as returned by get_daily_report and gives the columns after the person, in order (e.g. [done yesterday, plan today, blockers]); null or "" leaves a column as it is. Use one line per item.',
+      inputSchema: {
+        date: z.string().optional().describe('YYYY-MM-DD; default: today'),
+        rows: z.array(z.object({ section: z.string(), cells: z.array(z.string().nullable()) })).min(1),
+      },
+    }, guard((a: { date?: string; rows: { section: string; cells: (string | null)[] }[] }) => fillDailyReport(user, a)));
+
+    server.registerTool('set_daily_report', {
+      description: 'Admin: where the daily reports are. folder_url is the Lark wiki page whose child pages are the reports; title is their title with a date placeholder, e.g. "团队工作日报 {MM}{DD}" ({YYYY} {MM} {DD} {M} {D}, in the company time zone).',
+      inputSchema: { folder_url: z.string(), title: z.string() },
+    }, guard((a: { folder_url: string; title: string }) => setDailyConfig(user, a.folder_url, a.title)));
+  }
+
+  if (githubEnabled()) {
+    server.registerTool('github_activity', {
+      description: `What someone did on GitHub (organisation ${config.github.org}) in a time window: commits they authored (with the branch or pull request when the work is not on the default branch), pull requests they opened or updated (open / merged / closed) and pull requests they reviewed. Use it to write a daily or weekly report, or to see what a colleague is working on. Default: the user, last 24 hours.`,
+      inputSchema: {
+        colleague: z.string().optional().describe('email, name or open_id; default: the user'),
+        since: z.string().optional().describe('ISO date-time, e.g. 2026-10-19T09:00:00+09:00; default: 24 hours ago'),
+        until: z.string().optional().describe('ISO date-time; default: now'),
+      },
+    }, guard(async (a: { colleague?: string; since?: string; until?: string }) => {
+      const person = a.colleague ? all<User>('SELECT * FROM users WHERE id = ?', resolveColleagues([a.colleague])[0])[0] : user;
+      const to = a.until ? Date.parse(a.until) : Date.now();
+      const from = a.since ? Date.parse(a.since) : to - 86_400_000;
+      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new UserError('err.github.badWindow');
+      if (!person.github_login) return { linked: false, hint: person.id === user.id ? `Ask the user to link their GitHub account once: ${githubConnectUrl('/me')}` : `${person.name} has not linked a GitHub account in the hub yet.` };
+      return githubActivity(person, from, to);
+    }));
   }
 
   server.registerTool('install_skill', {

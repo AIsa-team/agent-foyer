@@ -11,7 +11,7 @@ import type { UserTokens } from '../lark/auth.ts';
 import { larkFetch, LarkError, TOKEN_CODES } from './client.ts';
 
 /** What "connect Lark data" asks for. offline_access is what makes Lark return a refresh token. */
-export const DATA_SCOPES = ['offline_access', 'bitable:app:readonly', 'wiki:wiki:readonly', 'okr:okr:readonly'];
+export const DATA_SCOPES = ['offline_access', 'bitable:app:readonly', 'wiki:wiki:readonly', 'okr:okr:readonly', 'docx:document:readonly'];
 
 interface Row { user_id: string; access_enc: string; access_expires_at: number; refresh_enc: string | null; refresh_expires_at: number | null; scopes: string | null }
 

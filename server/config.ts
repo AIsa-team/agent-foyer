@@ -81,6 +81,23 @@ export const config = {
     userinfoUrl: env('GOOGLE_USERINFO_URL', 'https://openidconnect.googleapis.com/v1/userinfo'),
     gmailBase: env('GOOGLE_GMAIL_BASE', 'https://gmail.googleapis.com'),
   },
+  /**
+   * GitHub, so agents can read what someone committed and which pull requests they worked on (e.g. to write their
+   * daily report). A read-only GitHub App installed on the organisation does the reading; each person links their
+   * GitHub account once so their commits can be told apart. Endpoint overrides are for tests against a fake GitHub.
+   */
+  github: {
+    org: process.env.GITHUB_ORG ?? '',
+    appId: process.env.GITHUB_APP_ID ?? '',
+    clientId: process.env.GITHUB_CLIENT_ID ?? '',
+    clientSecret: process.env.GITHUB_CLIENT_SECRET ?? '',
+    /** PEM text, or a path to the .pem file (relative paths are inside the data folder) */
+    privateKey: process.env.GITHUB_APP_PRIVATE_KEY ?? '',
+    /** optional: with it, GitHub pushes to /hooks/github and work on branches without a pull request is counted too */
+    webhookSecret: process.env.GITHUB_WEBHOOK_SECRET ?? '',
+    apiBase: env('GITHUB_API_BASE', 'https://api.github.com'),
+    webBase: env('GITHUB_WEB_BASE', 'https://github.com'),
+  },
   /** Where apps save email drafts: the person's Gmail (needs GOOGLE_CLIENT_ID) or Lark Mail; "none" turns it off */
   mailDrafts: env('MAIL_DRAFTS', process.env.GOOGLE_CLIENT_ID ? 'google' : authProvider === 'lark' ? 'lark' : 'none') as 'google' | 'lark' | 'none',
   /** With no sign-in provider configured, a local "pick a user" login is used instead (DEV_LOGIN=1 forces it on plain-http test setups). */
@@ -132,6 +149,8 @@ export const paths = {
   appData: path.join(config.dataDir, 'app-data'),
   skills: path.join(config.dataDir, 'skills'),
   icons: path.join(config.dataDir, 'icons'),
+  /** the last copy of each shared Base snapshot, so a restart doesn't make the first reader wait for Lark */
+  snapshots: path.join(config.dataDir, 'snapshots'),
 };
 for (const p of Object.values(paths)) if (p !== paths.db) mkdirSync(p, { recursive: true });
 

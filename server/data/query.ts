@@ -35,10 +35,20 @@ export interface Row { key: string; series?: string; value: number }
 export interface Result { rows: Row[]; value: number; records: number; measure: string; buckets?: string[] }
 
 // ---------------------------------------------------------------- date buckets in the company time zone
+// Building a formatter is slow and charts bucket thousands of rows, so keep one, and remember each quarter-hour seen
+// (time zone offsets are whole quarter-hours, so every moment in one has the same date).
+const dayFormat = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit' });
+const seenDays = new Map<number, { y: number; m: number; d: number }>();
 const parts = (ms: number) => {
-  const p = new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone, year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(new Date(ms));
+  const key = Math.floor(ms / 900_000);
+  const hit = seenDays.get(key);
+  if (hit) return hit;
+  const p = dayFormat.formatToParts(new Date(ms));
   const get = (t: string) => Number(p.find((x) => x.type === t)?.value);
-  return { y: get('year'), m: get('month'), d: get('day') };
+  const v = { y: get('year'), m: get('month'), d: get('day') };
+  if (seenDays.size > 200_000) seenDays.clear();
+  seenDays.set(key, v);
+  return v;
 };
 const pad = (n: number) => String(n).padStart(2, '0');
 

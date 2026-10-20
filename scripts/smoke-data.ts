@@ -4,7 +4,7 @@
  * Starts its own hub with a throwaway data dir:  node scripts/smoke-data.ts
  */
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac, createVerify, generateKeyPairSync } from 'node:crypto';
 import http from 'node:http';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -66,6 +66,9 @@ const PROJECTS = [
   { id: 'recP6', f: { 项目名称: [{ type: 'text', text: '冬季投放' }], 客户: 'Circle', 状态: '进行中', 签约日期: NOW - 5 * DAY, 修改时间: NOW - 2 * DAY } },
 ];
 
+// the hub's GitHub App key; the fake GitHub checks the App's JWT against it
+const ghKeys = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncoding: { type: 'spki', format: 'pem' }, privateKeyEncoding: { type: 'pkcs8', format: 'pem' } });
+
 const lark = {
   access: new Set<string>(),
   refresh: new Set<string>(),
@@ -76,17 +79,55 @@ const lark = {
   gmail: [] as string[],
   googleEmail: 'alex@example.com',
   googleScope: '',
+  ghQueries: [] as string[],
   searchCalls: 0,
   hideApi: false,
   denyOrders: false,
   rejectOnce: false,
   advanced: false,
   writeTokens: new Set<string>(),
+  docsTokens: new Set<string>(),
+  doc: new Map<string, DocBlock>(),
   fixP1: false,
   created: [] as { table: string; fields: Record<string, unknown>; by: string }[],
   updated: [] as { record: string; fields: Record<string, unknown> }[],
 };
 let serial = 0;
+
+// the daily report: one docx per day under a wiki page, each section a table whose rows start with @someone
+interface DocBlock { block_id: string; block_type: number; parent_id: string; children?: string[]; [k: string]: unknown }
+function dailyDoc() {
+  const doc = new Map<string, DocBlock>();
+  let n = 0;
+  const add = (b: Omit<DocBlock, 'block_id'>, id = `b${++n}`) => (doc.set(id, { block_id: id, ...b } as DocBlock), id);
+  const text = (parent: string, ...elements: unknown[]) => add({ block_type: 2, parent_id: parent, text: { elements } });
+  const run = (content: string) => ({ text_run: { content } });
+  const at = (id: string) => ({ mention_user: { user_id: id } });
+  const table = (parent: string, rows: unknown[][][]) => {
+    const id = add({ block_type: 31, parent_id: parent, children: [] });
+    const cells: string[] = [];
+    for (const row of rows) for (const cell of row) {
+      const c = add({ block_type: 32, parent_id: id, children: [] });
+      doc.get(c)!.children = cell.length ? cell.map((lineEls) => text(c, ...(lineEls as unknown[]))) : [text(c)];
+      cells.push(c);
+    }
+    Object.assign(doc.get(id)!, { children: cells, table: { cells, property: { row_size: rows.length, column_size: rows[0].length } } });
+    return id;
+  };
+  const head = (cols: string[]) => cols.map((c) => [[run(c)]]);
+  const root = 'doxDaily';
+  const kids = [
+    add({ block_type: 3, parent_id: root, heading1: { elements: [run('二、项目进展')] } }),
+    add({ block_type: 4, parent_id: root, heading2: { elements: [run('社媒资源层 '), at('ou_dev_alice')] } }),
+    table(root, [head(['负责人', '昨天完成', '今天计划', '卡点和需要谁']),
+      [[[at('ou_dev_alex')]], [[run('旧的内容')]], [], []],
+      [[[at('ou_dev_alice')]], [[run('招募 47 位创作者')], [run('完善 SOP')]], [[run('继续建联')]], []]]),
+    add({ block_type: 3, parent_id: root, heading1: { elements: [run('三、日常工作')] } }),
+    table(root, [head(['负责人', '昨天完成', '今天计划', '卡点和需要谁']), [[[at('ou_dev_alex')]], [], [], []], [[[at('ou_dev_bob')]], [], [], []]]),
+  ];
+  doc.set(root, { block_id: root, block_type: 1, parent_id: '', children: kids });
+  return doc;
+}
 
 function issue(expiresIn: number) {
   const a = `u-${++serial}`;
@@ -94,6 +135,7 @@ function issue(expiresIn: number) {
   lark.access.add(a);
   lark.refresh.add(r);
   if (lark.scopesAsked.split(' ').includes('bitable:app')) lark.writeTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('docx:document')) lark.docsTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -109,6 +151,52 @@ const larkServer = http.createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(o));
   };
+  // a fake GitHub: App JWT → installation token, user sign-in, search and pull request commits
+  if (p.startsWith('/gh/')) {
+    const gp = p.slice(3);
+    const auth = req.headers.authorization ?? '';
+    if (gp === '/orgs/acme/installation' || gp === '/app/installations/7/access_tokens') {
+      const [h, b, sig] = auth.replace('Bearer ', '').split('.');
+      const ok = !!sig && createVerify('RSA-SHA256').update(`${h}.${b}`).verify(ghKeys.publicKey, Buffer.from(sig, 'base64url'));
+      if (!ok) return send({ message: 'Bad credentials' }, 401);
+      return gp.startsWith('/orgs') ? send({ id: 7 }) : send({ token: 'ghs_install', expires_at: new Date(Date.now() + 3600_000).toISOString() });
+    }
+    if (gp === '/login/oauth/authorize') {
+      const back = new URL(url.searchParams.get('redirect_uri')!);
+      back.searchParams.set('code', 'gh-code');
+      back.searchParams.set('state', url.searchParams.get('state')!);
+      res.writeHead(302, { location: back.toString() });
+      return res.end();
+    }
+    if (gp === '/login/oauth/access_token') return send(JSON.parse(raw).code === 'gh-code' ? { access_token: 'gho_user' } : { error: 'bad_verification_code' });
+    if (gp === '/user') return auth === 'Bearer gho_user' ? send({ login: 'alex-gh', id: 42 }) : send({ message: 'Bad credentials' }, 401);
+    if (gp.startsWith('/applications/')) { res.writeHead(204); return res.end(); }
+    if (auth !== 'Bearer ghs_install') return send({ message: 'Bad credentials' }, 401);
+    const iso = (ms: number) => new Date(ms).toISOString();
+    if (gp === '/search/commits') {
+      const q = url.searchParams.get('q') ?? '';
+      lark.ghQueries.push(q);
+      return send({ total_count: 1, items: q.includes('author:alex-gh') ? [
+        { sha: 'aaaaaaa1111', html_url: 'https://github.com/acme/hub/commit/aaaaaaa', repository: { full_name: 'acme/hub' }, commit: { message: 'fix: gateway keeps the session\n\nlonger text', author: { date: iso(NOW - 3600_000) } } },
+      ] : [] });
+    }
+    if (gp === '/search/issues') {
+      const q = url.searchParams.get('q') ?? '';
+      lark.ghQueries.push(q);
+      if (q.includes('reviewed-by:alex-gh')) return send({ items: [{ number: 9, title: 'Billing export', html_url: 'https://github.com/acme/billing/pull/9', state: 'open', created_at: iso(NOW - 2 * DAY), updated_at: iso(NOW - 7200_000), repository_url: 'https://api.github.com/repos/acme/billing', pull_request: { merged_at: null } }] });
+      return send({ items: q.includes('author:alex-gh') ? [
+        { number: 12, title: 'Daily report tools', html_url: 'https://github.com/acme/hub/pull/12', state: 'open', created_at: iso(NOW - DAY), updated_at: iso(NOW - 1800_000), repository_url: 'https://api.github.com/repos/acme/hub', pull_request: { merged_at: null } },
+        { number: 11, title: 'GitHub link', html_url: 'https://github.com/acme/hub/pull/11', state: 'closed', created_at: iso(NOW - 3 * DAY), updated_at: iso(NOW - 5 * 3600_000), repository_url: 'https://api.github.com/repos/acme/hub', pull_request: { merged_at: iso(NOW - 5 * 3600_000) } },
+      ] : [] });
+    }
+    if (gp === '/repos/acme/hub/pulls/12/commits') return send([
+      { sha: 'bbbbbbb2222', html_url: 'https://github.com/acme/hub/commit/bbbbbbb', author: { login: 'alex-gh' }, commit: { message: 'feat: read the daily report', author: { date: iso(NOW - 2 * 3600_000) } } },
+      { sha: 'ccccccc3333', html_url: 'https://github.com/acme/hub/commit/ccccccc', author: { login: 'someone-else' }, commit: { message: 'chore: their commit', author: { date: iso(NOW - 2 * 3600_000) } } },
+      { sha: 'ddddddd4444', html_url: 'https://github.com/acme/hub/commit/ddddddd', author: { login: 'alex-gh' }, commit: { message: 'old work', author: { date: iso(NOW - 4 * DAY) } } },
+    ]);
+    if (gp === '/repos/acme/hub/pulls/11/commits') return send([]);
+    return send({ message: 'Not Found' }, 404);
+  }
   // a fake Google: OAuth (code + PKCE), userinfo and Gmail drafts
   if (p === '/google/auth') {
     lark.googleScope = url.searchParams.get('scope') ?? '';
@@ -213,6 +301,44 @@ const larkServer = http.createServer(async (req, res) => {
     const list = only.length ? mine.filter((e) => only.includes(e.period_id)) : mine;
     return send({ code: 0, data: { okr_list: list, total: list.length } });
   }
+  if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikDaily') {
+    return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wikDaily', title: '团队日会', obj_type: 'docx', obj_token: 'doxFolder' } } });
+  }
+  if (p === '/wiki/v2/spaces/sp1/nodes' && url.searchParams.get('parent_node_token') === 'wikDaily') {
+    // two pages, the report wanted is on the second
+    return url.searchParams.get('page_token') === 'p2'
+      ? send({ code: 0, data: { items: [{ node_token: 'wik1020', obj_token: 'doxDaily', obj_type: 'docx', title: '团队工作日报 1020', space_id: 'sp1' }], has_more: false } })
+      : send({ code: 0, data: { items: [{ node_token: 'wik1019', obj_token: 'doxOld', obj_type: 'docx', title: '团队工作日报 1019', space_id: 'sp1' }], has_more: true, page_token: 'p2' } });
+  }
+  const docPath = p.match(/^\/docx\/v1\/documents\/doxDaily\/blocks(?:\/(\w+))?(\/children(?:\/batch_delete)?)?$/);
+  if (docPath) {
+    if (!userOk()) return send({ code: 99991668, msg: 'bad token' });
+    if (!lark.doc.size) lark.doc = dailyDoc();
+    const [, id, sub] = docPath;
+    if (!id) {
+      const all = [...lark.doc.values()];
+      const start = Number(url.searchParams.get('page_token') || 0);
+      const size = 5;
+      return send({ code: 0, data: { items: all.slice(start, start + size), has_more: start + size < all.length, page_token: String(start + size) } });
+    }
+    const block = lark.doc.get(id);
+    if (!block) return send({ code: 1770002, msg: 'not found' });
+    if (!sub) return send({ code: 0, data: { block } });
+    if (!lark.docsTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [docx:document]' });
+    if (sub === '/children' && req.method === 'POST') {
+      const ids = (body.children as { block_type: number; text: unknown }[]).map((c, i) => {
+        const nid = `n${++serial}_${i}`;
+        lark.doc.set(nid, { block_id: nid, parent_id: id, block_type: c.block_type, text: c.text });
+        return nid;
+      });
+      block.children!.splice(body.index ?? block.children!.length, 0, ...ids);
+      return send({ code: 0, data: { children: ids.map((i) => lark.doc.get(i)) } });
+    }
+    if (sub === '/children/batch_delete' && req.method === 'DELETE') {
+      for (const gone of block.children!.splice(body.start_index, body.end_index - body.start_index)) lark.doc.delete(gone);
+      return send({ code: 0, data: {} });
+    }
+  }
   if (p === '/wiki/v2/spaces/get_node') {
     return url.searchParams.get('token') === 'wikOrders'
       ? send({ code: 0, data: { node: { obj_type: 'bitable', obj_token: 'appOrders' } } })
@@ -278,8 +404,8 @@ async function login(userId: string) {
 }
 
 /** Runs the "connect Lark data" flow in a browser-like way, returning the final response. */
-async function connect(jar: Jar) {
-  const start = await fetch(`${HUB}/auth/lark/connect?return=/me`, { redirect: 'manual', headers: { cookie: jar.header() } });
+async function connect(jar: Jar, extra = '') {
+  const start = await fetch(`${HUB}/auth/lark/connect?return=/me${extra}`, { redirect: 'manual', headers: { cookie: jar.header() } });
   jar.store(start);
   const authorize = await fetch(start.headers.get('location')!, { redirect: 'manual' });
   const callback = await fetch(authorize.headers.get('location')!, { redirect: 'manual', headers: { cookie: jar.header() } });
@@ -340,6 +466,8 @@ const hub = spawn(process.execPath, ['server/index.ts'], {
     ALERT_QUIET_HOURS: 'off', LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`,
     GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `http://localhost:${LARK_PORT}/google/auth`, GOOGLE_TOKEN_URL: `http://localhost:${LARK_PORT}/google/token`,
     GOOGLE_USERINFO_URL: `http://localhost:${LARK_PORT}/google/userinfo`, GOOGLE_GMAIL_BASE: `http://localhost:${LARK_PORT}`,
+    GITHUB_ORG: 'acme', GITHUB_APP_ID: '123', GITHUB_CLIENT_ID: 'Iv1.gh', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_APP_PRIVATE_KEY: ghKeys.privateKey, GITHUB_WEBHOOK_SECRET: 'hook-secret',
+    GITHUB_API_BASE: `http://localhost:${LARK_PORT}/gh`, GITHUB_WEB_BASE: `http://localhost:${LARK_PORT}/gh`,
   },
   stdio: ['ignore', 'pipe', 'pipe'],
 });
@@ -677,6 +805,13 @@ try {
   await tool(alex.token, 'save_data_source', { id: 'secret-signups', title: { en: 'Secret' }, app: 'secret-metrics', path: '/rows.json' });
   const hiddenChart = await api(alice.jar, 'POST', '/data/module', { source: 'secret-signups', kind: 'bar', query: { measure: { op: 'count' }, groupBy: 'country' } });
   check(hiddenChart.status === 400 && hiddenChart.body.code === 'err.data.deniedSource' && String((hiddenChart.body.params as { url: string }).url).endsWith('/apps/secret-metrics'), 'a private app\'s data stays private');
+
+  // the fireflies on the home page: today's new apps the viewer can open, and how many people used the hub
+  const pulseAlex = (await api(alex.jar, 'GET', '/home')).body.pulse as { people: number; events: { kind: string; url: string; who: string }[] };
+  const pulseBob = (await api(bob.jar, 'GET', '/home')).body.pulse as { people: number; events: { kind: string; url: string }[] };
+  check(pulseAlex.events.some((e) => e.url === '/apps/secret-metrics' && e.kind === 'appNew' && e.who === 'Alex') && pulseAlex.events.some((e) => e.url === '/apps/invoice'), "today's new apps show on the owner's home");
+  check(!pulseBob.events.some((e) => e.url === '/apps/secret-metrics') && pulseBob.events.some((e) => e.url === '/apps/invoice'), 'a private app is not announced to colleagues who cannot open it');
+  check(pulseAlex.people >= 3 && (pulseAlex as unknown as { who: { name: string }[] }).who.some((p) => p.name === '林小雨'), 'and who used the hub today');
   const appCheck = await tool(alex.token, 'save_check', { source: 'signups', title: { 'zh-CN': '付费但金额为 0', en: 'Paid with no amount' }, level: 'error', owner_field: 'owner', label_fields: ['country'],
     spec: { kind: 'rows', all: [{ field: 'plan', op: 'is', value: 'free' }, { field: 'registered_at', op: 'olderThanDays', value: 15 }] } });
   check(appCheck.issues > 0 && appCheck.sample?.some((x: { owners: string[] }) => x.owners[0] === '林小雨'), 'data checks run on app rows and assign owners by name');
@@ -763,6 +898,74 @@ try {
   check((await api(alex.jar, 'POST', '/admin/apps/open-demo/public', { approve: true })).status === 200, 'the admin approves it');
   await new Promise((r) => setTimeout(r, 300));
   check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice', 'and the owner is told');
+
+  // GitHub: link the account once, then agents read commits, pull requests and reviews through the hub
+  const notLinked = await tool(alex.token, 'github_activity', {});
+  check(notLinked.linked === false && String(notLinked.hint).includes('/auth/github/connect'), 'before linking, github_activity says how to link GitHub');
+  const ghStart = await fetch(`${HUB}/auth/github/connect?return=/me`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
+  alex.jar.store(ghStart);
+  const ghAuth = await fetch(ghStart.headers.get('location')!, { redirect: 'manual' });
+  const ghBack = await fetch(ghAuth.headers.get('location')!, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
+  check(ghBack.status === 302 && ghBack.headers.get('location') === '/me', 'linking GitHub returns to the Me page');
+  const ghStatus = (await api(alex.jar, 'GET', '/github/status')).body;
+  check(ghStatus.available === true && ghStatus.login === 'alex-gh' && ghStatus.org === 'acme', 'the Me page shows the linked GitHub username');
+  const act = await tool(alex.token, 'github_activity', {});
+  check(act.login === 'alex-gh' && act.commits?.map((c: { sha: string }) => c.sha).join() === 'aaaaaaa,bbbbbbb', "commits: the person's own, on the default branch and inside their pull request, within the window");
+  check(act.commits[0].message === 'fix: gateway keeps the session' && act.commits[1].pr === 12, 'with the first line of the message, and the pull request for branch work');
+  check(act.pullRequests?.map((p: { number: number; state: string }) => `${p.number}:${p.state}`).join() === '12:open,11:merged' && act.reviewed?.[0]?.number === 9, 'pull requests opened (open / merged) and reviewed');
+  check(lark.ghQueries.some((q) => q.startsWith('org:acme author:alex-gh author-date:')), 'searches stay inside the organisation');
+  const aliceGh = await tool(alex.token, 'github_activity', { colleague: '林小雨' });
+  check(aliceGh.linked === false, "a colleague who has not linked GitHub is reported as such");
+  check(String((await tool(alex.token, 'github_activity', { since: '2026-10-20T10:00:00Z', until: '2026-10-19T10:00:00Z' })).error).length > 0, 'a backwards window is refused');
+
+  // GitHub pushes to the hub: branch work without a pull request is counted too
+  const push = (body: unknown, secret = 'hook-secret', event = 'push') => {
+    const raw = JSON.stringify(body);
+    const sig = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
+    return fetch(`${HUB}/hooks/github`, { method: 'POST', body: raw, headers: { 'content-type': 'application/json', 'x-github-event': event, 'x-hub-signature-256': sig } });
+  };
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const pushBody = (owner: string, ref: string) => ({
+    ref, repository: { full_name: `${owner}/hub`, owner: { login: owner } },
+    commits: [
+      { id: 'eeeeeee5555', message: 'wip: daily report writer\n\nmore', timestamp: iso(NOW - 3 * 3600_000), url: 'https://github.com/acme/hub/commit/eeeeeee', author: { email: 'alex@x.test', username: 'Alex-GH' } },
+      { id: 'aaaaaaa1111', message: 'fix: gateway keeps the session', timestamp: iso(NOW - 3600_000), url: 'https://github.com/acme/hub/commit/aaaaaaa', author: { username: 'alex-gh' } },
+      { id: 'fffffff6666', message: 'someone else', timestamp: iso(NOW - 3600_000), url: 'https://github.com/acme/hub/commit/fffffff', author: { username: 'other' } },
+    ],
+  });
+  check((await push(pushBody('acme', 'refs/heads/feature/report'), 'wrong')).status === 401, 'a webhook delivery with a bad signature is refused');
+  check((await (await push(pushBody('elsewhere', 'refs/heads/x'))).json()).stored === 0, 'pushes from repositories outside the organisation are ignored');
+  check((await (await push({ zen: 'hi' }, 'hook-secret', 'ping')).json()).ok === true, 'the ping GitHub sends on setup is accepted');
+  check((await (await push(pushBody('acme', 'refs/heads/feature/report'))).json()).stored === 3, 'a push stores its commits');
+  check((await (await push(pushBody('acme', 'refs/heads/feature/report'))).json()).stored === 0, 'a redelivered push is not counted twice');
+  const act2 = await tool(alex.token, 'github_activity', {});
+  check(act2.commits?.map((c: { sha: string }) => c.sha).join() === 'aaaaaaa,bbbbbbb,eeeeeee', 'pushed branch commits join the search results, without duplicates');
+  check(act2.commits.find((c: { sha: string }) => c.sha === 'eeeeeee')?.branch === 'feature/report' && act2.commits[2].message === 'wip: daily report writer', 'with their branch and first line');
+
+  // the daily report: find the day's doc under a wiki page, read the tables, fill in one's own rows as oneself
+  await connect(alex.jar);
+  await connect(alice.jar);
+  check(String((await tool(alex.token, 'get_daily_report', {})).error).includes('set_daily_report'), 'before an admin sets it up, the daily report says how');
+  check(String((await tool(bob.token, 'set_daily_report', { folder_url: 'https://x.larksuite.com/wiki/wikDaily', title: '团队工作日报 {MM}{DD}' })).error).length > 0, 'only admins say where the daily report is');
+  const daily = await tool(alex.token, 'set_daily_report', { folder_url: 'https://x.larksuite.com/wiki/wikDaily', title: '团队工作日报 {MM}{DD}' });
+  check(daily.folderTitle === '团队日会' && daily.space === 'sp1', 'an admin points the hub at the wiki page the reports live under');
+  const report = await tool(alex.token, 'get_daily_report', { date: '2026-10-20' });
+  check(report.title === '团队工作日报 1020' && report.url === 'https://x.larksuite.com/wiki/wik1020' && report.sections?.map((x: { name: string }) => x.name).join() === '社媒资源层,日常工作', "the day's report is found (on the second page) and its tables named by their headings");
+  check(report.sections[0].columns.join() === '昨天完成,今天计划,卡点和需要谁' && report.sections[0].rows[1].person === '林小雨' && report.sections[0].rows[1].cells[0] === '招募 47 位创作者\n完善 SOP', 'each row is a person, with the text of each cell (read across pages of blocks)');
+  check(report.mine?.length === 2 && report.mine[0].cells[0] === '旧的内容', "the asking person's own rows");
+  check(JSON.stringify(report.notFilledYet) === '["周明"]', 'and who has not filled theirs in yet');
+  check(String((await tool(alex.token, 'get_daily_report', { date: '2026-10-21' })).error).includes('团队工作日报 1021'), 'a day without a report says which title it looked for');
+  const fillArgs = { date: '2026-10-20', rows: [{ section: '社媒', cells: ['写完日报工具\n修好网关', '接 GitHub webhook', null] }, { section: '日常工作', cells: ['', '评审 PR', ''] }] };
+  check(String((await tool(alex.token, 'fill_daily_report', fillArgs)).error).includes('docs=1'), 'writing first asks the person to let the hub edit Lark documents');
+  await connect(alex.jar, '&docs=1');
+  check(lark.scopesAsked.split(' ').includes('docx:document') && lark.scopesAsked.split(' ').includes('docx:document:readonly'), 'that connection asks for document editing on top of reading');
+  const filled = await tool(alex.token, 'fill_daily_report', fillArgs);
+  check(filled.written?.map((w: { section: string; columns: string[] }) => `${w.section}:${w.columns.join('/')}`).join() === '社媒资源层:昨天完成/今天计划,日常工作:今天计划', 'only the columns given are written, in the sections named');
+  const after = await tool(alex.token, 'get_daily_report', { date: '2026-10-20' });
+  check(after.mine[0].cells.join('|') === '写完日报工具\n修好网关|接 GitHub webhook|' && after.mine[1].cells.join('|') === '|评审 PR|', 'the cells now hold the new text, one line per paragraph');
+  check(after.sections[0].rows[1].cells[0] === '招募 47 位创作者\n完善 SOP', "colleagues' rows are untouched");
+  check(String((await tool(alex.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '财务', cells: ['x'] }] })).error).includes('社媒资源层'), 'an unknown section lists the ones there are');
+  check(String((await tool(alice.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '日常工作', cells: ['x'] }] })).error).length > 0, 'nobody writes into a table without a row of their own');
 
   // an admin pins a Lark shortcut under the sidebar navigation
   await api(alex.jar, 'POST', '/lark-links', { name: '审批', url: 'https://applink.larksuite.com/approval', icon: '✅' });

@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from 'react';
+import { lazy, StrictMode, Suspense, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, NavLink, Route, Routes } from 'react-router';
 import { api, type Me } from './api';
@@ -6,18 +6,20 @@ import { I18nProvider, LocaleSelect, useI18n } from './i18n';
 import { Avatar, Icon, Loading, MeProvider, ToastHost, useMe } from './ui';
 import { HomePage } from './pages/Home';
 import { AppsPage } from './pages/Apps';
-import { AppDetailPage } from './pages/AppDetail';
 import { SkillsPage } from './pages/Skills';
-import { SkillDetailPage } from './pages/SkillDetail';
-import { MePage } from './pages/MePage';
-import { AdminPage } from './pages/Admin';
-import { LibraryPage } from './pages/Library';
 import { IssuesPage } from './pages/Issues';
-import { DataPage } from './pages/Data';
-import { OrgPage } from './pages/Org';
-import { OkrPage } from './pages/Okr';
 import { SearchBox } from './Search';
 import './styles.css';
+
+// pages other than home load when first opened, so the first visit downloads less
+const AppDetailPage = lazy(() => import('./pages/AppDetail').then((m) => ({ default: m.AppDetailPage })));
+const SkillDetailPage = lazy(() => import('./pages/SkillDetail').then((m) => ({ default: m.SkillDetailPage })));
+const MePage = lazy(() => import('./pages/MePage').then((m) => ({ default: m.MePage })));
+const AdminPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AdminPage })));
+const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
+const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.DataPage })));
+const OrgPage = lazy(() => import('./pages/Org').then((m) => ({ default: m.OrgPage })));
+const OkrPage = lazy(() => import('./pages/Okr').then((m) => ({ default: m.OkrPage })));
 
 /** The company's brand colour (HUB_ACCENT) over the default theme, with its hover, pressed and soft shades. */
 function applyAccent(accent: string | null) {
@@ -89,6 +91,7 @@ function Shell() {
         <LocaleSelect />
       </nav>
       <main className="main">
+        <Suspense fallback={<Loading />}>
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/library" element={<LibraryPage />} />
@@ -104,6 +107,7 @@ function Shell() {
           <Route path="/admin" element={<AdminPage />} />
           <Route path="*" element={<div className="empty"><b>{t('common.pageNotFound')}</b></div>} />
         </Routes>
+        </Suspense>
       </main>
     </div>
   );

@@ -5,7 +5,7 @@ import { useI18n, type MessageKey } from '../i18n';
 import { connectPrompt, publishPrompt } from '../prompts';
 import { AppIcon, Avatar, CopyBox, CopyButton, Dialog, Loading, Step, useAction, useApi, useMe } from '../ui';
 
-interface Profile { apps: AppInfo[]; skills: SkillInfo[]; installedSkills: number; agents: Agent[] }
+interface Profile { apps: AppInfo[]; skills: SkillInfo[]; installedSkills: number; agents: Agent[]; radar: { axes: Axis[]; people: number } }
 interface LarkStatus { connected: boolean; expired?: boolean; until?: number; connectUrl: string; available: boolean }
 
 /** The person's own Lark data connection: home charts, alerts and agents read Base tables with it. */
@@ -57,6 +57,28 @@ function GoogleCard() {
   );
 }
 
+/** Which GitHub account is this person's, so agents can read their commits and pull requests (e.g. for the daily report). */
+function GitHubCard() {
+  const { t } = useI18n();
+  const { data, reload } = useApi<{ available: boolean; org: string; login: string | null; connectUrl: string }>('/github/status');
+  const { busy, run } = useAction();
+  if (!data?.available) return null;
+  return (
+    <div className="card pad" style={{ marginTop: 12 }}>
+      <div className="section-title" style={{ marginBottom: 8 }}>
+        GitHub
+        {data.login && <span className="badge ok" style={{ marginLeft: 8 }}>{t('me.connected')}</span>}
+        {data.login && <span className="small muted mono" style={{ marginLeft: 8, fontWeight: 400 }}>@{data.login}</span>}
+        <span className="spacer" />
+        {data.login
+          ? <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => api.post('/github/disconnect'), t('me.github.disconnected')).then(reload)} type="button">{t('me.github.disconnect')}</button>
+          : <a className="btn sm" href={data.connectUrl}>{t('me.github.connect')}</a>}
+      </div>
+      <p className="small muted" style={{ margin: 0 }}>{t(data.login ? 'me.github.connectedBody' : 'me.github.body', { org: data.org })}</p>
+    </div>
+  );
+}
+
 function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const me = useMe();
   const { t } = useI18n();
@@ -86,43 +108,64 @@ function TokenDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (
   );
 }
 
+interface Axis { key: string; value: number; max: number; top: number; median: number }
+
+/** Rough width of 10px legend text (CJK characters are about twice as wide as Latin ones). */
+const textWidth = (s: string) => [...s].reduce((w, ch) => w + (ch.codePointAt(0)! > 0x2e80 ? 10 : 6.4), 0);
+
 /**
- * The person at the centre, their agents on the inner ring, apps on the middle one and Skills on the outer one.
- * Agents are named; apps and Skills are dots with their name on hover.
+ * How far the person has come with the hub, on six axes. Full scale is a goal, or the colleague with the most once
+ * someone passes it (connections: all there are). The shape starts from a small core so an empty axis still reads as a
+ * point on its spoke; the median of everyone who signed in is shown once there are enough people for it to mean much.
  */
-function Orbit({ agents, apps, skills }: { agents: string[]; apps: string[]; skills: string[] }) {
+function Radar({ axes, people }: { axes: Axis[]; people: number }) {
   const { t } = useI18n();
+  if (axes.length < 3) return null;
   const size = 240;
-  const c = size / 2;
-  const rings = [
-    { r: 38, items: agents, label: t('me.orbit.agents', { n: agents.length }), named: true },
-    { r: 70, items: apps, label: t('me.orbit.apps', { n: apps.length }), named: false },
-    { r: 102, items: skills, label: t('me.orbit.skills', { n: skills.length }), named: false },
-  ];
-  // spread items over the ring, leaving the upper-left quarter (where the ring labels are) free
-  const at = (r: number, i: number, n: number, offset: number) => {
-    const a = -Math.PI / 3 + offset + ((i + 0.5) / Math.max(n, 1)) * (Math.PI * 1.4);
-    return { x: c + r * Math.cos(a), y: c + r * Math.sin(a), a };
+  // a little left of centre, so labels on the right stay inside the page
+  const cx = 108;
+  const cy = 120;
+  const R = 62;
+  const CORE = 0.14;
+  const radius = (ratio: number) => R * (CORE + (1 - CORE) * Math.min(1, Math.max(0, ratio)));
+  const at = (i: number, r: number) => {
+    const a = -Math.PI / 2 + (i / axes.length) * Math.PI * 2;
+    return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a), cos: Math.cos(a), sin: Math.sin(a) };
   };
+  const ratio = (v: number, max: number) => (max > 0 ? v / max : 0);
+  const shape = (pick: (x: Axis) => number) => axes.map((x, i) => at(i, radius(ratio(pick(x), x.max)))).map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const name = (key: string) => t(`me.radar.${key}` as MessageKey);
+  const showMedian = people >= 3;
   return (
-    <svg className="me-orbit" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={rings.map((g) => g.label).join(' · ')}>
-      {rings.map((g, gi) => (
-        <g key={gi}>
-          <circle cx={c} cy={c} r={g.r} className={`me-orbit__ring ${gi ? 'dashed' : ''}`} />
-          <text x={c - g.r * 0.71 - 4} y={c - g.r * 0.71 - 4} textAnchor="end" className="me-orbit__label">{g.label}</text>
-          {g.items.map((name, i) => {
-            const p = at(g.r, i, g.items.length, gi * 0.15);
-            return (
-              <g key={i}>
-                {g.named && <line x1={c} y1={c} x2={p.x} y2={p.y} className="me-orbit__spoke" />}
-                <rect x={p.x - 3.5} y={p.y - 3.5} width={7} height={7} className="me-orbit__dot"><title>{name}</title></rect>
-                {g.named && <text x={p.x + (Math.cos(p.a) >= 0 ? 8 : -8)} y={p.y + 4} textAnchor={Math.cos(p.a) >= 0 ? 'start' : 'end'} className="me-orbit__name">{name}</text>}
-              </g>
-            );
-          })}
+    <svg className="me-radar" viewBox={`0 0 ${size} ${size}`} role="img" aria-label={t('me.radar.aria', { list: axes.map((x) => `${name(x.key)} ${x.value}`).join(' · ') })}>
+      {[0.25, 0.5, 0.75, 1].map((g) => <circle key={g} cx={cx} cy={cy} r={radius(g)} className={`me-radar__ring${g === 1 ? ' outer' : ''}`} />)}
+      {axes.map((_, i) => { const a = at(i, radius(0)); const b = at(i, R); return <line key={i} x1={a.x} y1={a.y} x2={b.x} y2={b.y} className="me-radar__spoke" />; })}
+      {showMedian && <polygon points={shape((x) => x.median)} className="me-radar__median" />}
+      <polygon points={shape((x) => x.value)} className="me-radar__me" />
+      {axes.map((x, i) => {
+        const p = at(i, radius(ratio(x.value, x.max)));
+        const l = at(i, R + 12);
+        const anchor = l.cos > 0.3 ? 'start' : l.cos < -0.3 ? 'end' : 'middle';
+        // the value over the name, pushed outwards so the block clears the outer ring
+        const mid = l.y + l.sin * 8;
+        return (
+          <g key={x.key}>
+            <circle cx={p.x} cy={p.y} r={2.6} className="me-radar__dot" />
+            <g className="me-radar__hit">
+              <title>{t(`me.radar.${x.key}.tip` as MessageKey, { value: x.value, max: x.max, top: x.top, median: Math.round(x.median * 10) / 10 })}</title>
+              <rect x={l.x - (anchor === 'end' ? 64 : anchor === 'middle' ? 32 : 0)} y={mid - 14} width={64} height={28} />
+              <text x={l.x} y={mid - 1} textAnchor={anchor} className="me-radar__value">{x.value}</text>
+              <text x={l.x} y={mid + 11} textAnchor={anchor} className="me-radar__label">{name(x.key)}</text>
+            </g>
+          </g>
+        );
+      })}
+      {showMedian && (
+        <g className="me-radar__legend" transform={`translate(${size}, 26)`}>
+          <text x={0} y={0} textAnchor="end">{t('me.radar.median')}</text>
+          <line x1={-textWidth(t('me.radar.median')) - 16} y1={-3} x2={-textWidth(t('me.radar.median')) - 4} y2={-3} className="me-radar__median" />
         </g>
-      ))}
-      <circle cx={c} cy={c} r={5} className="me-orbit__me" />
+      )}
     </svg>
   );
 }
@@ -142,7 +185,7 @@ export function MePage() {
   return (
     <>
       <div className="hero me-hero" style={{ paddingTop: 8 }}>
-        <Orbit agents={data.agents.map((a) => a.name)} apps={data.apps.map((a) => a.name)} skills={data.skills.map((s) => s.name)} />
+        <Radar axes={data.radar.axes} people={data.radar.people} />
         <span className="muted small">{me.user.role === 'admin' ? t('nav.roleAdmin') : me.user.email}</span>
         <div className="row" style={{ gap: 14, marginTop: 6 }}>
           <Avatar person={me.user} size="lg" />
@@ -168,6 +211,7 @@ export function MePage() {
       </div>
       {me.hub.features.lark && <LarkDataCard />}
       {me.hub.mailbox === 'Gmail' && <GoogleCard />}
+      <GitHubCard />
       {data.agents.length > 0 && (
         <div className="grid" style={{ marginTop: 12 }}>
           {data.agents.map((a) => (

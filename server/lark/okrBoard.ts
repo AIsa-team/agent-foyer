@@ -1,10 +1,12 @@
 /**
  * The company OKR page: everyone's objectives for one period, how they align, and the team's pace. Read with the
- * viewer's own Lark access (people whose OKRs Lark does not show them are listed as hidden), cached for 10 minutes.
+ * viewer's own Lark access (people whose OKRs Lark does not show them are listed as hidden). Served from a cache that
+ * is refreshed in the background after 10 minutes, so the page never waits on Lark unless nothing has been read yet.
  * The company's objectives are those of the "company OKR owner": an admin can name them; otherwise it is whoever
  * the most objectives align to (usually the CEO).
  */
 import { all, get, now, run, type User } from '../db.ts';
+import { cachedRead, forgetReads } from '../cache.ts';
 import { UserError } from '../i18n/index.ts';
 import { current, okrList, pct, periodOf, progressRecord, type LarkObjective } from './okr.ts';
 
@@ -14,7 +16,6 @@ interface Node {
   alignsTo: string[];   // objective ids this one supports
 }
 
-const cache = new Map<string, { at: number; value: Promise<Board> }>();
 type Board = Awaited<ReturnType<typeof build>>;
 
 export function companyOwner(): string | null {
@@ -27,17 +28,12 @@ export function setCompanyOwner(user: User, ownerId: string | null) {
     run(`INSERT INTO settings (key, value, updated_at) VALUES ('okr.companyOwner', ?, ?)
          ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, ownerId, now());
   } else run("DELETE FROM settings WHERE key = 'okr.companyOwner'");
-  cache.clear();
+  forgetReads('okr-board|');
 }
 
 export function okrBoard(viewer: User, locale: string, periodId?: string, fresh = false): Promise<Board> {
-  const key = `${viewer.id}\u0000${locale}\u0000${periodId ?? ''}`;
-  const hit = cache.get(key);
-  if (hit && !fresh && now() - hit.at < 600_000) return hit.value;
-  const value = build(viewer, locale, periodId);
-  cache.set(key, { at: now(), value });
-  value.catch(() => cache.delete(key));
-  return value;
+  const key = `okr-board|${viewer.id}|${locale}|${periodId ?? ''}`;
+  return cachedRead(key, { fresh: 600_000, keep: 7 * 86_400_000, force: fresh }, () => build(viewer, locale, periodId));
 }
 
 async function build(viewer: User, locale: string, periodId?: string) {

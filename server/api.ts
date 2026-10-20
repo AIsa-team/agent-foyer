@@ -1,10 +1,14 @@
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
 import * as tar from 'tar';
+import { profileRadar } from './radar.ts';
+import { homePulse } from './pulse.ts';
 import { config, loginName } from './config.ts';
 import { messenger } from './notify.ts';
 import { mailboxName } from './mail.ts';
 import { forgetGoogle, googleConnection, googleConnectUrl } from './google/auth.ts';
+import { githubEnabled } from './github/app.ts';
+import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
@@ -18,6 +22,7 @@ import * as alerts from './data/alerts.ts';
 import { querySchema, CHART_KINDS } from './data/query.ts';
 import { connection, connectUrl, forgetTokens } from './lark/userToken.ts';
 import { userOkrs } from './lark/okr.ts';
+import { cachedRead, forgetReads } from './cache.ts';
 import * as okrBoard from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
@@ -38,6 +43,8 @@ api.use('*', async (c, next) => {
     if (origin && origin !== config.hubUrl) return c.json({ error: 'bad origin' }, 403);
     if (!(c.req.header('content-type') ?? '').includes('application/json')) return c.json({ error: 'JSON only' }, 415);
   }
+  // "last seen" feeds who used the hub today; written at most every ten minutes per person
+  if (!user.last_seen_at || now() - user.last_seen_at > 600_000) run('UPDATE users SET last_seen_at = ? WHERE id = ?', now(), user.id);
   c.set('user', user);
   await next();
 });
@@ -102,6 +109,7 @@ api.get('/profile', (c) => {
     skills: mySkills,
     installedSkills: installed,
     agents: agents.map((a) => ({ id: a.client_id, name: a.client_name, connectedAt: a.connected_at, lastUsedAt: a.last_used_at })),
+    radar: profileRadar(u.id),
   });
 });
 
@@ -121,6 +129,7 @@ api.get('/home', (c) => {
     resources: policies.slice(0, 6),
     myDepartments: homepage.userDepartments(u, L),
     editableDepartments: homepage.editableDepartments(u, L),
+    pulse: homePulse(u, L),
   });
 });
 
@@ -133,6 +142,16 @@ api.get('/home/source', async (c) => {
 
 // ---- Lark data: each person's own connection, Base data for home modules, alerts ----
 api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: true }));
+// ---- GitHub: who each person is on GitHub ----
+api.get('/github/status', (c) => {
+  const u = c.get('user');
+  return c.json({ available: githubEnabled(), org: config.github.org, login: u.github_login ?? null, connectUrl: githubConnectUrl('/me') });
+});
+api.post('/github/disconnect', (c) => {
+  unlinkGitHub(c.get('user'));
+  return c.json({ ok: true });
+});
+
 // ---- Google: each person's own connection, for apps that save Gmail drafts ----
 api.get('/google/status', (c) => c.json({ ...googleConnection(c.get('user').id), available: config.mailDrafts === 'google', connectUrl: googleConnectUrl('/me') }));
 api.post('/google/disconnect', (c) => {
@@ -141,6 +160,9 @@ api.post('/google/disconnect', (c) => {
 });
 api.post('/lark/disconnect', (c) => {
   forgetTokens(c.get('user').id);
+  // what was read with that access goes too
+  forgetReads(`okr|${c.get('user').id}|`);
+  forgetReads(`okr-board|${c.get('user').id}|`);
   return c.json({ ok: true });
 });
 api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c)) }));
@@ -164,6 +186,14 @@ api.get('/search', (c) => c.json(search(c.get('user'), c.req.query('q') ?? '', l
 
 // ---- data checks ("异常项") ----
 api.get('/issues', async (c) => c.json(await checks.issuesFor(c.get('user'), localeOf(c))));
+/** Just what the home page shows: per check, how many open issues are the viewer's (the full list is large). */
+api.get('/issues/mine', async (c) => {
+  const all = await checks.issuesFor(c.get('user'), localeOf(c));
+  return c.json({
+    lastRun: all.lastRun,
+    checks: all.checks.map((k) => ({ id: k.id, title: k.title, level: k.level, mine: k.rows.filter((r) => r.mine && !r.exception).length })).filter((k) => k.mine),
+  });
+});
 /** "Check again": runs every check now; a run that finished in the last minute is reused. */
 api.post('/issues/run', async (c) => {
   const last = checks.lastRun();
@@ -188,7 +218,10 @@ api.get('/okr', async (c) => {
   const ref = c.req.query('user');
   const target = ref ? get<{ id: string }>('SELECT id FROM users WHERE id = ? OR lower(email) = lower(?)', ref, ref)?.id : undefined;
   if (ref && !target) throw new UserError('err.colleagueNotFound', { query: ref });
-  return c.json(await userOkrs(c.get('user'), { userId: target, periodId: c.req.query('period') || undefined, locale: localeOf(c) }));
+  const u = c.get('user'), period = c.req.query('period') || undefined, L = localeOf(c);
+  // the home page's OKR card: served at once from the last read, refreshed in the background after 5 minutes
+  return c.json(await cachedRead(`okr|${u.id}|${target ?? u.id}|${period ?? ''}|${L}`, { fresh: 300_000, keep: 7 * 86_400_000 },
+    () => userOkrs(u, { userId: target, periodId: period, locale: L })));
 });
 
 // ---- apps ----

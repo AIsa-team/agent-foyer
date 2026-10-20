@@ -8,6 +8,7 @@ import { config, paths } from './config.ts';
 import { verifyToken } from './crypto.ts';
 import { api } from './api.ts';
 import { authRoutes } from './auth/routes.ts';
+import { githubHook } from './github/hook.ts';
 import { authenticateBearer, MCP_PATH, oauth, wwwAuthenticate } from './auth/oauth.ts';
 import { seedDevUsers } from './auth/users.ts';
 import { handleMcp } from './mcp.ts';
@@ -21,6 +22,7 @@ import { startCheckScheduler } from './data/checks.ts';
 import { syncDirectory } from './lark/auth.ts';
 import { startSnapshotRefresher } from './data/sources.ts';
 import { run, now } from './db.ts';
+import { pruneReads } from './cache.ts';
 
 seedDevUsers();
 reconcileInterruptedBuilds();
@@ -29,6 +31,7 @@ const app = new Hono();
 
 app.route('/', oauth);
 app.route('/', authRoutes);
+app.route('/', githubHook);
 app.route('/api', api);
 
 app.all(MCP_PATH, async (c) => {
@@ -151,4 +154,5 @@ setInterval(() => {
   run('DELETE FROM sessions WHERE expires_at < ?', now());
   run('DELETE FROM oauth_codes WHERE expires_at < ?', now());
   run('DELETE FROM tokens WHERE expires_at IS NOT NULL AND expires_at < ?', now());
+  pruneReads(7 * 86_400_000);
 }, 3600_000).unref();

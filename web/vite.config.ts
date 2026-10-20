@@ -6,7 +6,11 @@ const hub = process.env.HUB_DEV_URL ?? 'http://localhost:8080';
 export default defineConfig({
   root: import.meta.dirname,
   plugins: [react()],
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist', emptyOutDir: true,
+    // React and the router change rarely: in their own file they stay cached in browsers across hub updates
+    rolldownOptions: { output: { codeSplitting: { groups: [{ name: 'vendor', test: /node_modules/ }] } } },
+  },
   server: {
     port: 5173,
     proxy: {

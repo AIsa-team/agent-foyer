@@ -66,6 +66,8 @@ Add these **user** scopes (user_access_token):
 | `wiki:wiki:readonly` | resolve a Base that lives in a wiki to its table |
 | `bitable:app` **optional** | only for apps that **write** to Base (e.g. an invoice helper adding a request); only requested in such apps, when the person using it agrees |
 | `okr:okr:readonly` | "My OKRs" on the home page and agents reading OKRs, as far as this person can see them in Lark OKR |
+| `docx:document:readonly` | agents reading Lark documents (policies, SOPs, daily reports) the person can open |
+| `docx:document` **optional** | an agent filling in the person's own rows of the daily report; only requested when someone first does that |
 
 Alerts are sent by the hub's bot in Lark:
 

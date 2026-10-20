@@ -10,7 +10,10 @@
  *
  * Both kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
  */
-import { appUrl, config } from '../config.ts';
+import { existsSync, readFileSync, rmSync, writeFile } from 'node:fs';
+import path from 'node:path';
+import { gunzipSync, gzip } from 'node:zlib';
+import { appUrl, config, paths } from '../config.ts';
 import { get, all, now, run, type App, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
@@ -168,6 +171,7 @@ const cache = new Map<string, { at: number; value: Promise<Result> }>();
 const tables = new Map<string, { at: number; value: Promise<Table> }>();
 function clearCache(id: string) {
   snapshots.delete(id);
+  rmSync(snapshotFile(id), { force: true });
   for (const m of [cache, tables, readable]) for (const k of m.keys()) if (k.startsWith(`${id}\u0000`)) m.delete(k);
 }
 
@@ -180,6 +184,25 @@ function clearCache(id: string) {
  */
 const SNAPSHOT_TTL = 5 * 60_000;
 const snapshots = new Map<string, { at: number; advanced: boolean; value: Promise<Row[]> }>();
+
+// Snapshots are also kept on disk (gzipped JSON in the data folder). After a restart the last copy is served at once,
+// marked as old so it is refreshed in the background; one older than a day is not used.
+const snapshotFile = (id: string) => path.join(paths.snapshots, `${id.replace(/[^\w-]/g, '_')}.json.gz`);
+function saveSnapshot(id: string, at: number, rows: Row[]) {
+  gzip(JSON.stringify({ at, rows }), (err, buf) => {
+    if (err) return console.warn('[data] could not save snapshot', id, err.message);
+    writeFile(snapshotFile(id), buf, { mode: 0o600 }, (e) => e && console.warn('[data] could not save snapshot', id, e.message));
+  });
+}
+function loadSnapshot(id: string) {
+  if (snapshots.has(id) || !existsSync(snapshotFile(id))) return;
+  try {
+    const { at, rows } = JSON.parse(gunzipSync(readFileSync(snapshotFile(id))).toString()) as { at: number; rows: Row[] };
+    if (Date.now() - at < 86_400_000) snapshots.set(id, { at, advanced: false, value: Promise.resolve(rows) });
+  } catch (e) {
+    console.warn('[data] could not read snapshot', id, (e as Error).message);
+  }
+}
 const readable = new Map<string, { at: number; ok: Promise<boolean> }>();
 
 /**
@@ -215,7 +238,7 @@ function takeSnapshot(s: SourceRow) {
   const entry = { at: Date.now(), advanced: false, value };
   if (!prev) snapshots.set(s.id, entry);
   value.then(
-    () => snapshots.set(s.id, entry),
+    (rows) => { snapshots.set(s.id, entry); saveSnapshot(s.id, entry.at, rows); },
     (e: { advanced?: boolean }) => {
       if (e.advanced) snapshots.set(s.id, { ...entry, advanced: true });
       else if (!prev) snapshots.delete(s.id); // a failed refresh keeps serving the last good snapshot
@@ -227,15 +250,17 @@ function takeSnapshot(s: SourceRow) {
 export function startSnapshotRefresher() {
   const tick = () => {
     for (const src of all<SourceRow>("SELECT * FROM data_sources WHERE kind = 'base'")) {
+      loadSnapshot(src.id);
       const snap = snapshots.get(src.id);
       if (!snap || (!snap.advanced && Date.now() - snap.at > SNAPSHOT_TTL)) takeSnapshot(src);
     }
   };
-  setTimeout(tick, 20_000);
+  setTimeout(tick, 2_000);
   return setInterval(tick, 60_000);
 }
 
 async function sharedRows(user: User, s: SourceRow): Promise<Row[] | null> {
+  loadSnapshot(s.id);
   let snap = snapshots.get(s.id);
   if (snap?.advanced) return null;
   if (!(await canReadSource(user, s))) return null;

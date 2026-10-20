@@ -13,8 +13,11 @@ import { oidcAuthorize, oidcExchange } from './oidc.ts';
 import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
+import { DOCS_WRITE_SCOPE } from '../lark/daily.ts';
 import { mailboxName, mailConnectUrl } from '../mail.ts';
 import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
+import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
+import { githubEnabled } from '../github/app.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
 export const authRoutes = new Hono();
@@ -62,11 +65,12 @@ authRoutes.get('/auth/lark/connect', (c) => {
   }
   const state = randomToken(16);
   setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|connect`, { ...cookieOpts, maxAge: 600 });
-  // keep write and mail access when reconnecting someone who already granted it
+  // keep write, document and mail access when reconnecting someone who already granted it
   const had = connection(user.id).scopes ?? [];
   const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
+  const docs = c.req.query('docs') === '1' || had.includes(DOCS_WRITE_SCOPE);
   const mail = config.mailDrafts === 'lark' && (c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s)));
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? [DOCS_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 
@@ -177,6 +181,37 @@ authRoutes.get('/auth/google/callback', async (c) => {
   } catch (e) {
     if (e instanceof UserError) return failed(e.localized(L), 400);
     console.error('[auth] google connect failed', e);
+    return failed((e as Error).message, 500);
+  }
+});
+
+/** Link the signed-in person's GitHub account (only to know who they are on GitHub). Returns to `return`. */
+authRoutes.get('/auth/github/connect', (c) => {
+  const L = localeOf(c);
+  const ret = safeReturnPath(c.req.query('return'));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/github/connect?return=${encodeURIComponent(ret)}`)}`);
+  if (!githubEnabled() || !config.github.clientId) return c.html(page(tr(L, 'github.connect.title'), `<h1>${escapeHtml(tr(L, 'github.connect.title'))}</h1><p>${escapeHtml(tr(L, 'github.connect.noApp'))}</p>`, L), 400);
+  const state = randomToken(16);
+  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|github`, { ...cookieOpts, maxAge: 600 });
+  return c.redirect(githubAuthorizeUrl(state));
+});
+
+authRoutes.get('/auth/github/callback', async (c) => {
+  const L = localeOf(c);
+  const [expected, rawRet, mode] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
+  deleteCookie(c, STATE_COOKIE, { path: '/', secure: config.secure });
+  const ret = safeReturnPath(decodeURIComponent(rawRet ?? ''));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  const failed = (reason: string, status: 400 | 500) => c.html(page(tr(L, 'github.connect.failed'),
+    `<h1>${escapeHtml(tr(L, 'github.connect.failed'))}</h1><p>${escapeHtml(reason)}</p><a class="btn primary" href="/auth/github/connect?return=${encodeURIComponent(ret)}">${escapeHtml(tr(L, 'login.retry'))}</a>`, L), status);
+  const code = c.req.query('code');
+  if (!user || mode !== 'github' || !expected || c.req.query('state') !== expected || !code) return failed(tr(L, 'login.failed.expired'), 400);
+  try {
+    await finishGitHubLink(user, code);
+    return c.redirect(ret);
+  } catch (e) {
+    console.error('[auth] github link failed', e);
     return failed((e as Error).message, 500);
   }
 });

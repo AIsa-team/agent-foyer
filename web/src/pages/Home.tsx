@@ -8,6 +8,7 @@ import { AppCard, LarkTile } from './Apps';
 import { openSearch, searchShortcut } from '../Search';
 import { SkillUpdatesBanner } from './Skills';
 import { LEVEL_BADGE, type IssuesData } from './Issues';
+import { HeroPulse, type Pulse } from './HeroPulse';
 
 // ---------------------------------------------------------------- layout types (mirror server/homepage.ts)
 type Text = Record<string, string>;
@@ -45,6 +46,7 @@ export interface HomeData {
   resources: { id: number; title: string; url: string; owner: string | null }[];
   myDepartments: { id: string; name: string; canEdit: boolean }[];
   editableDepartments: { id: string; name: string }[];
+  pulse: Pulse;
 }
 
 /** Per-language text from a layout, with the same fallback as the rest of the UI. */
@@ -315,8 +317,8 @@ export function OkrModule({ m }: { m: Extract<Module, { type: 'okr' }> }) {
 function IssuesModule({ m }: { m: Extract<Module, { type: 'issues' }> }) {
   const { t, ago } = useI18n();
   const text = useText();
-  const { data, error } = useApi<IssuesData>('/issues');
-  const mine = (data?.checks ?? []).map((c) => ({ c, n: c.rows.filter((r) => r.mine && !r.exception).length })).filter((x) => x.n);
+  const { data, error } = useApi<{ lastRun: IssuesData['lastRun']; checks: { id: number; title: string; level: IssuesData['checks'][number]['level']; mine: number }[] }>('/issues/mine');
+  const mine = (data?.checks ?? []).map((c) => ({ c, n: c.mine }));
   return (
     <ModuleCard title={text(m.title) || t('home.module.issues')}>
       {!data ? <Loading error={error} /> : mine.length === 0 ? (
@@ -475,8 +477,7 @@ export function HomePage() {
             <Icon name="search" /><span className="grow">{t('home.search')}</span><kbd>{searchShortcut()}</kbd>
           </button>
         </div>
-        {/* the company's mark drawn in dots */}
-        <div className="hero-art" aria-hidden="true" />
+        <HeroPulse pulse={data?.pulse} />
       </div>
 
       {profile.data && profile.data.agents.length === 0 && (
