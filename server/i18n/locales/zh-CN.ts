@@ -181,6 +181,7 @@ const zhCN = {
   'err.data.audienceDenied': '你没有这个数据源的查看权限（由管理员设置）',
   'err.data.audienceConnectorOnly': '只有通过数据连接接入的数据源才单独设可见范围；Lark 表跟着 Lark 的权限，应用的数据跟着应用的可见范围',
   'err.home.noModule': '主页上没有编号为 {id} 的模块',
+  'note.hubUpdated': '提醒：中台的说明或工具在你连接之后更新过，你手里的可能是旧的。请重新连接中台（或开一个新会话）拿到最新版本，再继续按新的说明做事。',
   'err.data.deniedSource': '你没有这张表的查看权限：{url}',
   'err.check.notFound': '没有检查项 {id}',
   'err.check.notOwner': '只有检查项的创建人、这条记录的负责人或管理员能改',

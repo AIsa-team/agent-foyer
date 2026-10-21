@@ -480,6 +480,9 @@ const MIGRATIONS: string[] = [
   `,  // boards imported from another system's dashboard, so they can be synced again
   `
   ALTER TABLE boards ADD COLUMN origin TEXT;  -- JSON {connection, board, tab, url}
+  `,  // which version of the hub's instructions and tools an agent connected with, to tell it when they changed
+  `
+  ALTER TABLE agent_connections ADD COLUMN seen_version TEXT;
   `,
 ];
 

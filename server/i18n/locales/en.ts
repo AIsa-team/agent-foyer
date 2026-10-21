@@ -183,6 +183,7 @@ const en: Record<MessageKey, string> = {
   'err.data.audienceDenied': 'You may not see this data source (an admin decides who can)',
   'err.data.audienceConnectorOnly': 'Only sources read through a data connection have their own audience; Lark tables follow Lark access and app data follows who may open the app',
   'err.home.noModule': 'No module with id {id} on the home page',
+  'note.hubUpdated': 'Note: the hub\'s instructions or tools changed after you connected, so what you have may be out of date. Reconnect to the hub (or start a new session) to get the current ones, then follow those.',
   'err.data.deniedSource': 'You do not have access to this table: {url}',
   'err.check.notFound': 'No check {id}',
   'err.check.notOwner': 'Only the creator of the check, the owner of this record or an admin can change this',

@@ -3,7 +3,8 @@ import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/
 import { z } from 'zod';
 import { appUrl, config } from './config.ts';
 import { messenger } from './notify.ts';
-import { all, get, type User } from './db.ts';
+import { all, get, run, type User } from './db.ts';
+import { sha256 } from './crypto.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
@@ -63,7 +64,7 @@ Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase,
 Data connections: systems the hub reads itself, set up by admins on the admin page with their key (today: Metabase). When one exists, register its items with save_data_source (connection + item; admins, see browse_connection) instead of building a data app; each such source has an audience that admins set (set_data_source_audience). For a system with no connection, build a data app.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Lark documents: read_lark_doc reads one as Markdown; create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). The first time, the user is asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write only after they agree. Ask for tomorrow's plan and blockers rather than inventing them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Lark documents: read_lark_doc reads one as Markdown; create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). The first time, the user is asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write after they agree, unless they asked beforehand for it to be written without asking: then write it, mark it as written by an agent and tell them afterwards what was written. Never invent work; leave tomorrow's plan and blockers empty unless they gave them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -85,18 +86,45 @@ function resolveColleagues(refs: string[]): string[] {
   });
 }
 
+/**
+ * What an agent sees of the hub (the instructions and every tool with its description and parameters) as a short
+ * hash. Agents keep both from when they connected, often for a whole session; when the hash they connected with is
+ * not the current one, tool results tell them to reconnect.
+ */
+const versions = new WeakMap<McpServer, string>();
+export const surfaceVersion = (server: McpServer) => versions.get(server) ?? '';
+
 export function buildMcpServer(user: User, clientId?: string): McpServer {
   const server = new McpServer({ name: config.mcpName, version: '0.1.0' }, { instructions: INSTRUCTIONS });
+  const surface: string[] = [INSTRUCTIONS];
+  const register = server.registerTool.bind(server);
+  server.registerTool = ((name: string, def: { description?: string; inputSchema?: z.ZodRawShape }, cb: never) => {
+    let params = '';
+    try {
+      params = JSON.stringify(z.toJSONSchema(z.object(def.inputSchema ?? {})));
+    } catch {
+      params = Object.keys(def.inputSchema ?? {}).join(',');
+    }
+    surface.push(`${name}\u0000${def.description ?? ''}\u0000${params}`);
+    return register(name, def as never, cb);
+  }) as typeof server.registerTool;
+  let version = '';
   // feedback sent through an agent says which one
   const agentName = (clientId && get<{ client_name: string }>('SELECT client_name FROM agent_connections WHERE user_id = ? AND client_id = ?', user.id, clientId)?.client_name) || 'Agent';
   // replies use the language this person picked in the hub UI
   const locale = user.locale ?? config.defaultLocale;
   const say = (m: Msg) => tr(locale, m.key, m.params);
 
+  // an agent that connected to an older version of the hub is told so with every result, until it reconnects
+  const staleNote = () => {
+    const seen = clientId ? get<{ seen_version: string | null }>('SELECT seen_version FROM agent_connections WHERE user_id = ? AND client_id = ?', user.id, clientId)?.seen_version : null;
+    return seen && version && seen !== version ? [{ type: 'text' as const, text: say({ key: 'note.hubUpdated' }) }] : [];
+  };
   function guard<A>(fn: (args: A) => Promise<unknown> | unknown) {
     return async (args: A) => {
       try {
-        return json(await fn(args));
+        const out = json(await fn(args));
+        return { ...out, content: [...out.content, ...staleNote()] };
       } catch (e) {
         const known = e instanceof UserError;
         if (!known) console.error('[mcp] tool error', e);
@@ -110,6 +138,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     user: { id: user.id, name: user.name, email: user.email, role: user.role },
     hub: config.hubUrl,
     appsDomain: config.appsDomain,
+    version,
   })));
 
   server.registerTool('create_upload', {
@@ -664,7 +693,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     }, guard((a: { date?: string }) => readDailyReport(user, a.date)));
 
     server.registerTool('fill_daily_report', {
-      description: 'Writes the user\'s own rows in the daily report, as the user. Draft the text first (e.g. from github_activity and what the user tells you), show it to the user and write only after they agree. Each row names a section as returned by get_daily_report and gives the columns after the person, in order (e.g. [done yesterday, plan today, blockers]); null or "" leaves a column as it is. Use one line per item.',
+      description: 'Writes the user\'s own rows in the daily report, as the user. Write only what has a source (github_activity, what the user told you); leave plan and blockers empty unless the user gave them. By default show the draft and write after the user agrees; when the user asked beforehand for it to be written without asking, write it directly, mark it as written by an agent, and tell them afterwards what was written. Each row names a section as returned by get_daily_report and gives the columns after the person, in order (e.g. [done yesterday, plan today, blockers]); null or "" leaves a column as it is. Use one line per item.',
       inputSchema: {
         date: z.string().optional().describe('YYYY-MM-DD; default: today'),
         rows: z.array(z.object({ section: z.string(), cells: z.array(z.string().nullable()) })).min(1),
@@ -711,11 +740,18 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     return updates.length ? { updates, hint: 'Call install_skill for each to update.' } : { updates: [], message: say({ key: 'note.skillsUpToDate' }) };
   }));
 
+  version = sha256(surface.join('\u0001')).slice(0, 12);
+  versions.set(server, version);
   return server;
 }
 
 export async function handleMcp(req: Request, user: User, clientId: string, token: string): Promise<Response> {
   const server = buildMcpServer(user, clientId);
+  // connecting (or reconnecting) gets the current instructions and tools: remember which ones
+  const body = await req.clone().json().catch(() => null) as { method?: string } | { method?: string }[] | null;
+  if ((Array.isArray(body) ? body : [body]).some((m) => m?.method === 'initialize')) {
+    run('UPDATE agent_connections SET seen_version = ? WHERE user_id = ? AND client_id = ?', surfaceVersion(server), user.id, clientId);
+  }
   const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
   await server.connect(transport);
   try {

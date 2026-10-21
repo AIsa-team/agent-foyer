@@ -1545,6 +1545,18 @@ try {
   const intro2 = String(((await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) })).json()) as { result: { instructions: string } }).result.instructions);
   check(intro2.includes('Data connections:') && !intro2.includes('METABASE_API_KEY'), 'agents are told to use a data connection instead of building a Metabase app');
+  // agents keep the instructions and tools from when they connected: tell them when the hub changed since
+  const rawCall = async (name: string) => ((await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'tools/call', params: { name, arguments: {} } }) })).json()) as { result: { content: { text: string }[] } }).result.content.map((c) => c.text);
+  const reconnect = () => fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) });
+  let texts = await rawCall('whoami');
+  check(texts.length === 1 && /^[0-9a-f]{12}$/.test(JSON.parse(texts[0]).version), 'an agent that just connected gets plain results, and whoami says the version');
+  fsDb.prepare("UPDATE agent_connections SET seen_version = 'older' WHERE user_id = 'ou_dev_alex'").run();
+  texts = await rawCall('whoami');
+  check(texts.length === 2 && /重新连接|Reconnect/.test(texts[1]), 'one that connected to an older version is told to reconnect, with every result');
+  await reconnect();
+  check((await rawCall('whoami')).length === 1, 'and no longer once it has reconnected');
 
   // agents read the records themselves, with the person's access
   const rowsBob = await tool(bob.token, 'read_data_rows', { source: 'mb-signups', where: [{ field: 'real_users', op: 'isGreater', value: 15 }], sort: { field: 'real_users', desc: true }, limit: 2 });
