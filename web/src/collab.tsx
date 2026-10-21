@@ -47,7 +47,7 @@ export function CollaboratorsCard({ kind, slug, owner, collaborators, canAdminis
       </div>
       {canAdminister && (
         <div className="stack" style={{ gap: 8, marginTop: 12 }}>
-          <PersonPicker value={adding} onChange={(v) => setAdding(v.filter((p) => !taken.has(p.id)))} />
+          <PersonPicker value={adding} onChange={setAdding} exclude={[...taken]} />
           {adding.length > 0 && (
             <div className="row" style={{ justifyContent: 'flex-end' }}>
               <button className="btn sm primary" disabled={busy} onClick={() => change({ add: adding.map((p) => p.id) }, t('collab.added'))} type="button">{t('collab.add', { n: adding.length })}</button>

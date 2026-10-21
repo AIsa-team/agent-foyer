@@ -126,7 +126,7 @@ export async function createDoc(user: User, input: { title: string; markdown: st
     batch.blocks.push(...g);
   }
   await flush();
-  return { title, url: link, blocks: written, ...(images ? { imagesLeftOut: images } : {}) };
+  return { title, url: link, token: doc, inWiki: parent?.kind === 'wiki', blocks: written, ...(images ? { imagesLeftOut: images } : {}) };
 }
 
 // ---------------------------------------------------------------- blocks to Markdown

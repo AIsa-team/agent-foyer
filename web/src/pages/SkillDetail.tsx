@@ -10,6 +10,9 @@ import { Avatar, CopyBox, Icon, IconEditor, LinkEditor, LocalizedFields, Loading
 
 interface Version { version: number; size: number; notes: string; created_at: number }
 
+/** versions listed before 「show all」 */
+const RECENT = 3;
+
 function ManageCard({ skill, reload }: { skill: SkillInfo; reload: () => void }) {
   const { t } = useI18n();
   const [localized, setLocalized] = useState<LocalizedMap>(skill.localized ?? {});
@@ -59,8 +62,10 @@ export function SkillDetailPage() {
   const { t, ago } = useI18n();
   const { slug } = useParams();
   const { data, error, reload } = useApi<{ skill: SkillInfo; versions: Version[]; readme: string; feedback: Feedback[] }>(`/skills/${slug}`);
+  const [allVersions, setAllVersions] = useState(false);
   if (!data) return <Loading error={error} />;
   const { skill, versions, readme } = data;
+  const feedback = <FeedbackCard kind="skill" slug={skill.slug} canSend canManage={skill.canManage} items={data.feedback} reload={reload} />;
   return (
     <>
       <Link to="/skills" className="row small muted" style={{ marginBottom: 12 }}><Icon name="back" size={12} /> {t('nav.skills')}</Link>
@@ -95,12 +100,15 @@ export function SkillDetailPage() {
             <h3>SKILL.md</h3>
             <pre className="markdown">{readme || t('skill.empty')}</pre>
           </div>
+          {/* the two columns stay about as tall as each other: owners get feedback and collaborators under SKILL.md */}
+          {skill.canManage && feedback}
+          {skill.canManage && <CollaboratorsCard kind="skill" slug={skill.slug} owner={skill.owner} collaborators={skill.collaborators} canAdminister={skill.canAdminister} reload={reload} />}
         </div>
         <div className="stack">
           <div className="card pad">
-            <h3>{t('skill.versions')}</h3>
+            <h3>{t('skill.versions')} <span className="count">{versions.length}</span></h3>
             <div className="stack" style={{ gap: 0 }}>
-              {versions.map((v) => (
+              {(allVersions ? versions : versions.slice(0, RECENT)).map((v) => (
                 <div key={v.version} className="row" style={{ borderTop: '1px solid var(--line)', padding: '8px 0', alignItems: 'baseline' }}>
                   <span className="badge">v{v.version}</span>
                   <span className="grow small">{v.notes || <span className="muted">{t('skill.noNotes')}</span>}</span>
@@ -108,12 +116,16 @@ export function SkillDetailPage() {
                 </div>
               ))}
             </div>
+            {versions.length > RECENT && (
+              <button className="btn sm ghost" style={{ marginTop: 4, paddingLeft: 0 }} onClick={() => setAllVersions(!allVersions)} type="button">
+                {allVersions ? t('skill.recentVersions', { n: RECENT }) : t('skill.allVersions', { n: versions.length })}
+              </button>
+            )}
           </div>
-          <FeedbackCard kind="skill" slug={skill.slug} canSend canManage={skill.canManage} items={data.feedback} reload={reload} />
+          {!skill.canManage && feedback}
           {skill.canManage && (
             <>
               <IconEditor src={skill.icon} name={skill.name} endpoint={`/skills/${skill.slug}`} prompt={t('prompt.skillIcon', { hub: t('prompt.hub', { company: me.hub.companyName, mcp: me.hub.mcpName }), slug: skill.slug })} onSaved={reload} fallback={<SkillIcon skill={skill} size="lg" />} />
-              <CollaboratorsCard kind="skill" slug={skill.slug} owner={skill.owner} collaborators={skill.collaborators} canAdminister={skill.canAdminister} reload={reload} />
               <AppLinkCard skill={skill} reload={reload} />
               <ManageCard skill={skill} reload={reload} />
             </>

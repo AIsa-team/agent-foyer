@@ -4,7 +4,7 @@ import path from 'node:path';
 import { Readable } from 'node:stream';
 import { getRequestListener } from '@hono/node-server';
 import { Hono } from 'hono';
-import { config, paths } from './config.ts';
+import { appUrl, config, paths } from './config.ts';
 import { verifyToken } from './crypto.ts';
 import { api } from './api.ts';
 import { authRoutes } from './auth/routes.ts';
@@ -14,6 +14,7 @@ import { seedDevUsers } from './auth/users.ts';
 import { handleMcp } from './mcp.ts';
 import { cleanupUploads, receiveUpload } from './uploads.ts';
 import { skillFile } from './skills/service.ts';
+import { sourceFile } from './apps/source.ts';
 import { reconcileInterruptedBuilds } from './apps/service.ts';
 import { requestLocale, tr } from './i18n/index.ts';
 import { handleAppRequest, handleAppUpgrade, slugFromHost } from './gateway.ts';
@@ -60,6 +61,18 @@ app.get('/skills/:slug/:file{v[0-9]+\\.tgz}', (c) => {
   });
 });
 
+// an app's source, for whoever looks after it (the link comes from get_app_source)
+app.get('/apps-source/:slug/:file{v[0-9]+\\.tgz}', (c) => {
+  const slug = c.req.param('slug');
+  const version = Number(c.req.param('file').slice(1, -4));
+  if (!verifyToken(`source:${slug}:${version}`, c.req.query('t') ?? '')) return c.text('download link expired, call get_app_source again', 403);
+  const file = sourceFile(slug, version);
+  if (!existsSync(file)) return c.notFound();
+  return new Response(Readable.toWeb(createReadStream(file)) as ReadableStream, {
+    headers: { 'content-type': 'application/gzip', 'content-length': String(statSync(file).size) },
+  });
+});
+
 app.get('/icons/:file', (c) => {
   const name = c.req.param('file');
   if (!/^[a-z0-9-]+-[A-Za-z0-9_-]+\.(svg|png)$/.test(name)) return c.notFound();
@@ -86,6 +99,9 @@ app.get('/brand/:file', (c, next) => {
 });
 
 app.get('/healthz', (c) => c.json({ ok: true }));
+
+// /__hub/… (the SDK, /__hub/me, Lark calls) lives on each app's own domain; say so instead of serving the web UI
+app.all('/__hub/*', (c) => c.text(`Not here: /__hub/… is served on each app's own domain, e.g. ${appUrl('<slug>').replace(/\/$/, '')}${new URL(c.req.url).pathname}`, 404));
 
 // The web UI (built by vite into web/dist). Everything else falls back to index.html for client-side routing.
 const webDist = path.resolve(import.meta.dirname, '../web/dist');

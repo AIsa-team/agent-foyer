@@ -233,18 +233,45 @@ export function AgentStep({ agents }: { agents: { name: string }[] | null }) {
 }
 
 // ---------- people ----------
-export function PersonPicker({ value, onChange }: { value: Person[]; onChange: (v: Person[]) => void }) {
+/** Pick colleagues: focusing the box lists everyone, typing narrows it down. `exclude` hides people who cannot be picked. */
+export function PersonPicker({ value, onChange, exclude = [] }: { value: Person[]; onChange: (v: Person[]) => void; exclude?: (string | undefined)[] }) {
   const { t } = useI18n();
   const [q, setQ] = useState('');
+  const [open, setOpen] = useState(false);
+  const [at, setAt] = useState(0);
   const [results, setResults] = useState<Person[]>([]);
+  const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!q.trim()) return setResults([]);
-    const t = setTimeout(() => {
-      api.get<Person[]>(`/users?q=${encodeURIComponent(q)}`).then(setResults, () => {});
-    }, 150);
-    return () => clearTimeout(t);
-  }, [q]);
-  const chosen = new Set(value.map((p) => p.id));
+    if (!open) return;
+    const timer = setTimeout(() => {
+      api.get<Person[]>(`/users?q=${encodeURIComponent(q.trim())}`).then((r) => (setResults(r), setAt(0)), () => {});
+    }, q ? 150 : 0);
+    return () => clearTimeout(timer);
+  }, [q, open]);
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => !box.current?.contains(e.target as Node) && setOpen(false);
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  const hidden = new Set([...value.map((p) => p.id), ...exclude]);
+  const shown = results.filter((r) => !hidden.has(r.id));
+  const pick = (r: Person) => {
+    onChange([...value, r]);
+    setQ('');
+  };
+  const keys = (e: React.KeyboardEvent) => {
+    if (e.key === 'Escape') setOpen(false);
+    else if (!shown.length) return;
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      setOpen(true);
+      setAt((i) => (i + (e.key === 'ArrowDown' ? 1 : shown.length - 1)) % shown.length);
+    } else if (e.key === 'Enter' && open) {
+      e.preventDefault();
+      pick(shown[Math.min(at, shown.length - 1)]);
+    }
+  };
   return (
     <div className="stack" style={{ gap: 8 }}>
       {value.length > 0 && (
@@ -257,12 +284,14 @@ export function PersonPicker({ value, onChange }: { value: Person[]; onChange: (
           ))}
         </div>
       )}
-      <div className="picker">
-        <input className="input" placeholder={t('picker.placeholder')} value={q} onChange={(e) => setQ(e.target.value)} />
-        {results.length > 0 && (
-          <div className="picker-list">
-            {results.filter((r) => !chosen.has(r.id)).map((r) => (
-              <button key={r.id} onClick={() => { onChange([...value, r]); setQ(''); }} type="button">
+      <div className="picker" ref={box}>
+        <input className="input" placeholder={t('picker.placeholder')} value={q} role="combobox" aria-expanded={open && shown.length > 0}
+          onFocus={() => setOpen(true)} onClick={() => setOpen(true)} onKeyDown={keys}
+          onChange={(e) => { setQ(e.target.value); setOpen(true); }} />
+        {open && shown.length > 0 && (
+          <div className="picker-list" role="listbox">
+            {shown.map((r, i) => (
+              <button key={r.id} className={i === at ? 'on' : ''} onMouseEnter={() => setAt(i)} onClick={() => pick(r)} type="button" role="option" aria-selected={i === at}>
                 <Avatar person={r} /> {r.name} <span className="muted small">{r.email}</span>
               </button>
             ))}

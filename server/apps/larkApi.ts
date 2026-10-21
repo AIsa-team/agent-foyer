@@ -19,30 +19,45 @@ import { all, get, now, run, type App, type User } from '../db.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
 import { larkMessenger } from '../lark/messenger.ts';
-import { createRecord, fetchRecords, listFields, parseBaseUrl, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
+import { createRecord, fetchRecords, listFields, parseBaseUrl, pickTable, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
+import { createDoc, DOCS_SCOPES, parseDocRef, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
+import { appendSheetRow, parseSheetUrl, pickSheet, resolveSpreadsheet, sheetFields, sheetRecords, SHEETS_SCOPE, updateSheetRow, wikiObject } from '../lark/sheets.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
 import { mailboxName, mailConnectUrl, saveDraft } from '../mail.ts';
 import { canAccessApp, canManageApp } from './access.ts';
+import { audience } from './resources.ts';
+import { shareWithAudience } from '../lark/workspace.ts';
 
 // ---------------------------------------------------------------- declaration
 export const manifestSchema = z.object({
   tables: z.array(z.object({
     name: z.string().regex(/^[a-z][a-z0-9_-]{0,30}$/).describe('alias the app code uses, e.g. "projects"'),
-    url: z.string().describe('Lark Base (or wiki) link including ?table=…'),
+    url: z.string().describe('Lark Base link including ?table=…, or a Lark spreadsheet link including ?sheet=… (row 1 = column names); wiki links work for both'),
     access: z.enum(['read', 'write']).describe('write = may add and change records'),
   })).max(10),
   notify: z.object({
     people: z.array(z.string()).max(50).optional().describe('colleagues the app may notify (email, name or open_id)'),
     chats: z.array(z.object({ name: z.string().regex(/^[a-z][a-z0-9_-]{0,30}$/), id: z.string().startsWith('oc_') })).max(10).optional()
       .describe('Lark groups the hub bot is in, by alias'),
+    app_users: z.boolean().optional().describe('may also notify anyone who may open the app, by their id from hub.me() or email (e.g. tell whoever submitted a request what happened to it)'),
   }).optional(),
-  mail_drafts: z.boolean().optional().describe('may save email drafts in the person\'s own Lark mailbox (it never sends; they review and send)'),
+  mail_drafts: z.boolean().optional().describe('may save email drafts in the person\'s own mailbox (Gmail or Lark Mail, as the hub is set up; it never sends; they review and send)'),
+  docs: z.object({
+    parent: z.string().optional().describe('wiki page or Drive folder link the documents go under; default: the person\'s own space'),
+    share: z.enum(['view', 'edit', 'none']).optional().describe('what whoever may open the app can do with each new document: view (default), edit, or none (only its author, e.g. letters to clients). Documents under a wiki page follow the wiki\'s access instead'),
+  }).optional().describe('may create Lark documents as the person (hub.lark.createDoc), e.g. a confirmation letter or a brief; put each document\'s link back on its record'),
 });
 export type ManifestInput = z.infer<typeof manifestSchema>;
 
-interface Table { name: string; url: string; app: string; table: string; view: string | null; access: 'read' | 'write' }
-export interface Manifest { tables: Table[]; notify: { people: { id: string; name: string }[]; chats: { name: string; id: string }[] }; mailDrafts?: boolean }
+/** `app`/`table` are the Base and table, or for a spreadsheet (kind 'sheet') the spreadsheet and sheet ids. */
+interface Table { name: string; url: string; kind?: 'sheet'; app: string; table: string; view: string | null; access: 'read' | 'write' }
+export interface Manifest {
+  tables: Table[]; notify: { people: { id: string; name: string }[]; chats: { name: string; id: string }[]; appUsers?: boolean }; mailDrafts?: boolean;
+  /** documents the app may create as the person: under `parent` (a wiki page or Drive folder link) or in their own space,
+   *  shared with whoever may open the app as `share` says (default view) */
+  docs?: { parent: string | null; wiki: boolean; share?: 'view' | 'edit' | 'none' };
+}
 
 export function manifestOf(app: Pick<App, 'lark_manifest'>): Manifest | null {
   return app.lark_manifest ? (JSON.parse(app.lark_manifest) as Manifest) : null;
@@ -53,14 +68,18 @@ const hashOf = (m: Manifest) => sha256(JSON.stringify({
   t: m.tables.map((t) => [t.name, t.app, t.table, t.access]).sort(),
   p: m.notify.people.map((p) => p.id).sort(),
   c: m.notify.chats.map((c) => c.id).sort(),
+  ...(m.notify.appUsers ? { u: 1 } : {}),
   // only present when declared, so consents given before mail drafts existed stay valid
   ...(m.mailDrafts ? { m: 1 } : {}),
+  ...(m.docs ? { d: m.docs.parent ?? '', ds: docShare(m) } : {}),
 }));
+
+const docShare = (m: Manifest) => (m.docs?.wiki ? 'wiki' : m.docs?.share ?? 'view');
 
 /** Saves an app's declaration after checking that its owner can open every table. `people` are already open_ids. */
 export async function setManifest(owner: User, app: App, input: ManifestInput, people: string[]): Promise<Manifest | null> {
   if (!canManageApp(app, owner)) throw new UserError('err.notAppOwner', { slug: app.slug });
-  if (!input.tables.length && !people.length && !input.notify?.chats?.length && !input.mail_drafts) {
+  if (!input.tables.length && !people.length && !input.notify?.chats?.length && !input.notify?.app_users && !input.mail_drafts && !input.docs) {
     run('UPDATE apps SET lark_manifest = NULL WHERE slug = ?', app.slug);
     return null;
   }
@@ -69,16 +88,36 @@ export async function setManifest(owner: User, app: App, input: ManifestInput, p
   for (const t of input.tables) {
     if (names.has(t.name)) throw new UserError('err.appLark.duplicateName', { name: t.name });
     names.add(t.name);
-    const ref = parseBaseUrl(t.url);
-    if (!ref.table) throw new UserError('err.data.tableRequired');
-    const appToken = await resolveAppToken(owner, ref);
-    await listFields(owner, appToken, ref.table, ref.view);
-    tables.push({ name: t.name, url: t.url, app: appToken, table: ref.table, view: ref.view ?? null, access: t.access });
+    tables.push({ name: t.name, url: t.url, access: t.access, ...await resolveTable(owner, t.url) });
   }
   const users = people.map((id) => get<{ id: string; name: string }>('SELECT id, name FROM users WHERE id = ?', id)!).filter(Boolean);
-  const m: Manifest = { tables, notify: { people: users, chats: input.notify?.chats ?? [] }, ...(input.mail_drafts ? { mailDrafts: true } : {}) };
+  let docs: Manifest['docs'];
+  if (input.docs) {
+    const parent = input.docs.parent?.trim() || null;
+    const ref = parent ? parseDocRef(parent) : null;
+    if (ref?.kind === 'docx') throw new UserError('err.docs.badParent');
+    docs = { parent, wiki: ref?.kind === 'wiki', ...(input.docs.share && input.docs.share !== 'view' ? { share: input.docs.share } : {}) };
+  }
+  const m: Manifest = { tables, notify: { people: users, chats: input.notify?.chats ?? [], ...(input.notify?.app_users ? { appUsers: true } : {}) }, ...(input.mail_drafts ? { mailDrafts: true } : {}), ...(docs ? { docs } : {}) };
   run('UPDATE apps SET lark_manifest = ?, updated_at = ? WHERE slug = ?', JSON.stringify(m), now(), app.slug);
   return m;
+}
+
+/** A declared table's location: a Base table, or a sheet in a spreadsheet; checked by reading its columns. */
+async function resolveTable(owner: User, url: string): Promise<Pick<Table, 'kind' | 'app' | 'table' | 'view'>> {
+  const sheetRef = parseSheetUrl(url);
+  const spreadsheet = sheetRef && (sheetRef.kind === 'sheets' || (await wikiObject(owner, sheetRef.token)).type === 'sheet')
+    ? await resolveSpreadsheet(owner, sheetRef) : undefined;
+  if (spreadsheet) {
+    const sheet = (await pickSheet(owner, spreadsheet, sheetRef!.sheet)).id;
+    await sheetFields(owner, spreadsheet, sheet);
+    return { kind: 'sheet', app: spreadsheet, table: sheet, view: null };
+  }
+  const ref = parseBaseUrl(url);
+  const appToken = await resolveAppToken(owner, ref);
+  const table = await pickTable(owner, appToken, ref.table);
+  await listFields(owner, appToken, table, ref.view);
+  return { app: appToken, table, view: ref.view ?? null };
 }
 
 // ---------------------------------------------------------------- consent
@@ -99,12 +138,20 @@ export function revokeConsent(user: User, slug: string) {
   run('DELETE FROM app_lark_consents WHERE user_id = ? AND app_slug = ?', user.id, slug);
 }
 
-/** Write tables need the person's write scope, mail drafts the mail scopes; everything needs Lark data connected. */
-export function needsConnect(user: User, m: Manifest): { write: boolean; mail: boolean } | null {
+/**
+ * Base tables written to need the person's Base write scope, spreadsheets the sheets scope, mail drafts the mail
+ * scopes; everything needs Lark data connected.
+ */
+export function needsConnect(user: User, m: Manifest): { write: boolean; mail: boolean; sheets: boolean; docs: boolean; wiki: boolean } | null {
   const c = connection(user.id);
-  const write = m.tables.some((t) => t.access === 'write');
+  const has = (s: string) => !!c.scopes?.includes(s);
+  const write = m.tables.some((t) => t.kind !== 'sheet' && t.access === 'write');
+  const sheets = m.tables.some((t) => t.kind === 'sheet');
   const mail = !!m.mailDrafts && config.mailDrafts === 'lark';
-  if (!c.connected || (write && !c.scopes?.includes(WRITE_SCOPE)) || (mail && !MAIL_SCOPES.every((s) => c.scopes?.includes(s)))) return { write, mail };
+  const docs = !!m.docs;
+  const wiki = !!m.docs?.wiki;
+  if (!c.connected || (write && !has(WRITE_SCOPE)) || (sheets && !has(SHEETS_SCOPE)) || (mail && !MAIL_SCOPES.every(has))
+    || (docs && !DOCS_SCOPES.every(has)) || (wiki && !has(WIKI_WRITE_SCOPE))) return { write, mail, sheets, docs, wiki };
   return null;
 }
 
@@ -119,9 +166,10 @@ export function describeManifest(user: User | undefined, app: App) {
   if (!m) return null;
   return {
     tables: m.tables.map((t) => ({ name: t.name, url: t.url, access: t.access })),
-    notify: { people: m.notify.people.map((p) => p.name), chats: m.notify.chats.map((c) => c.name) },
+    notify: { people: m.notify.people.map((p) => p.name), chats: m.notify.chats.map((c) => c.name), appUsers: !!m.notify.appUsers },
     mailDrafts: !!m.mailDrafts,
     mailbox: mailboxName(),
+    docs: m.docs ? { parent: m.docs.parent, share: docShare(m) } : null,
     consented: user ? hasConsent(user, app) : false,
   };
 }
@@ -211,10 +259,18 @@ export async function handleAppLark(app: App, sessionUser: User | undefined, req
       return json(res, 200, await mailDraft(user, await readJson(req)));
     }
 
+    if (url.pathname === '/__hub/lark/docs' && req.method === 'POST') {
+      if (!m.docs) throw new UserError('err.appLark.docsNotDeclared');
+      const b = await readJson(req);
+      const { token, inWiki, ...doc } = await createDoc(user, { title: String(b.title ?? ''), markdown: String(b.markdown ?? ''), parent: m.docs.parent ?? undefined });
+      return json(res, 200, { ...doc, ...await shareDoc(app, m, user, token, inWiki, locale) });
+    }
+
     const t = url.pathname.match(/^\/__hub\/lark\/tables\/([a-z][a-z0-9_-]*)(\/fields|\/records(?:\/([A-Za-z0-9]+))?)$/);
     if (!t) return json(res, 404, { error: 'unknown endpoint' });
     const table = m.tables.find((x) => x.name === t[1]);
     if (!table) throw new UserError('err.appLark.unknownTable', { name: t[1], names: m.tables.map((x) => x.name).join(', ') });
+    if (table.kind === 'sheet') return json(res, 200, await sheetCall(user, table, req, url, t[2], t[3]));
     if (t[2] === '/fields') {
       const fields = await listFields(user, table.app, table.table, table.view ?? undefined);
       return json(res, 200, { fields: fields.map((f) => ({ name: f.name, type: f.uiType ?? f.type })) });
@@ -245,6 +301,38 @@ export async function handleAppLark(app: App, sessionUser: User | undefined, req
   }
 }
 
+/** The same endpoints for a spreadsheet: columns from row 1, records are rows (id row<N>), writes append or change a row. */
+async function sheetCall(user: User, table: Table, req: IncomingMessage, url: URL, part: string, id: string | undefined) {
+  if (part === '/fields') return { fields: await sheetFields(user, table.app, table.table) };
+  if (req.method === 'GET' && !id) {
+    let where: Condition[] | undefined;
+    try {
+      where = url.searchParams.get('where') ? (JSON.parse(url.searchParams.get('where')!) as Condition[]) : undefined;
+    } catch {
+      throw new UserError('err.appLark.badJson');
+    }
+    return { records: await sheetRecords(user, table.app, table.table, { where, max: Math.min(5000, Number(url.searchParams.get('max') ?? 500)) }) };
+  }
+  if (table.access !== 'write') throw new UserError('err.appLark.readOnly', { name: table.name });
+  const fields = ((await readJson(req)).fields ?? {}) as Record<string, unknown>;
+  if (req.method === 'POST' && !id) return appendSheetRow(user, table.app, table.table, fields);
+  if ((req.method === 'PATCH' || req.method === 'PUT') && id) return updateSheetRow(user, table.app, table.table, id, fields);
+  throw new UserError('err.appLark.badMethod');
+}
+
+/** A new document goes to whoever may open the app (as the manifest says); a problem is reported, never fatal. */
+async function shareDoc(app: App, m: Manifest, user: User, token: string, inWiki: boolean, locale: string) {
+  const share = inWiki ? 'wiki' : docShare(m);
+  if (share === 'wiki' || share === 'none') return { sharedWith: share };
+  const who = audience(app);
+  try {
+    const r = await shareWithAudience(user, 'docx', token, who, share);
+    return { sharedWith: who.visibility, ...(r.failed.length ? { shareProblems: r.failed.map((id) => get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id) } : {}) };
+  } catch (e) {
+    return { sharedWith: 'none', shareProblems: [e instanceof UserError ? e.localized(locale) : (e as Error).message] };
+  }
+}
+
 /** The hub bot tells declared people / groups something on the app's behalf, naming the app and who triggered it. */
 async function notify(app: App, m: Manifest, user: User, body: Record<string, unknown>, locale: string) {
   const text = String(body.text ?? '').trim().slice(0, 2000);
@@ -258,9 +346,18 @@ async function notify(app: App, m: Manifest, user: User, body: Record<string, un
     for (const k of [p.id, p.name, email?.toLowerCase()]) if (k) allowed.set(k, { type: 'open_id', id: p.id });
   }
   for (const c of m.notify.chats) for (const k of [c.name, c.id]) allowed.set(k, { type: 'chat_id', id: c.id });
+  // anyone who may open the app, by id or email, when the app declared that
+  if (m.notify.appUsers) {
+    for (const x of to) {
+      if (allowed.has(x) || allowed.has(x.toLowerCase())) continue;
+      const u = get<User>('SELECT * FROM users WHERE id = ? OR lower(email) = ?', x, x.toLowerCase());
+      if (u && canAccessApp(app, u)) allowed.set(x, { type: 'open_id', id: u.id });
+    }
+  }
   const unknown = to.filter((x) => !allowed.has(x) && !allowed.has(x.toLowerCase()));
   if (!to.length || unknown.length) {
-    throw new UserError('err.appLark.notDeclaredRecipient', { who: unknown.join(', ') || '—', allowed: [...m.notify.people.map((p) => p.name), ...m.notify.chats.map((c) => c.name)].join(', ') || '—' });
+    const named = [...m.notify.people.map((p) => p.name), ...m.notify.chats.map((c) => c.name)].join(', ') || '—';
+    throw new UserError(m.notify.appUsers ? 'err.appLark.notAppUser' : 'err.appLark.notDeclaredRecipient', { who: unknown.join(', ') || '—', allowed: named });
   }
   const targets = [...new Map(to.map((x) => allowed.get(x) ?? allowed.get(x.toLowerCase())!).map((t) => [t.id, t])).values()];
   const people = targets.filter((t) => t.type === 'open_id');

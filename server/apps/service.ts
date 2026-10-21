@@ -6,6 +6,8 @@ import { all, get, now, run, tx, type App, type User } from '../db.ts';
 import { extractTarball, takeUpload } from '../uploads.ts';
 import { canAccessApp, canAdministerApp, canManageApp } from './access.ts';
 import { collaboratorsOf, isCollaborator, transferOwnership } from '../collab.ts';
+import { reshareLater } from './resources.ts';
+import { checkSource, findSecrets, keepSource } from './source.ts';
 
 const isCollab = (slug: string, user: User) => isCollaborator('app', slug, user.id);
 import { openFeedbackCount } from '../feedback.ts';
@@ -89,6 +91,8 @@ export interface PublishInput {
   localized?: LocalizedMap;
   /** optional: the Skill that goes with this app ('' removes the link) */
   relatedSkill?: string | null;
+  /** optional: the project folder the upload was built from, kept so the app can be changed later on any machine */
+  sourceUploadId?: string;
 }
 
 export interface PublishResult {
@@ -117,7 +121,11 @@ export async function publishApp(user: User, input: PublishInput): Promise<Publi
     const baseDescription = input.description ?? firstLocalized?.description;
     if (!existing && !baseName) throw new UserError('err.app.nameRequired');
     const i18n = mergeLocalized(existing?.i18n ?? null, input.localized);
+    // a source with secrets in it is refused before anything changes
+    const sourceUpload = input.sourceUploadId ? takeUpload(input.sourceUploadId, user.id, 'source') : undefined;
+    if (sourceUpload) await checkSource(sourceUpload);
     const file = takeUpload(input.uploadId, user.id, 'app');
+    const uploadSecrets = await findSecrets(file);
 
     const version = (get<{ v: number | null }>('SELECT MAX(version) AS v FROM app_releases WHERE app_slug = ?', slug)?.v ?? 0) + 1;
     const dir = releaseDir(slug, version);
@@ -131,6 +139,11 @@ export async function publishApp(user: User, input: PublishInput): Promise<Publi
     const visibility = input.visibility ?? existing?.visibility ?? 'private';
     const icon = input.iconSvg || input.iconPngBase64 ? saveIcon(slug, { svg: input.iconSvg, pngBase64: input.iconPngBase64 }) : undefined;
     const port = input.containerPort ?? existing?.container_port ?? 3000;
+
+    // the code of this version, for whoever changes the app next (what was uploaded, unless a source came with it)
+    if (sourceUpload) keepSource(slug, version, sourceUpload);
+    else if (!uploadSecrets.length) keepSource(slug, version, file);
+    if (uploadSecrets.length) notes.push({ key: input.kind === 'static' ? 'note.uploadSecretsServed' : 'note.uploadSecrets', params: { files: uploadSecrets.slice(0, 10).join(', ') } });
 
     const releaseId = tx(() => {
       if (!existing) {
@@ -263,6 +276,8 @@ export function setVisibility(user: User, slug: string, visibility: Visibility, 
     if (memberIds) setMembers(slug, memberIds);
   });
   if (visibility === 'public' && app.public_status !== 'pending' && getApp(slug)!.public_status === 'pending') publicRequested(getApp(slug)!, user);
+  // the Lark Bases and documents set up for the app follow who may open it
+  reshareLater(user, slug);
 }
 
 export function updateApp(user: User, slug: string, patch: {

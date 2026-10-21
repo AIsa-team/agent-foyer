@@ -218,7 +218,7 @@ code, pre, .mono { font-family: var(--aisa-font-mono); font-size: 12.5px; }
 .picker { position: relative; }
 .picker-list { position: absolute; z-index: 5; left: 0; right: 0; top: 40px; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow-lg); max-height: 240px; overflow: auto; }
 .picker-list button { display: flex; width: 100%; align-items: center; gap: 8px; padding: 8px 12px; border: 0; background: none; cursor: pointer; text-align: left; }
-.picker-list button:hover { background: var(--surface-2); }
+.picker-list button:hover, .picker-list button.on { background: var(--surface-2); }
 
 .markdown { white-space: pre-wrap; font-size: 13px; line-height: 1.7; max-height: 480px; overflow: auto; padding: 16px; background: var(--surface-2); border-radius: 10px; border: 1px solid var(--line); margin: 0; }
 .log { white-space: pre-wrap; font-size: 12px; max-height: 360px; overflow: auto; padding: 12px; background: #0a0a0a; color: #e5e5e5; border-radius: 10px; margin: 8px 0 0; }

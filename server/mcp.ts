@@ -18,42 +18,40 @@ import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
 import * as feedback from './feedback.ts';
 import * as collab from './collab.ts';
+import * as workspace from './lark/workspace.ts';
+import * as resources from './apps/resources.ts';
 import { githubEnabled } from './github/app.ts';
 import { githubActivity } from './github/activity.ts';
 import { githubConnectUrl } from './github/link.ts';
 import { fillDailyReport, readDailyReport, setDailyConfig } from './lark/daily.ts';
 import { createDoc, readDoc } from './lark/docs.ts';
 import * as boards from './boards.ts';
-import { createUpload } from './uploads.ts';
+import { createUpload, type UploadPurpose } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
 import { localeCodes, type LocalizedMap } from './localized.ts';
+import { appGuide } from './appGuide.ts';
+import { sourceDownload } from './apps/source.ts';
 
 const LARK = config.lark.enabled;
+// where hub.lark.mailDraft puts drafts on this hub (Gmail or Lark Mail), so agents describe it right
 const MESSAGES = !!messenger;
 
-const INSTRUCTIONS = `This is the ${config.companyName} company hub. It lets the user publish web apps to the company server and share/install Skills.
+const INSTRUCTIONS = `This is the ${config.companyName} company hub (colleagues also call it 中台 or 公司中台; "publish to the hub / 发布到中台" means this server). It lets the user publish web apps to the company server and share/install Skills. When the user mentions the hub, use these tools; do not ask for its address.
 
 Language: the team is multilingual and the hub UI is shown in ${localeCodes().join(', ')}. Always talk to the user in the language they use with you.
 Whenever you publish or update an app or a Skill, pass \`localized\` with a short display name and a one-sentence description for EVERY hub language (${localeCodes().join(', ')}), translating them yourself, so colleagues see the listing in their own language. Do not ask the user to translate; just show them the names you chose. Only this listing text is translated: never translate the Skill content (SKILL.md) or the app itself. Hub messages you receive (errors, notes) are already in the user's hub language.
 
-Publishing an app (e.g. "publish this project to the company server"):
-1. Before publishing, ask the user three things in one short message, offering your own suggestions as defaults:
-   - name: a short display name (suggest one from the project if it has none; you will also provide it in every hub language via localized)
-   - subdomain: lowercase slug, becomes <slug>.${config.appsDomain} (check with check_slug)
-   - who can open it: only me (private) / selected colleagues (members, then ask who; use find_colleagues) / whole company (company) / everyone on the internet (public, needs admin approval)
-   If the project has no icon, draw a simple square SVG icon (flat, rounded, one or two colors, no text) and pass it as icon_svg.
-2. Decide kind:
-   - static: plain HTML/JS/CSS or a frontend build (Vite/React/Vue/Next export). Build locally first, then upload the build output folder.
-   - container: needs a server process (API routes, database, scheduled jobs). Upload the source; the hub builds it with its Dockerfile, or generates one for Node (needs "start" script) / Python (main.py/app.py). The app must listen on $PORT (default 3000) and host 0.0.0.0, and store files under $DATA_DIR (/data), which persists.
-   - Browser extensions / desktop tools are not websites: build a static download page that links the packaged zip (included in the upload) with install steps.
-3. create_upload(purpose="app"), then run the returned shell command to tar+upload (exclude node_modules, .git, .env, secrets). On Windows use command_windows_powershell.
-4. publish_app with the upload_id. Report the URL and access setting to the user.
-Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app (the owner can hide it with update_app feedback_button=false), or through their agent. When the user asks to improve or fix one of their apps or Skills (or asks what people said), call list_feedback, go through the items with the user, change and republish, then resolve_feedback each item with a short reply so the person who asked is told. When the user runs into a problem with someone else's app or Skill (a Skill misbehaves, an app errors or lacks something) and wants the author to know, draft it with send_feedback: show the user the exact text first and send only after they agree. get_app_status also shows how many colleagues used it in the last 30 days.
-Logged-in users reach apps through the hub gateway. Your app can read the current user from request headers X-Hub-User-Id, X-Hub-User-Name (URI-encoded), X-Hub-User-Email, X-Hub-User-Locale, or from the browser via fetch('/__hub/me') ({ id, name, email, avatar, locale }). Do not build a separate login. App UI text should follow the user's hub language (locale above) with locale files, so English and Chinese colleagues can both use it.
-${config.designSkills.length ? `Company design: when you build anything visual (apps, pages, decks, charts), install and follow these Skills from the market: ${config.designSkills.join(', ')}.` : 'Company design: if the Skill market has design-system or brand Skills (check list_skills), install and follow them when you build anything visual.'}
-Never put secrets in the upload; use set_app_env for API keys.
-Working together: an app or Skill can have collaborators besides its owner (set_collaborators, find_colleagues to pick people). They publish new versions and change settings like the owner; only the owner (or an admin) deletes it, changes the collaborators or hands it over (transfer_ownership). If publishing fails because a slug or Skill name belongs to someone else, suggest asking that person to add the user as a collaborator.
-${LARK ? `Apps that use Lark (read or write a Lark Base table, notify a colleague, e.g. an invoice helper that writes a request row and tells finance): never ask colleagues for Lark tokens or build a Lark login. After publishing, call set_app_lark with the tables (alias, link with ?table=, read/write) and the people/groups it may notify. In the app load <script src="/__hub/sdk.js"></script> and use hub.lark.records(alias, {where}), hub.lark.addRecord(alias, fields), hub.lark.updateRecord(alias, id, fields), hub.notify({to: [name or group alias], text, link}). To prepare an email the person sends themselves (e.g. a confirmation to a client, cc colleagues), declare mail_drafts: true and call hub.lark.mailDraft({to, cc, subject, html}): it lands in their own Lark mailbox as a draft, never sent. Calls run as the person using the app; the first time, the SDK sends them to the hub to agree, then back. Container app servers can call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request. Writing needs the Lark scope bitable:app on the hub's Lark app (admin).\n` : ''}
+Building or changing an app (e.g. "make an app that…", "publish this project to the company server"): call app_guide first and follow it; it has the steps, the hub SDK and the report format. The core of it:
+- Look before building: if one of the user's apps (list_my_apps) already does this, improve it, starting from its feedback (list_feedback) and the code of its live version (get_app_source).
+- Decide the defaults yourself (name in every hub language, subdomain, icon) and keep a new app private to the user unless they said who should use it. Ask only what you cannot decide; if you work unattended, write open questions into your report instead of stopping.
+${LARK ? `- Business data lives in Lark, never only in the app: a table the user named, or a Base you create (create_lark_base, typed columns). Documents the app produces are Lark documents. The app's own storage is for technical state only.
+- The app reaches Lark only through the hub SDK as the person using it (/__hub/sdk.js, declared with set_app_lark). No Lark tokens, no own login.
+` : `- Business records live in the app's own server storage ($DATA_DIR in a container app), never only in the browser. No own login: the hub signs people in.
+`}${config.designSkills.length ? `- The interface uses the company design system: install_skill ${config.designSkills.join(', ')} and build from its kit and templates, no other UI library.
+` : ''}- Check it works (locally against a fake hub, then get_app_status), without writing test data into real tables or mailboxes, and end with the short report app_guide describes.
+Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app, or through their agent. When the user asks to improve one of their apps or Skills (or what people said), list_feedback, change and republish, then resolve_feedback each item with a short reply. When they hit a problem with someone else's app or Skill, draft it with send_feedback and send only after they agree with the text.
+Working together: an app or Skill can have collaborators (set_collaborators). They publish and change settings like the owner; only the owner (or an admin) deletes it, changes collaborators or hands it over (transfer_ownership). If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator.
+Never put secrets in an upload; use set_app_env for API keys.
 
 Sharing a Skill: if it has no icon, draw a simple square SVG icon and pass icon_svg. The folder must have SKILL.md at its root with frontmatter "name" (lowercase-hyphen) and "description". create_upload(purpose="skill"), upload the folder contents, then publish_skill with localized market names/descriptions for every hub language. Republishing the same name creates a new version. To change only the market text later, use update_skill.
 ${LARK ? `Lark data (Base tables): the hub reads Lark Base with each person's own Lark access, so everyone only sees rows they could open in Lark. If a tool says Lark data is not connected, give the user the link it returns (they approve once in Lark) and continue after they confirm.\n` : ''}
@@ -113,8 +111,8 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
 
   server.registerTool('create_upload', {
     description: 'Get a one-time upload URL (valid 30 min) and the shell command to upload a project folder as a .tar.gz.',
-    inputSchema: { purpose: z.enum(['app', 'skill']) },
-  }, guard(({ purpose }: { purpose: 'app' | 'skill' }) => {
+    inputSchema: { purpose: z.enum(['app', 'skill', 'source']).describe('source: the project folder an app is built from, passed to publish_app as source_upload_id') },
+  }, guard(({ purpose }: { purpose: UploadPurpose }) => {
     const up = createUpload(user.id, purpose);
     return {
       upload_id: up.id,
@@ -122,7 +120,8 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       command: `tar --exclude=node_modules --exclude=.git --exclude='.env*' --exclude=.DS_Store -czf /tmp/${up.id}.tgz -C <FOLDER> . && curl -fsS -X PUT --data-binary @/tmp/${up.id}.tgz '${up.url}' && rm /tmp/${up.id}.tgz`,
       // Windows 10+ ships tar.exe and curl.exe; plain `curl` in Windows PowerShell is Invoke-WebRequest, so name the .exe
       command_windows_powershell: `$f = "$env:TEMP\\${up.id}.tgz"; tar.exe --exclude=node_modules --exclude=.git --exclude='.env*' -czf $f -C "<FOLDER>" .; if ($LASTEXITCODE -eq 0) { curl.exe -fsS -X PUT --data-binary "@$f" "${up.url}" }; Remove-Item $f -ErrorAction SilentlyContinue`,
-      note: 'Use `command` on macOS/Linux (or Git Bash/WSL), `command_windows_powershell` in PowerShell on Windows. Replace <FOLDER> with the folder to upload (for static sites: the build output). Then call ' + (purpose === 'app' ? 'publish_app' : 'publish_skill') + ' with upload_id.',
+      note: 'Use `command` on macOS/Linux (or Git Bash/WSL), `command_windows_powershell` in PowerShell on Windows. Replace <FOLDER> with the folder to upload (for static sites: the build output; for source: the project folder). Then call '
+        + (purpose === 'skill' ? 'publish_skill with upload_id.' : purpose === 'source' ? 'publish_app with it as source_upload_id.' : 'publish_app with upload_id.'),
     };
   }));
 
@@ -142,8 +141,12 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     `%${query}%`, `%${query}%`, `%${query}%`,
   )));
 
+  server.registerTool('app_guide', {
+    description: 'How to build, publish and report on an app on this hub, step by step (data, interface, hub SDK, checks, report). Call it before building or changing an app.',
+  }, guard(() => ({ guide: appGuide() })));
+
   server.registerTool('publish_app', {
-    description: 'Publish (or update) an app from an upload. First publish needs name. Ask the user for name/subdomain/access before calling.',
+    description: 'Publish (or update) an app from an upload. First publish needs name. Choose name, subdomain and icon yourself unless the user gave them; a new app is private unless visibility says otherwise. Follow app_guide.',
     inputSchema: {
       upload_id: z.string(),
       slug: z.string().describe('subdomain, lowercase letters/digits/hyphens'),
@@ -158,20 +161,26 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       icon_png_base64: z.string().optional(),
       localized: localizedSchema(),
       related_skill: z.string().optional().describe('optional: slug of the Skill that goes with this app (most apps have none; "" removes the link)'),
+      source_upload_id: z.string().optional().describe('when the upload is a build (e.g. dist), an upload (purpose "source") of the project folder it was built from, so the app can be changed later on any machine'),
     },
   }, guard(async (a: {
     upload_id: string; slug: string; kind: 'static' | 'container'; name?: string; description?: string; visibility?: apps.Visibility;
-    members?: string[]; static_dir?: string; container_port?: number; icon_svg?: string; icon_png_base64?: string; localized?: LocalizedMap; related_skill?: string;
+    members?: string[]; static_dir?: string; container_port?: number; icon_svg?: string; icon_png_base64?: string; localized?: LocalizedMap; related_skill?: string; source_upload_id?: string;
   }) => apps.publishApp(user, {
     uploadId: a.upload_id, slug: a.slug, kind: a.kind, name: a.name, description: a.description, visibility: a.visibility,
     memberIds: a.members ? resolveColleagues(a.members) : undefined, staticDir: a.static_dir, containerPort: a.container_port,
-    iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, localized: a.localized, relatedSkill: a.related_skill,
+    iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, localized: a.localized, relatedSkill: a.related_skill, sourceUploadId: a.source_upload_id,
   }).then((r) => ({ ...r, notes: r.notes.map(say) }))));
 
   server.registerTool('get_app_status', {
     description: 'Status, recent releases with build logs, and runtime logs of one of your apps.',
     inputSchema: { slug: z.string() },
   }, guard(({ slug }: { slug: string }) => apps.appStatus(user, slug, locale)));
+
+  server.registerTool('get_app_source', {
+    description: 'Download command for the code of an app\'s live version (owner, collaborators and admins), to change an app you did not build on this machine. Start from it instead of an old local copy.',
+    inputSchema: { slug: z.string() },
+  }, guard(({ slug }: { slug: string }) => sourceDownload(apps.requireManageable(slug, user))));
 
   server.registerTool('list_my_apps', { description: 'Apps you own or collaborate on (myRole says which).' }, guard(() =>
     apps.listAppsFor(user, locale).filter((a) => a.myRole)));
@@ -385,8 +394,8 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     }));
 
     server.registerTool('inspect_base', {
-      description: 'Look inside a Lark Base (Bitable) link with the user\'s Lark access: its tables, and for the chosen table (from ?table= in the link, or `table`) the fields with their types and 5 sample rows.',
-      inputSchema: { url: z.string().describe('a Lark Base or wiki link, e.g. https://xxx.larksuite.com/base/AbC…?table=tbl…'), table: z.string().optional() },
+      description: 'Look inside a Lark Base (Bitable) or spreadsheet link with the user\'s Lark access. Base: its tables, and for the chosen table (from ?table= in the link, or `table`) the fields with their types and 5 sample rows. Spreadsheet: its sheets, and for the chosen sheet (?sheet= or `table`) the columns from row 1 and the last 5 rows.',
+      inputSchema: { url: z.string().describe('a Lark Base, spreadsheet or wiki link, e.g. https://xxx.larksuite.com/base/AbC…?table=tbl… or …/sheets/AbC…?sheet=…'), table: z.string().optional().describe('table id (Base) or sheet id (spreadsheet)') },
     }, guard((a: { url: string; table?: string }) => dataSources.inspect(user, a.url, a.table)));
   }
 
@@ -486,14 +495,48 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
 
   // ---- apps that use Lark as the person using them ----
   if (LARK) {
+    server.registerTool('create_lark_base', {
+      description: 'Create a Lark Base (multidimensional table) as the user for an app to keep its records in, with the tables and columns the app needs. Use it when the user named no table: business records belong in Lark, not in the app. The first column of each table is its title column (make it text, e.g. the customer name). Works before or after the app is published: once the app declares it (set_app_lark), it is shared with whoever may open the app and re-shared when that changes. Returns links with ?table= to pass to set_app_lark.',
+      inputSchema: {
+        app: z.string().optional().describe('slug of the app it is for, if the app exists already: shares it right away'),
+        name: z.string().describe('the Base name, e.g. the app name'),
+        tables: z.array(z.object({
+          name: z.string(),
+          columns: z.array(z.object({ name: z.string(), type: z.enum(workspace.COLUMN_TYPES), options: z.array(z.string()).optional().describe('for select / multi') })).min(1),
+        })).min(1),
+      },
+    }, guard(async (a: { app?: string; name: string; tables: { name: string; columns: workspace.Column[] }[] }) => {
+      const app = a.app && apps.getApp(a.app) ? apps.requireManageable(a.app, user) : null;
+      const base = await workspace.createBase(user, a);
+      const res = { kind: 'bitable' as const, token: base.token, name: a.name, url: base.url };
+      resources.rememberCreated(user, res);
+      if (!app) return { ...base, next: 'Publish the app if needed, then declare these links with set_app_lark: that shares the Base with whoever may open the app.' };
+      resources.recordResource(app, user, res);
+      const shared = await resources.shareAppResources(user, app.slug, res);
+      return { ...base, sharedWith: app.visibility, shareProblems: shared.failed.length ? shared.failed : undefined };
+    }));
+
+    server.registerTool('add_lark_columns', {
+      description: 'Add columns at the end of a table the user named (Lark Base table, or a spreadsheet sheet where row 1 holds the names), as the user. Existing columns are never renamed, removed or changed; names that exist are skipped. Use it when the app must keep something the table has no column for.',
+      inputSchema: {
+        url: z.string().describe('the table link with ?table= (Base) or ?sheet= (spreadsheet)'),
+        columns: z.array(z.object({ name: z.string(), type: z.enum(workspace.COLUMN_TYPES).describe('spreadsheets ignore it'), options: z.array(z.string()).optional() })).min(1),
+      },
+    }, guard((a: { url: string; columns: workspace.Column[] }) => workspace.addColumns(user, a.url, a.columns)));
+
     server.registerTool('set_app_lark', {
-      description: 'Declare which Lark Base tables an app may use (read or write), whom it may notify through the hub bot, and whether it may save email drafts in the person\'s mailbox. Each colleague agrees once before the app can act as them; changing the declaration asks again. Send empty lists to remove it.',
+      description: 'Declare which Lark Base tables or spreadsheets an app may use (read or write), whom it may notify through the hub bot, whether it may save email drafts in the person\'s mailbox and create Lark documents. Each colleague agrees once before the app can act as them; changing the declaration asks again. A Base made with create_lark_base becomes the app\'s and is shared with whoever may open it. Send empty lists to remove it.',
       inputSchema: { slug: z.string(), lark: appLark.manifestSchema },
     }, guard(async (a: { slug: string; lark: appLark.ManifestInput }) => {
       const app = apps.getApp(a.slug);
       if (!app) throw new UserError('err.appNotFound', { slug: a.slug });
       const m = await appLark.setManifest(user, app, a.lark, resolveColleagues(a.lark.notify?.people ?? []));
-      return { declared: m && appLark.describeManifest(undefined, { ...app, lark_manifest: JSON.stringify(m) }), sdk: `${appUrl(a.slug)}/__hub/sdk.js` };
+      const own = m ? await resources.adoptCreated(user, app, m.tables.filter((t) => t.kind !== 'sheet').map((t) => t.app)) : { adopted: [], failed: [] };
+      return {
+        declared: m && appLark.describeManifest(undefined, { ...app, lark_manifest: JSON.stringify(m) }), sdk: `${appUrl(a.slug)}/__hub/sdk.js`,
+        ...(own.adopted.length ? { sharedBases: own.adopted.map((r) => r.name), sharedWith: app.visibility } : {}),
+        ...(own.failed.length ? { shareProblems: own.failed } : {}),
+      };
     }));
   }
 
@@ -612,8 +655,11 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
 
   server.registerTool('install_skill', {
     description: 'Get the download command to install (or update) a skill from the company market.',
-    inputSchema: { slug: z.string() },
-  }, guard(({ slug }: { slug: string }) => skills.installInstructions(user, slug)));
+    inputSchema: { slug: z.string().optional().describe('the Skill\'s name in the market'), name: z.string().optional().describe('same as slug') },
+  }, guard(({ slug, name }: { slug?: string; name?: string }) => {
+    if (!slug && !name) throw new UserError('err.skill.slugRequired');
+    return skills.installInstructions(user, (slug ?? name)!);
+  }));
 
   server.registerTool('check_skill_updates', {
     description: 'Given installed skills (from their .hub-skill.json), return those with newer versions in the market.',

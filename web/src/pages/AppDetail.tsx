@@ -9,7 +9,8 @@ import { AppIcon, Avatar, CopyBox, Icon, IconEditor, LinkEditor, LocalizedFields
 
 interface Usage { days: { day: string; people: number }[]; last30: number; total: number }
 interface Release { version: number; status: string; created_at: number; created_by_name: string; kind: string }
-interface LarkAccess { tables: { name: string; url: string; access: 'read' | 'write' }[]; notify: { people: string[]; chats: string[] }; mailDrafts: boolean; mailbox: string; consented: boolean }
+interface LarkAccess { tables: { name: string; url: string; access: 'read' | 'write' }[]; notify: { people: string[]; chats: string[]; appUsers?: boolean }; mailDrafts: boolean; mailbox: string;
+  docs: { parent: string | null; share: 'view' | 'edit' | 'none' | 'wiki' } | null; consented: boolean }
 
 /** What the app may do in Lark as the person using it, and whether this person agreed (with a way to take it back). */
 function LarkCard({ lark, consentUrl, slug, reload }: { lark: LarkAccess; consentUrl: string; slug: string; reload: () => void }) {
@@ -29,7 +30,9 @@ function LarkCard({ lark, consentUrl, slug, reload }: { lark: LarkAccess; consen
           </div>
         ))}
         {who.length > 0 && <div className="small">{t('appDetail.lark.notify', { who: who.join(t('common.listSeparator')) })}</div>}
+        {lark.notify.appUsers && <div className="small">{t('appDetail.lark.notifyUsers')}</div>}
         {lark.mailDrafts && <div className="small">{t('appDetail.lark.mail', { mailbox: lark.mailbox })}</div>}
+        {lark.docs && <div className="small">{t(`appDetail.lark.docs.${lark.docs.share}`)}</div>}
       </div>
       <div className="row" style={{ marginTop: 12 }}>
         {lark.consented

@@ -8,6 +8,7 @@ import { all, get, now, run, tx, type User } from './db.ts';
 import { tr, UserError } from './i18n/index.ts';
 import { localize } from './localized.ts';
 import { messenger } from './notify.ts';
+import { reshareLater } from './apps/resources.ts';
 
 export type Kind = 'app' | 'skill';
 export interface Collaborator { id: string; name: string; avatar: string | null; role: 'owner' | 'collaborator' }
@@ -70,6 +71,7 @@ export function setCollaborators(user: User, kind: Kind, slug: string, change: {
     }
     for (const id of remove) run('DELETE FROM collaborators WHERE kind = ? AND slug = ? AND user_id = ?', kind, slug, id);
   });
+  if (kind === 'app') reshareLater(user, slug);
   for (const id of added) {
     if (id === user.id) continue;
     void tell(id, (L) => tr(L, 'collab.msg.added', { name: user.name, kind: kindName(L, kind), target: t.name(L), url: t.link }));

@@ -429,6 +429,28 @@ const MIGRATIONS: string[] = [
   CREATE INDEX collaborators_user ON collaborators (user_id);
   CREATE TRIGGER apps_collaborators_gone AFTER DELETE ON apps BEGIN DELETE FROM collaborators WHERE kind = 'app' AND slug = OLD.slug; END;
   CREATE TRIGGER skills_collaborators_gone AFTER DELETE ON skills BEGIN DELETE FROM collaborators WHERE kind = 'skill' AND slug = OLD.slug; END;
+  `,  // Lark Bases and documents the hub set up for an app, shared with whoever may open the app
+  `
+  CREATE TABLE app_resources (
+    app_slug TEXT NOT NULL REFERENCES apps(slug) ON DELETE CASCADE,
+    kind TEXT NOT NULL,                    -- bitable | docx | sheet
+    token TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (app_slug, token)
+  );
+  `,  // Bases the hub created for someone, so one made before its app exists is shared once an app declares it
+  `
+  CREATE TABLE lark_created (
+    token TEXT PRIMARY KEY,
+    kind TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL
+  );
   `,
 ];
 

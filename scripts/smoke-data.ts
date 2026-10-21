@@ -89,11 +89,18 @@ const lark = {
   writeTokens: new Set<string>(),
   docsTokens: new Set<string>(),
   wikiTokens: new Set<string>(),
+  sheetsTokens: new Set<string>(),
+  sheetCols: 4,
+  sheetReadOnly: false,
+  sheet: [['客户', '产品', '金额', '状态'], ['Northwind', 'API 套餐', '12000', '已签'], ['Lumen', 'Skills', '3000', '谈判中'], [], ['Atlas', 'API 套餐', '8000', '已签']] as unknown[][],
   made: new Map<string, { title: string; folder?: string; blocks: { block_id: string; block_type: number; children?: string[] }[]; calls: number }>(),
   doc: new Map<string, DocBlock>(),
   fixP1: false,
   created: [] as { table: string; fields: Record<string, unknown>; by: string }[],
   updated: [] as { record: string; fields: Record<string, unknown> }[],
+  bases: new Map<string, { name: string; tables: { id: string; name: string; fields: { field_name: string; type: number }[] }[] }>(),
+  addedFields: [] as { app: string; table: string; field: string }[],
+  perms: [] as { token: string; type: string; public?: string; member?: string }[],
 };
 let serial = 0;
 
@@ -140,6 +147,7 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('bitable:app')) lark.writeTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('docx:document') && lark.scopesAsked.split(' ').includes('docx:document:create')) lark.docsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('wiki:wiki')) lark.wikiTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -249,6 +257,24 @@ const larkServer = http.createServer(async (req, res) => {
     if (bearer !== 't-app') return send({ code: 99991663, msg: 'bad tenant token' });
     lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text });
     return send({ code: 0, data: {} });
+  }
+  if (p.startsWith('/sheets/')) {
+    if (!lark.sheetsTokens.has(bearer)) return send({ code: 99991679, msg: 'required one of these privileges under the user identity: [sheets:spreadsheet]' });
+    if (lark.sheetReadOnly && req.method !== 'GET') return send({ code: 1254302, msg: 'Permission denied.' });
+    if (p === '/sheets/v3/spreadsheets/shtDeals/sheets/query') return send({ code: 0, data: { sheets: [{ sheet_id: 'S1', title: 'Deals', grid_properties: { row_count: lark.sheet.length, column_count: lark.sheetCols } }] } });
+    const range = (r: string) => { const m = decodeURIComponent(r).match(/^S1!A(\d+):[A-Z]+(\d+)$/)!; return [Number(m[1]), Number(m[2])]; };
+    const v = p.match(/^\/sheets\/v2\/spreadsheets\/shtDeals\/values\/(.+)$/);
+    if (v && req.method === 'GET') { const [a, b] = range(v[1]); return send({ code: 0, data: { valueRange: { values: lark.sheet.slice(a - 1, b) } } }); }
+    if (p === '/sheets/v2/spreadsheets/shtDeals/values_append') { lark.sheet.push(body.valueRange.values[0]); return send({ code: 0, data: { updates: { updatedRange: `S1!A${lark.sheet.length}:D${lark.sheet.length}` } } }); }
+    if (p === '/sheets/v2/spreadsheets/shtDeals/dimension_range') { lark.sheetCols += body.dimension.length; return send({ code: 0, data: {} }); }
+    if (p === '/sheets/v2/spreadsheets/shtDeals/values' && req.method === 'PUT') {
+      const m = decodeURIComponent(body.valueRange.range).match(/^S1!([A-Z]+)(\d+):[A-Z]+\d+$/)!;
+      const col = m[1].charCodeAt(0) - 65;
+      const row = (lark.sheet[Number(m[2]) - 1] ??= []);
+      (body.valueRange.values[0] as unknown[]).forEach((v, i) => { row[col + i] = v; });
+      return send({ code: 0, data: {} });
+    }
+    return send({ code: 1, msg: 'unknown sheets call ' + p });
   }
   if (p === '/application/v6/applications') {
     if (bearer !== 't-app') return send({ code: 99991663, msg: 'bad tenant token' });
@@ -407,6 +433,35 @@ const larkServer = http.createServer(async (req, res) => {
     return url.searchParams.get('token') === 'wikOrders'
       ? send({ code: 0, data: { node: { obj_type: 'bitable', obj_token: 'appOrders' } } })
       : send({ code: 0, data: { node: { obj_type: 'docx', obj_token: 'doxX' } } });
+  }
+  // creating Bases, tables and columns, and sharing (needs the Base write scope)
+  if ((p === '/bitable/v1/apps' && req.method === 'POST') || (/^\/bitable\/v1\/apps\/[^/]+\/tables(\/[^/]+\/fields)?$/.test(p) && req.method === 'POST') || req.method === 'DELETE' && p.startsWith('/bitable/')) {
+    if (!lark.writeTokens.has(bearer)) return send({ code: 99991679, msg: 'required one of these privileges under the user identity: [bitable:app]' });
+    if (p === '/bitable/v1/apps') {
+      const token = `appMade${lark.bases.size + 1}`;
+      lark.bases.set(token, { name: body.name, tables: [{ id: 'tblDefault', name: '数据表', fields: [{ field_name: '多行文本', type: 1 }] }] });
+      return send({ code: 0, data: { app: { app_token: token, default_table_id: 'tblDefault', url: `https://x.larksuite.com/base/${token}` } } });
+    }
+    const t = p.match(/^\/bitable\/v1\/apps\/([^/]+)\/tables(?:\/([^/]+))?(\/fields)?$/)!;
+    if (req.method === 'DELETE') { const b = lark.bases.get(t[1])!; b.tables = b.tables.filter((x) => x.id !== t[2]); return send({ code: 0, data: {} }); }
+    if (t[3]) {
+      lark.addedFields.push({ app: t[1], table: t[2], field: body.field_name });
+      lark.bases.get(t[1])?.tables.find((x) => x.id === t[2])?.fields.push(body);
+      return send({ code: 0, data: { field: { field_id: 'fldNew', field_name: body.field_name } } });
+    }
+    const b = lark.bases.get(t[1])!;
+    const id = `tblMade${b.tables.length}`;
+    b.tables.push({ id, name: body.table.name, fields: body.table.fields });
+    return send({ code: 0, data: { table_id: id } });
+  }
+  const madeTables = p.match(/^\/bitable\/v1\/apps\/(appMade\d+)\/tables$/);
+  if (madeTables) return send({ code: 0, data: { items: (lark.bases.get(madeTables[1])?.tables ?? []).map((x) => ({ table_id: x.id, name: x.name })), has_more: false } });
+  const madeFields = p.match(/^\/bitable\/v1\/apps\/(appMade\d+)\/tables\/([^/]+)\/fields$/);
+  if (madeFields) return send({ code: 0, data: { items: (lark.bases.get(madeFields[1])?.tables.find((x) => x.id === madeFields[2])?.fields ?? []).map((f, i) => ({ field_id: `fld${i}`, field_name: f.field_name, type: f.type })), has_more: false } });
+  const perm = p.match(/^\/drive\/v[12]\/permissions\/([^/]+)\/(public|members)$/);
+  if (perm) {
+    lark.perms.push({ token: perm[1], type: url.searchParams.get('type') ?? '', ...(perm[2] === 'public' ? { public: body.link_share_entity } : { member: body.member_id }) });
+    return send({ code: 0, data: {} });
   }
   if (p.startsWith('/bitable/v1/apps/appSecret') || (lark.denyOrders && p.startsWith('/bitable/v1/apps/appOrders'))) return send({ code: 1254302, msg: 'Permission denied.' });
   const write = p.match(/^\/bitable\/v1\/apps\/appOrders\/tables\/(tbl\w+)\/records(?:\/(\w+))?$/);
@@ -738,6 +793,16 @@ try {
   check((await tool(alice.token, 'set_app_lark', { slug: 'invoice', lark: { tables: [] } })).error, 'only the app owner declares its Lark access');
   const app = await loginToApp('invoice', alex.jar);
   check((await appFetch('invoice', '/__hub/sdk.js', app)).status === 200, 'the SDK is served on the app domain');
+  const onHub = await fetch(`${HUB}/__hub/sdk.js`);
+  check(onHub.status === 404 && (await onHub.text()).includes('<slug>'), "the hub's own domain says the SDK lives on the app's domain instead of serving the web page");
+  const init = await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) })).json() as { result: { instructions: string } };
+  const intro = init.result.instructions;
+  check(intro.includes('中台') && intro.includes('call app_guide first') && intro.includes('Business data lives in Lark') && intro.includes('keep a new app private') && !intro.includes('ask the user three things'), 'agents get the core principles when they connect, and decide the defaults themselves');
+  check(intro.length < 14000, `and the instructions stay short (${intro.length} chars)`);
+  const guide = String((await tool(alex.token, 'app_guide', {})).guide);
+  check(guide.includes('their own Gmail, never sent') && guide.includes('records(alias, {where') && guide.includes('No table named (the usual case): create_lark_base') && guide.includes('## 8. Report'),
+    'app_guide has the full steps: where data lives, the SDK and what it returns, the report');
   const first = await appFetch('invoice', '/__hub/lark/tables/projects/records', app);
   const beforeBody = await first.json() as { error: string; consentUrl: string };
   check(first.status === 403 && beforeBody.error === 'consent_required' && beforeBody.consentUrl.includes('/auth/app-lark?app=invoice'), 'before agreeing, calls answer consent_required with the consent link');
@@ -998,6 +1063,9 @@ try {
     '--localized', JSON.stringify({ 'zh-CN': { name: '发票检查', description: '检查发票' }, en: { name: 'Invoice check', description: 'Checks invoices' } })],
     { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
   rmSync(skillDir, { recursive: true, force: true });
+  check(String((await tool(bob.token, 'install_skill', { name: 'invoice-check' })).install).includes('invoice-check'), 'install_skill also takes the name');
+  const howTo = String((await tool(bob.token, 'install_skill', { slug: 'invoice-check' })).install);
+  check(howTo.includes('DIR=~/.claude/skills/invoice-check;') && howTo.includes('DIR=~/.codex/skills/invoice-check;') && howTo.includes('.codex\\skills\\invoice-check'), 'install_skill gives a ready command for Claude Code and for Codex');
   lark.messages = [];
   check((await api(bob.jar, 'POST', '/skills/invoice-check/feedback', { body: '日期格式识别错了' })).status === 200, 'a colleague leaves feedback on a Skill');
   const sent = await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'invoice-check', body: '遇到增值税专票会报错', context: 'Step 2, error: unknown field "tax_rate" (v1)' });
@@ -1065,6 +1133,152 @@ try {
   await tool(alice.token, 'transfer_ownership', { kind: 'app', slug: 'invoice', to: 'alex@example.com' });
   await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', remove: ['alice@example.com', 'bob@example.com'] });
   check((await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice' })).collaborators.length === 1, 'and back again');
+
+  // a Lark spreadsheet works like a table for agents and apps (row 1 = column names)
+  const sheetUrl = 'https://x.larksuite.com/sheets/shtDeals?sheet=S1';
+  await connect(alex.jar);
+  const noSheets = await tool(alex.token, 'inspect_base', { url: sheetUrl });
+  check(String(noSheets.error).includes('sheets=1'), 'reading a spreadsheet first asks for the spreadsheet permission');
+  await connect(alex.jar, '&sheets=1');
+  check(lark.scopesAsked.split(' ').includes('sheets:spreadsheet') && lark.scopesAsked.split(' ').includes('bitable:app:readonly'), 'which is asked for on top of Lark data access');
+  const sheetLook = await tool(alex.token, 'inspect_base', { url: sheetUrl });
+  check(sheetLook.fields?.map((f: { name: string }) => f.name).join() === '客户,产品,金额,状态' && sheetLook.sample?.length === 3 && sheetLook.sample.at(-1).row === 'row5', 'inspect_base shows its columns and last rows, skipping blank ones');
+  const dealsDir = mkdtempSync(path.join(tmpdir(), 'hub-deals-'));
+  (await import('node:fs')).writeFileSync(path.join(dealsDir, 'index.html'), '<!doctype html><title>deals</title>');
+  execFileSync(process.execPath, ['scripts/admin.ts', 'publish-app', dealsDir, '--owner', 'alex@example.com', '--slug', 'deals', '--visibility', 'private',
+    '--localized', JSON.stringify({ 'zh-CN': { name: '企业客户', description: '录入' }, en: { name: 'Deals', description: 'File deals' } })],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
+  rmSync(dealsDir, { recursive: true, force: true });
+  const oneSheet = await tool(alex.token, 'set_app_lark', { slug: 'deals', lark: { tables: [{ name: 'deals', url: 'https://x.larksuite.com/sheets/shtDeals', access: 'write' }] } });
+  check(!oneSheet.error && JSON.parse(String(new (await import('node:sqlite')).DatabaseSync(path.join(dataDir, 'hub.db')).prepare("SELECT lark_manifest FROM apps WHERE slug = 'deals'").get()?.lark_manifest)).tables[0].table === 'S1', 'a spreadsheet with one sheet needs no ?sheet=');
+  const twoTables = String((await tool(alex.token, 'set_app_lark', { slug: 'deals', lark: { tables: [{ name: 'deals', url: 'https://x.larksuite.com/base/appOrders', access: 'read' }] } })).error);
+  check(twoTables.includes('订单 (?table=tblOrders)') && twoTables.includes('项目 (?table=tblProjects)'), 'a Base with several tables asks which one, listing them');
+  check(!(await tool(alex.token, 'set_app_lark', { slug: 'deals', lark: { tables: [{ name: 'deals', url: sheetUrl, access: 'write' }] } })).error, 'an app declares a spreadsheet like a table');
+  const dealsApp = await loginToApp('deals', alex.jar);
+  const consentAt = ((await (await appFetch('deals', '/__hub/lark/tables/deals/records', dealsApp)).json()) as { consentUrl: string }).consentUrl;
+  const dealsCsrf = /name="csrf" value="([^"]+)"/.exec(await (await fetch(consentAt, { headers: { cookie: alex.jar.header() } })).text())![1];
+  const dealsAllow = await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'deals', return: '/', decision: 'allow', csrf: dealsCsrf }) });
+  const dealsBack = (await fetch(`${HUB}${dealsAllow.headers.get('location')}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } })).headers.get('location');
+  check(dealsBack === 'http://deals.apps.localhost:18930/', 'with the permission already given, agreeing goes straight back to the app');
+  const signed = await (await appFetch('deals', `/__hub/lark/tables/deals/records?where=${encodeURIComponent(JSON.stringify([{ field: '状态', op: 'is', value: '已签' }]))}`, dealsApp)).json() as { records: { id: string; text: Record<string, string> }[] };
+  check(signed.records.map((r) => r.id).join() === 'row2,row5' && signed.records[1].text['客户'] === 'Atlas', 'the app reads rows as records, filtered');
+  const sheetPost = (p: string, b: unknown, method = 'POST') => appFetch('deals', p, dealsApp, { 'content-type': 'application/json' }, method, JSON.stringify(b));
+  const appended = await (await sheetPost('/__hub/lark/tables/deals/records', { fields: { 客户: 'Cobalt', 金额: 5000, 状态: '已签' } })).json() as { id: string };
+  check(appended.id === 'row6' && JSON.stringify(lark.sheet[5]) === JSON.stringify(['Cobalt', null, 5000, '已签']), 'adds a row in column order');
+  check((await sheetPost('/__hub/lark/tables/deals/records/row3', { fields: { 状态: '已签' } }, 'PATCH')).status === 200 && JSON.stringify(lark.sheet[2]) === JSON.stringify(['Lumen', 'Skills', '3000', '已签']), 'and changes one column of a row, keeping the rest');
+  const typo = await (await sheetPost('/__hub/lark/tables/deals/records', { fields: { 客户名: 'x' } })).json() as { error: string };
+  check(typo.error.includes('客户名') && typo.error.includes('客户, 产品, 金额, 状态'), 'a wrong column name is refused with the real ones');
+
+  // no table named: the agent creates a Base for the app; records live in Lark, shared with whoever may open the app
+  await connect(alex.jar, '&write=1&sheets=1');
+  const newBase = await tool(alex.token, 'create_lark_base', { app: 'deals', name: '企业客户', tables: [{ name: '合作', columns: [
+    { name: '客户', type: 'text' }, { name: '状态', type: 'select', options: ['待确认', '已确认'] }, { name: '金额', type: 'number' }, { name: '确认函', type: 'url' }] }] });
+  const madeBase = lark.bases.get(newBase.token);
+  check(newBase.tables?.[0]?.url === `https://x.larksuite.com/base/${newBase.token}?table=tblMade1` && madeBase?.tables.map((t) => t.name).join() === '合作'
+    && madeBase.tables[0].fields.map((f) => f.field_name).join() === '客户,状态,金额,确认函', 'create_lark_base makes the tables and columns the app needs (without the empty default table)');
+  check(lark.perms.at(-1)?.token === newBase.token && lark.perms.at(-1)?.public === 'closed', 'a private app keeps its Base private');
+  lark.perms = [];
+  await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'deals', add: ['bob@example.com'] });
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.perms.some((x) => x.member === 'ou_dev_bob' && x.token === newBase.token), 'a collaborator on the app gets edit access to its Base');
+  lark.perms = [];
+  await tool(alex.token, 'set_app_access', { slug: 'deals', visibility: 'company' });
+  await new Promise((r) => setTimeout(r, 300));
+  check(lark.perms.some((x) => x.token === newBase.token && x.public === 'tenant_editable'), 'opening the app to the company opens its Base to the company');
+  const cols = await tool(alex.token, 'add_lark_columns', { url: newBase.tables[0].url, columns: [{ name: '邮箱', type: 'text' }, { name: '状态', type: 'select' }] });
+  check(cols.added?.join() === '邮箱' && cols.skipped?.join() === '状态', 'add_lark_columns adds what is missing and leaves existing columns alone');
+  const sheetCols = await tool(alex.token, 'add_lark_columns', { url: sheetUrl, columns: [{ name: '邮箱', type: 'text' }, { name: '确认日期', type: 'date' }, { name: '客户', type: 'text' }] });
+  check(sheetCols.added?.join() === '邮箱,确认日期' && JSON.stringify(lark.sheet[0]) === JSON.stringify(['客户', '产品', '金额', '状态', '邮箱', '确认日期']) && lark.sheetCols === 6,
+    'on a spreadsheet they go after the last column name');
+  lark.sheetReadOnly = true;
+  const readOnly = await tool(alex.token, 'add_lark_columns', { url: sheetUrl, columns: [{ name: '备注', type: 'text' }] });
+  check(/create_lark_base/.test(String(readOnly.error)) && !/打不开|cannot open/.test(String(readOnly.error)), 'a table the person can only view says so, and what to do instead');
+  lark.sheetReadOnly = false;
+
+  // the Base can come first: it is the app's once the app is published and declares it
+  lark.perms = [];
+  const early = await tool(alex.token, 'create_lark_base', { app: 'later', name: '活动报名', tables: [{ name: '报名', columns: [{ name: '姓名', type: 'text' }, { name: '日期', type: 'date' }] }] });
+  check(!early.error && String(early.next).includes('set_app_lark') && !lark.perms.length, 'create_lark_base works before the app exists');
+  const laterDir = mkdtempSync(path.join(tmpdir(), 'hub-later-'));
+  (await import('node:fs')).writeFileSync(path.join(laterDir, 'index.html'), '<!doctype html><title>later</title>');
+  execFileSync(process.execPath, ['scripts/admin.ts', 'publish-app', laterDir, '--owner', 'alex@example.com', '--slug', 'later', '--visibility', 'company',
+    '--localized', JSON.stringify({ 'zh-CN': { name: '活动报名', description: '报名' }, en: { name: 'Sign-ups', description: 'Sign up' } })],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
+  rmSync(laterDir, { recursive: true, force: true });
+  const adopt = await tool(alex.token, 'set_app_lark', { slug: 'later', lark: { tables: [{ name: 'signups', url: `https://x.larksuite.com/base/${early.token}`, access: 'write' }] } });
+  check(!adopt.error && adopt.sharedBases?.join() === '活动报名' && lark.perms.some((x) => x.token === early.token && x.public === 'tenant_editable'), 'declaring it shares it with whoever may open the app (and a Base with one table needs no ?table=)');
+  lark.perms = [];
+  await tool(alex.token, 'set_app_lark', { slug: 'later', lark: { tables: [{ name: 'signups', url: `https://x.larksuite.com/base/${early.token}`, access: 'write' }] } });
+  check(!lark.perms.length, 'declaring it again does not share it again');
+
+  // documents an app produces are Lark documents, created as the person
+  check(!(await tool(alex.token, 'set_app_lark', { slug: 'deals', lark: { tables: [{ name: 'deals', url: sheetUrl, access: 'write' }], docs: {} } })).error, 'an app declares that it creates documents');
+  const docConsent = ((await (await appFetch('deals', '/__hub/lark/docs', dealsApp, { 'content-type': 'application/json' }, 'POST', '{}')).json()) as { error: string; consentUrl: string });
+  check(docConsent.error === 'consent_required', 'which needs agreeing again');
+  const docPage = await (await fetch(docConsent.consentUrl, { headers: { cookie: alex.jar.header() } })).text();
+  const docCsrf = /name="csrf" value="([^"]+)"/.exec(docPage)![1];
+  const docAllow = await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'deals', return: '/', decision: 'allow', csrf: docCsrf }) });
+  const docGo = (await fetch(`${HUB}${docAllow.headers.get('location')}`, { redirect: 'manual', headers: { cookie: alex.jar.header() } })).headers.get('location') ?? '';
+  check(docGo.startsWith('/auth/lark/connect') && docGo.includes('docs=1'), 'and, the first time, the document permission in Lark');
+  await connect(alex.jar, '&docs=1');
+  const letter = await (await appFetch('deals', '/__hub/lark/docs', dealsApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ title: '合作确认函 · Cobalt', markdown: '## 合作内容\n\nAPI 套餐，12 个月' }))).json() as { url: string };
+  check(String(letter.url).startsWith('https://www.larksuite.com/docx/') && [...lark.made.values()].some((d) => d.title === '合作确认函 · Cobalt'), 'then the app creates a Lark document from Markdown as the person');
+  const letterDoc = [...lark.made.entries()].find(([, d]) => d.title === '合作确认函 · Cobalt')![0];
+  check((letter as { sharedWith?: string }).sharedWith === 'company' && lark.perms.some((x) => x.token === letterDoc && x.type === 'docx' && x.public === 'tenant_readable'),
+    'the new document is shared for viewing with whoever may open the app');
+
+  // an app may notify whoever may use it (e.g. the person who submitted a request), checked when it sends
+  await tool(alex.token, 'set_app_lark', { slug: 'deals', lark: { tables: [{ name: 'deals', url: sheetUrl, access: 'write' }], docs: {}, notify: { app_users: true } } });
+  const usersConsent = ((await (await appFetch('deals', '/__hub/notify', dealsApp, { 'content-type': 'application/json' }, 'POST', '{}')).json()) as { consentUrl: string }).consentUrl;
+  const usersPage = await (await fetch(usersConsent, { headers: { cookie: alex.jar.header() } })).text();
+  check(/通知能使用这个应用的同事|notify colleagues who use this app/.test(usersPage) && /分享给能打开这个应用的人查看|shared for viewing with whoever may open this app/.test(usersPage), 'the consent page says it may message colleagues who use the app and shares documents');
+  await fetch(`${HUB}/auth/app-lark`, { method: 'POST', redirect: 'manual', headers: { cookie: alex.jar.header() }, body: new URLSearchParams({ app: 'deals', return: '/', decision: 'allow', csrf: /name="csrf" value="([^"]+)"/.exec(usersPage)![1] }) });
+  lark.messages = [];
+  const tellBob = await (await appFetch('deals', '/__hub/notify', dealsApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ to: ['ou_dev_bob'], text: '你的申请已通过' }))).json() as { sent: number };
+  check(tellBob.sent === 1 && lark.messages[0]?.id === 'ou_dev_bob', 'a company app notifies a colleague by id without listing them');
+  const stranger = await (await appFetch('deals', '/__hub/notify', dealsApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ to: ['nobody@example.com'], text: 'x' }))).json() as { error: string };
+  check(/nobody@example.com/.test(stranger.error) && /不是能使用这个应用的同事|not a colleague/.test(stranger.error), 'someone who is not a colleague is refused');
+  await tool(alex.token, 'set_app_access', { slug: 'deals', visibility: 'private' });
+  const outsider = await appFetch('deals', '/__hub/notify', dealsApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ to: ['alice@example.com'], text: 'x' }));
+  check(outsider.status === 400, 'once the app is private, colleagues who may not open it cannot be messaged');
+  await tool(alex.token, 'set_app_access', { slug: 'deals', visibility: 'company' });
+
+  // the code of the live version, for whoever looks after the app
+  const { c: tarC } = await import('tar');
+  const src = await tool(bob.token, 'get_app_source', { slug: 'deals' });
+  const srcTgz = path.join(tmpdir(), `hub-src-${Date.now()}.tgz`);
+  (await import('node:fs')).writeFileSync(srcTgz, Buffer.from(await (await fetch(src.download_url)).arrayBuffer()));
+  const srcFiles: string[] = [];
+  await (await import('tar')).t({ file: srcTgz, onReadEntry: (e) => { srcFiles.push(e.path); } });
+  check(src.live && srcFiles.some((f) => f.endsWith('index.html')) && String(src.command).includes('tar -xz'), 'a collaborator gets the code of the live version');
+  check(String((await tool(alice.token, 'get_app_source', { slug: 'deals' })).error).length > 0, 'someone who does not look after the app does not');
+  check((await fetch(src.download_url.replace(/t=[^&]+/, 't=1.x'))).status === 403, 'and the download link is signed');
+  // a project folder with a key in it is refused before anything changes
+  const leakDir = mkdtempSync(path.join(tmpdir(), 'hub-leak-'));
+  const fsx = await import('node:fs');
+  fsx.writeFileSync(path.join(leakDir, 'index.html'), '<h1>v2</h1>');
+  fsx.writeFileSync(path.join(leakDir, 'deploy.js'), 'const key = `-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----`;');
+  const putTar = async (purpose: string, dir: string) => {
+    const up = await tool(alex.token, 'create_upload', { purpose });
+    const file = path.join(tmpdir(), `${up.upload_id}.tgz`);
+    await tarC({ gzip: true, file, cwd: dir }, ['.']);
+    await fetch(up.upload_url, { method: 'PUT', body: fsx.readFileSync(file) });
+    rmSync(file, { force: true });
+    return up.upload_id as string;
+  };
+  const leak = await tool(alex.token, 'publish_app', { upload_id: await putTar('app', leakDir), source_upload_id: await putTar('source', leakDir), slug: 'deals', kind: 'static' });
+  check(/deploy\.js/.test(String(leak.error)), 'a source with a private key in it is refused, naming the file');
+  fsx.rmSync(path.join(leakDir, 'deploy.js'));
+  const distDir = mkdtempSync(path.join(tmpdir(), 'hub-dist-'));
+  fsx.writeFileSync(path.join(distDir, 'index.html'), '<h1>built</h1>');
+  fsx.writeFileSync(path.join(leakDir, 'package.json'), '{"scripts":{"build":"vite build"}}');
+  const built = await tool(alex.token, 'publish_app', { upload_id: await putTar('app', distDir), source_upload_id: await putTar('source', leakDir), slug: 'deals', kind: 'static' });
+  const src2 = await tool(alex.token, 'get_app_source', { slug: 'deals' });
+  const srcFiles2: string[] = [];
+  fsx.writeFileSync(srcTgz, Buffer.from(await (await fetch(src2.download_url)).arrayBuffer()));
+  await (await import('tar')).t({ file: srcTgz, onReadEntry: (e) => { srcFiles2.push(e.path); } });
+  check(!built.error && src2.version === built.version && srcFiles2.some((f) => f.endsWith('package.json')), 'a build publishes with its project folder kept as the source');
+  rmSync(leakDir, { recursive: true, force: true }); rmSync(distDir, { recursive: true, force: true }); rmSync(srcTgz, { force: true });
 
   // asking to open an app to everyone messages the admins; their decision messages the owner
   lark.messages = [];

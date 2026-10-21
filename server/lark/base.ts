@@ -27,7 +27,7 @@ async function call<T>(user: User, path: string, init?: RequestInit): Promise<T>
     return await asUser<T>(user, path, init);
   } catch (e) {
     if (e instanceof LarkError && SCOPE_CODES.has(e.code)) throw new UserError('err.lark.scopeMissing', { detail: e.message });
-    if (e instanceof LarkError && DENIED_CODES.has(e.code)) throw new UserError('err.data.denied');
+    if (e instanceof LarkError && DENIED_CODES.has(e.code)) throw new UserError(init?.method && init.method !== 'GET' && !path.endsWith('/records/search') ? 'err.data.noEdit' : 'err.data.denied');
     throw e;
   }
 }
@@ -49,6 +49,14 @@ export async function isAdvanced(user: User, app: string): Promise<boolean> {
 export async function listTables(user: User, app: string) {
   const r = await call<{ data: { items?: { table_id: string; name: string }[] } }>(user, `/bitable/v1/apps/${app}/tables?page_size=100`);
   return (r.data.items ?? []).map((t) => ({ id: t.table_id, name: t.name }));
+}
+
+/** The table a link means: the one it names, or the only table in the Base; with several, the error lists them. */
+export async function pickTable(user: User, app: string, table?: string): Promise<string> {
+  if (table) return table;
+  const tables = await listTables(user, app);
+  if (tables.length === 1) return tables[0].id;
+  throw new UserError('err.data.pickTable', { names: tables.map((t) => `${t.name} (?table=${t.id})`).join(', ') });
 }
 
 export interface Field { id: string; name: string; type: number; uiType?: string }

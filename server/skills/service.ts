@@ -107,6 +107,9 @@ function recordInstall(userId: string, slug: string, version: number) {
   );
 }
 
+/** Where agents read Skills from, relative to the home folder. */
+const SKILL_DIRS: [string, string][] = [['Claude Code', '.claude/skills'], ['Codex', '.codex/skills']];
+
 export function installInstructions(user: User, slug: string) {
   const skill = get<Skill>('SELECT * FROM skills WHERE slug = ?', slug);
   if (!skill || (!skill.listed && !canManageSkill(skill, user))) throw new UserError('err.skill.notFound', { slug });
@@ -119,16 +122,15 @@ export function installInstructions(user: User, slug: string) {
     version: v,
     download_url: url,
     install: [
-      'Install into the skills folder your agent reads, replacing any older copy.',
-      'Folder: Claude Code → ~/.claude/skills/' + slug + ', Codex → ~/.codex/skills/' + slug + ' (on Windows ~ is %USERPROFILE%). Other agents: their documented skills folder.',
+      'Run the command for the agent you are (it replaces any older copy). Other agents: the same with their documented skills folder.',
       '',
-      'macOS / Linux / Git Bash:',
-      `DIR=~/.claude/skills/${slug}; rm -rf "$DIR" && mkdir -p "$DIR" && curl -fsSL "${url}" | tar -xz -C "$DIR"`,
-      '',
-      'Windows PowerShell (tar.exe and curl.exe ship with Windows 10+):',
-      `$d = "$env:USERPROFILE\\.claude\\skills\\${slug}"; $f = "$env:TEMP\\${slug}.tgz"; Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force $d | Out-Null; curl.exe -fsSL "${url}" -o $f; tar.exe -xzf $f -C $d; Remove-Item $f`,
-      '',
-      'Change the folder for your agent (e.g. .codex instead of .claude).',
+      ...SKILL_DIRS.flatMap(([agent, dir]) => [
+        `${agent} — macOS / Linux / Git Bash:`,
+        `DIR=~/${dir}/${slug}; rm -rf "$DIR" && mkdir -p "$DIR" && curl -fsSL "${url}" | tar -xz -C "$DIR"`,
+        `${agent} — Windows PowerShell (tar.exe and curl.exe ship with Windows 10+):`,
+        `$d = "$env:USERPROFILE\\${dir.replace('/', '\\')}\\${slug}"; $f = "$env:TEMP\\${slug}.tgz"; Remove-Item -Recurse -Force $d -ErrorAction SilentlyContinue; New-Item -ItemType Directory -Force $d | Out-Null; curl.exe -fsSL "${url}" -o $f; tar.exe -xzf $f -C $d; Remove-Item $f`,
+        '',
+      ]),
       'The folder contains .hub-skill.json with the installed version; pass it to check_skill_updates later.',
     ].join('\n'),
   };

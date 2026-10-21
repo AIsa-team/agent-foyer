@@ -14,6 +14,7 @@ import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
 import { DOCS_SCOPES, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
+import { SHEETS_SCOPE } from '../lark/sheets.ts';
 import { mailboxName, mailConnectUrl } from '../mail.ts';
 import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
@@ -71,7 +72,8 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const docs = c.req.query('docs') === '1' || DOCS_SCOPES.some((s) => had.includes(s));
   const wiki = c.req.query('wiki') === '1' || had.includes(WIKI_WRITE_SCOPE);
   const mail = config.mailDrafts === 'lark' && (c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s)));
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : [])];
+  const sheets = c.req.query('sheets') === '1' || had.includes(SHEETS_SCOPE);
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 
@@ -95,7 +97,9 @@ authRoutes.get('/auth/app-lark', (c) => {
   const items = [
     ...d.tables.map((t) => `<li>${trHtml(L, t.access === 'write' ? 'appLark.consent.write' : 'appLark.consent.read', { name: t.name })} <a href="${escapeHtml(t.url)}" target="_blank" rel="noreferrer">${escapeHtml(tr(L, 'appLark.consent.openTable'))}</a></li>`),
     ...(d.notify.people.length || d.notify.chats.length ? [`<li>${trHtml(L, 'appLark.consent.notify', { who: [...d.notify.people, ...d.notify.chats].join(L.startsWith('zh') ? '、' : ', ') })}</li>`] : []),
+    ...(d.notify.appUsers ? [`<li>${escapeHtml(tr(L, 'appLark.consent.notifyUsers'))}</li>`] : []),
     ...(d.mailDrafts ? [`<li>${escapeHtml(tr(L, 'appLark.consent.mail', { mailbox: mailboxName() }))}</li>`] : []),
+    ...(d.docs ? [`<li>${escapeHtml(tr(L, d.docs.parent ? 'appLark.consent.docsUnder' : 'appLark.consent.docs'))}${d.docs.share === 'view' || d.docs.share === 'edit' ? escapeHtml(tr(L, `appLark.consent.docsShare.${d.docs.share}`)) : ''}${d.docs.parent ? ` <a href="${escapeHtml(d.docs.parent)}" target="_blank" rel="noreferrer">${escapeHtml(tr(L, 'appLark.consent.openTable'))}</a>` : ''}</li>`] : []),
   ];
   const csrf = signToken(`app-lark|${user.id}|${slug}`, 10 * 60_000);
   return c.html(page(tr(L, 'appLark.consent.title', { app: name }), `
@@ -145,7 +149,7 @@ authRoutes.get('/auth/app-lark/go', (c) => {
   if (user && m && config.lark.enabled) {
     const here = goPath(slug, ret);
     const need = needsConnect(user, m);
-    if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(here)}${need.write ? '&write=1' : ''}${need.mail ? '&mail=1' : ''}`);
+    if (need) return c.redirect(`/auth/lark/connect?return=${encodeURIComponent(here)}${need.write ? '&write=1' : ''}${need.mail ? '&mail=1' : ''}${need.sheets ? '&sheets=1' : ''}${need.docs ? '&docs=1' : ''}${need.wiki ? '&wiki=1' : ''}`);
     const google = m.mailDrafts ? mailConnectUrl(user, here) : null;
     if (google) return c.redirect(google);
   }

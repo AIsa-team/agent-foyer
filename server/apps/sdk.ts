@@ -7,7 +7,8 @@
  *   await hub.lark.addRecord('invoices', { 项目: '春季投放', 金额: 12000 });
  *   await hub.lark.updateRecord('invoices', recordId, { 状态: '已开票' });
  *   await hub.notify({ to: ['finance'], text: '有一张新的开票申请', link: location.href });
- *   await hub.lark.mailDraft({ to: ['client@example.com'], cc: ['林小雨'], subject: '合作确认', html: '<p>…</p>' });
+ *   const { url } = await hub.lark.createDoc({ title: '合作确认函 · Northwind', markdown: '## 合作内容\n…' });
+ *   await hub.lark.mailDraft({ to: ['client@example.com'], cc: ['林小雨'], subject: '合作确认', html: '<p>…</p>' });  // the person's own Gmail or Lark Mail, as the hub is set up
  *
  * When the person has not agreed to the app's Lark access yet, calls send them to the hub's consent page and come
  * back afterwards.
@@ -45,12 +46,14 @@ export const SDK_JS = `(function () {
       /** what the app declared and whether this person agreed */
       info: function () { return call('GET', '/lark'); },
       fields: function (table) { return call('GET', '/lark/tables/' + table + '/fields'); },
-      /** { records: [{ id, fields (Lark format), text (plain text per field) }] }; where: [{ field, op, value }] */
+      /** { records: [{ id, fields (Lark format), text (plain text per field) }] }; where: [{ field, op: is|isNot|contains|doesNotContain|isEmpty|isNotEmpty|isGreater|isLess, value }] */
       records: function (table, opts) { return call('GET', '/lark/tables/' + table + '/records' + q(opts)); },
       addRecord: function (table, fields) { return call('POST', '/lark/tables/' + table + '/records', { fields: fields }); },
       updateRecord: function (table, id, fields) { return call('PATCH', '/lark/tables/' + table + '/records/' + id, { fields: fields }); },
-      /** saves an email in the person's own Lark mailbox as a draft (never sends); to/cc/bcc: emails or colleague names */
+      /** saves an email as a draft in the person's own mailbox (Gmail or Lark Mail, as the hub is set up; never sends); to/cc/bcc: emails or colleague names */
       mailDraft: function (mail) { return call('POST', '/lark/mail/drafts', mail); },
+      /** creates a Lark document from Markdown as the person, where the app declared (docs); returns { title, url } */
+      createDoc: function (doc) { return call('POST', '/lark/docs', doc); },
     },
     /** to: declared colleagues (name, email or open_id) or group aliases */
     notify: function (msg) { return call('POST', '/notify', msg); },

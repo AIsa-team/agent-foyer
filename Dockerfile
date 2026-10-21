@@ -10,6 +10,8 @@ FROM node:22-slim
 # The hub builds and runs app containers through the host's Docker socket.
 COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
 COPY --from=docker:28-cli /usr/local/libexec/docker/cli-plugins /usr/local/libexec/docker/cli-plugins
+# root certificates for the docker CLI: building an app fetches registry tokens from here (node has its own)
+COPY --from=docker:28-cli /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules

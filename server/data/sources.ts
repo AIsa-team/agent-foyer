@@ -11,6 +11,7 @@
  * Both kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
  */
 import { existsSync, readFileSync, rmSync, writeFile } from 'node:fs';
+import { inspectSheet, parseSheetUrl, resolveSpreadsheet, wikiObject } from '../lark/sheets.ts';
 import path from 'node:path';
 import { gunzipSync, gzip } from 'node:zlib';
 import { appUrl, config, paths } from '../config.ts';
@@ -19,7 +20,7 @@ import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
 import { canAccessApp } from '../apps/access.ts';
 import { fetchFromApp } from '../gateway.ts';
-import { FIELD, fetchRecords, isAdvanced, listFields, listTables, parseBaseUrl, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
+import { FIELD, fetchRecords, isAdvanced, listFields, listTables, parseBaseUrl, pickTable, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
 import { runQuery, toChart, toStat, type DataChartKind, type Query, type Result } from './query.ts';
 
 export interface SourceRow {
@@ -97,6 +98,11 @@ async function appTable(user: User, s: Pick<SourceRow, 'app_slug' | 'app_path'>)
 /** What an agent needs to configure charts: tables in the Base, and for the chosen table its fields and a few rows. */
 export async function inspect(user: User, url: string, table?: string) {
   if (!config.lark.enabled) throw new UserError('err.lark.disabled');
+  // a spreadsheet (directly or inside a wiki): its sheets, columns and last rows
+  const sheetRef = parseSheetUrl(url);
+  if (sheetRef && (sheetRef.kind === 'sheets' || (await wikiObject(user, sheetRef.token)).type === 'sheet')) {
+    return inspectSheet(user, (await resolveSpreadsheet(user, sheetRef))!, table ?? sheetRef.sheet);
+  }
   const ref = parseBaseUrl(url);
   const app = await resolveAppToken(user, ref);
   const tables = await listTables(user, app);
@@ -141,8 +147,7 @@ export async function saveSource(user: User, input: { id: string; title: Record<
     if (!input.url) throw new UserError('err.data.badUrl', { url: '' });
     const ref = parseBaseUrl(input.url);
     const app = await resolveAppToken(user, ref);
-    const table = input.table ?? ref.table;
-    if (!table) throw new UserError('err.data.tableRequired');
+    const table = await pickTable(user, app, input.table ?? ref.table);
     // reading the fields proves the person can open it, and that the ids are right
     await listFields(user, app, table, ref.view);
     row = { kind: 'base', url: input.url, app_token: app, table_id: table, view_id: ref.view ?? null, app_slug: null, app_path: null };

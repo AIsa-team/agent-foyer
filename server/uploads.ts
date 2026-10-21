@@ -9,7 +9,9 @@ import { all, get, now, run } from './db.ts';
 
 const UPLOAD_TTL = 30 * 60 * 1000;
 
-export function createUpload(userId: string, purpose: 'app' | 'skill') {
+export type UploadPurpose = 'app' | 'skill' | 'source';
+
+export function createUpload(userId: string, purpose: UploadPurpose) {
   const id = 'up_' + randomToken(9);
   const token = randomToken(24);
   run('INSERT INTO uploads (id, token_hash, user_id, purpose, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)', id, sha256(token), userId, purpose, now() + UPLOAD_TTL, now());
@@ -47,7 +49,7 @@ export async function receiveUpload(id: string, token: string, body: ReadableStr
 }
 
 /** Marks a received upload as used and returns its file path. */
-export function takeUpload(id: string, userId: string, purpose: 'app' | 'skill'): string {
+export function takeUpload(id: string, userId: string, purpose: UploadPurpose): string {
   const row = get<{ user_id: string; status: string; purpose: string }>('SELECT * FROM uploads WHERE id = ?', id);
   if (!row || row.user_id !== userId || row.purpose !== purpose) throw new Error(`upload ${id} not found`);
   if (row.status === 'pending') throw new Error(`upload ${id} has not received any file yet — run the curl upload command first`);
