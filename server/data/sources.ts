@@ -1,5 +1,5 @@
 /**
- * Named data sources for home pages, boards, metric alerts and data checks. Two kinds:
+ * Named data sources for home pages, boards, metric alerts and data checks. Three kinds:
  *
  * - base: a Lark Base table, always read with the viewer's own Lark access, so people only see rows they could open
  *   in Lark.
@@ -8,7 +8,11 @@
  *   optional `_id` and `_url` on a row identify it and link back to where it lives. The hub requests it as the viewer
  *   (the same identity headers a browser request gets), and only for people allowed to open the app.
  *
- * Both kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
+ * - connector: an item in another system read through a connection an admin set up (a Metabase question…), with
+ *   one shared key. The hub decides who may read it: admins, plus its audience (the company, chosen people,
+ *   departments). See ./connectors.
+ *
+ * All kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
  */
 import { existsSync, readFileSync, rmSync, writeFile } from 'node:fs';
 import { inspectSheet, parseSheetUrl, resolveSpreadsheet, wikiObject } from '../lark/sheets.ts';
@@ -20,13 +24,25 @@ import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
 import { canAccessApp } from '../apps/access.ts';
 import { fetchFromApp } from '../gateway.ts';
-import { FIELD, fetchRecords, isAdvanced, listFields, listTables, parseBaseUrl, pickTable, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
-import { runQuery, toChart, toStat, type DataChartKind, type Query, type Result } from './query.ts';
+import { FIELD, fetchRecords, isAdvanced, isDateField, listFields, listTables, parseBaseUrl, pickTable, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
+import { filterRows, runQuery, toChart, toStat, type DataChartKind, type Query, type Result } from './query.ts';
+import type { Condition } from '../lark/base.ts';
+import { connectionConfig } from './connectors/index.ts';
+import { z } from 'zod';
 
 export interface SourceRow {
-  id: string; title_i18n: string; url: string; kind: 'base' | 'app'; app_token: string; table_id: string; view_id: string | null;
-  app_slug: string | null; app_path: string | null; owner_id: string; created_at: number; updated_at: number;
+  id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector'; app_token: string; table_id: string; view_id: string | null;
+  app_slug: string | null; app_path: string | null; connection_id: string | null; item: string | null; audience: string | null;
+  owner_id: string; created_at: number; updated_at: number;
 }
+/** Who besides admins may read a connector source. Nothing set = admins only. */
+export const audienceSchema = z.object({
+  company: z.boolean().optional().describe('everyone in the company'),
+  people: z.array(z.string()).max(200).optional().describe('colleagues (email, name or open_id)'),
+  departments: z.array(z.string()).max(50).optional().describe('department ids'),
+});
+export type Audience = { company?: boolean; people?: string[]; departments?: string[] };
+const audienceOf = (s: SourceRow): Audience => (s.audience ? JSON.parse(s.audience) as Audience : {});
 export interface Row { id: string; url?: string; fields: Record<string, unknown> }
 export interface Table { fields: Field[]; rows: Row[] }
 
@@ -40,12 +56,85 @@ export function getSource(id: string): SourceRow {
 
 const canEdit = (u: User, s: SourceRow) => u.role === 'admin' || s.owner_id === u.id;
 
-export function listSources(locale: string) {
+/**
+ * The sources registered in the hub. Connector sources the person may not read are left out (whether someone can
+ * open a Lark table or an app is checked when it is read).
+ */
+export function listSources(locale: string, viewer?: User) {
   return all<SourceRow & { owner_name: string }>('SELECT d.*, u.name AS owner_name FROM data_sources d JOIN users u ON u.id = d.owner_id ORDER BY d.created_at')
+    .filter((s) => !viewer || s.kind !== 'connector' || mayReadConnector(viewer, s))
     .map((s) => ({
       id: s.id, title: pick(JSON.parse(s.title_i18n), locale), kind: s.kind, url: s.url, owner: s.owner_name,
-      ...(s.kind === 'app' ? { app: s.app_slug, path: s.app_path } : { table: s.table_id, view: s.view_id }),
+      ...(s.kind === 'app' ? { app: s.app_slug, path: s.app_path }
+        : s.kind === 'connector' ? { connection: s.connection_id, item: s.item, audience: describeAudience(audienceOf(s)) }
+        : { table: s.table_id, view: s.view_id }),
     }));
+}
+
+/** Audience with people and departments named, for lists. */
+function describeAudience(a: Audience) {
+  return {
+    company: !!a.company,
+    people: (a.people ?? []).map((id) => ({ id, name: get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id })),
+    departments: (a.departments ?? []).map((id) => ({ id, name: get<{ name: string }>('SELECT name FROM departments WHERE id = ?', id)?.name ?? id })),
+  };
+}
+
+/** Admins, whoever registered it, and its audience. */
+export function mayReadConnector(user: User, s: SourceRow): boolean {
+  if (user.role === 'admin' || s.owner_id === user.id) return true;
+  const a = audienceOf(s);
+  if (a.company) return true;
+  if (a.people?.includes(user.id)) return true;
+  if (a.departments?.length) {
+    const mine = all<{ department_id: string }>('SELECT department_id FROM user_departments WHERE user_id = ?', user.id).map((r) => r.department_id);
+    if (a.departments.some((d) => mine.includes(d))) return true;
+  }
+  return false;
+}
+
+// ---------------------------------------------------------------- rows through a connection (one shared key)
+const SHARED_TTL = config.connectorRefreshMs;
+const shared = new Map<string, { at: number; value: Promise<Table> }>();
+
+/**
+ * Everyone allowed gets the same rows, so they are fetched once for all of them. Some questions take minutes in the
+ * other system: pages get the last rows at once and a refresh runs in the background once they are a few minutes
+ * old (checks and alerts, which ask for fresh rows, wait for it).
+ */
+const refreshingShared = new Map<string, Promise<Table>>();
+function connectorTable(s: SourceRow, fresh: boolean): Promise<Table> {
+  const hit = shared.get(s.id);
+  const refresh = () => {
+    const running = refreshingShared.get(s.id);
+    if (running) return running;
+    const value = (async () => {
+      const { connector, cfg } = connectionConfig(s.connection_id ?? '');
+      const got = await connector.fetch(cfg, s.item ?? '');
+      return normalizeAppRows({ rows: got.rows, fields: got.fields });
+    })();
+    refreshingShared.set(s.id, value);
+    // a failed refresh keeps serving the last good rows
+    value.then((t) => {
+      shared.set(s.id, { at: Date.now(), value: Promise.resolve(t) });
+      gzip(JSON.stringify({ at: Date.now(), table: t }), (err, buf) => { if (!err) writeFile(snapshotFile(`conn-${s.id}`), buf, { mode: 0o600 }, () => {}); });
+    }, () => {}).finally(() => refreshingShared.delete(s.id));
+    return value;
+  };
+  // after a restart, the copy on disk (up to a day old) is served while a fresh one is fetched
+  if (!hit && existsSync(snapshotFile(`conn-${s.id}`))) {
+    try {
+      const { at, table } = JSON.parse(gunzipSync(readFileSync(snapshotFile(`conn-${s.id}`))).toString()) as { at: number; table: Table };
+      if (Date.now() - at < 86_400_000) {
+        shared.set(s.id, { at, value: Promise.resolve(table) });
+        if (!fresh) { void refresh().catch(() => {}); return Promise.resolve(table); }
+      }
+    } catch { /* fetch it instead */ }
+  }
+  if (!hit) return refresh();
+  if (fresh) return refresh();
+  if (Date.now() - hit.at > SHARED_TTL) void refresh().catch(() => {});
+  return hit.value;
 }
 
 // ---------------------------------------------------------------- rows from an app
@@ -131,13 +220,23 @@ export async function inspectApp(user: User, slug: string, path: string) {
   };
 }
 
-export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string }) {
+export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: Audience }) {
   if (!SLUG.test(input.id)) throw new UserError('err.data.badId', { id: input.id });
   if (!Object.values(input.title).some((t) => t.trim())) throw new UserError('err.data.titleRequired');
   const existing = get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', input.id);
   if (existing && !canEdit(user, existing)) throw new UserError('err.data.notOwner', { id: input.id });
-  let row: Pick<SourceRow, 'kind' | 'url' | 'app_token' | 'table_id' | 'view_id' | 'app_slug' | 'app_path'>;
-  if (input.app) {
+  let row: Pick<SourceRow, 'kind' | 'url' | 'app_token' | 'table_id' | 'view_id' | 'app_slug' | 'app_path'> & Partial<Pick<SourceRow, 'connection_id' | 'item' | 'audience'>>;
+  if (input.connection) {
+    // the key is the admins': only they decide what is read with it, and who sees it
+    if (user.role !== 'admin') throw new UserError('err.adminOnly');
+    const { connector, cfg } = connectionConfig(input.connection);
+    const item = String(input.item ?? '').trim();
+    if (!item) throw new UserError('err.conn.itemRequired');
+    normalizeAppRows(await connector.fetch(cfg, item));
+    const audience = input.audience ?? (existing?.audience ? (JSON.parse(existing.audience) as Audience) : {});
+    row = { kind: 'connector', url: connector.link(cfg, item), app_token: '', table_id: '', view_id: null, app_slug: null, app_path: null,
+      connection_id: input.connection, item, audience: JSON.stringify(cleanAudience(audience)) };
+  } else if (input.app) {
     const path = input.path && input.path.startsWith('/') ? input.path : '/';
     // reading it once proves the person may open the app and that it answers in the expected shape
     await appTable(user, { app_slug: input.app, app_path: path });
@@ -152,14 +251,33 @@ export async function saveSource(user: User, input: { id: string; title: Record<
     await listFields(user, app, table, ref.view);
     row = { kind: 'base', url: input.url, app_token: app, table_id: table, view_id: ref.view ?? null, app_slug: null, app_path: null };
   }
-  run(`INSERT INTO data_sources (id, title_i18n, url, kind, app_token, table_id, view_id, app_slug, app_path, owner_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  run(`INSERT INTO data_sources (id, title_i18n, url, kind, app_token, table_id, view_id, app_slug, app_path, connection_id, item, audience, owner_id, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET title_i18n = excluded.title_i18n, url = excluded.url, kind = excluded.kind, app_token = excluded.app_token,
-         table_id = excluded.table_id, view_id = excluded.view_id, app_slug = excluded.app_slug, app_path = excluded.app_path, updated_at = excluded.updated_at`,
+         table_id = excluded.table_id, view_id = excluded.view_id, app_slug = excluded.app_slug, app_path = excluded.app_path,
+         connection_id = excluded.connection_id, item = excluded.item, audience = excluded.audience, updated_at = excluded.updated_at`,
     input.id, JSON.stringify(input.title), row.url, row.kind, row.app_token, row.table_id, row.view_id, row.app_slug, row.app_path,
-    existing?.owner_id ?? user.id, existing?.created_at ?? now(), now());
+    row.connection_id ?? null, row.item ?? null, row.audience ?? null, existing?.owner_id ?? user.id, existing?.created_at ?? now(), now());
   clearCache(input.id);
   return { id: input.id, saved: true };
+}
+
+/** Only ids of people and departments the hub knows are kept. */
+function cleanAudience(a: Audience): Audience {
+  const people = [...new Set(a.people ?? [])].filter((id) => get('SELECT 1 FROM users WHERE id = ?', id));
+  const departments = [...new Set(a.departments ?? [])].filter((id) => get('SELECT 1 FROM departments WHERE id = ?', id));
+  return { ...(a.company ? { company: true } : {}), ...(people.length ? { people } : {}), ...(departments.length ? { departments } : {}) };
+}
+
+/** Who besides admins may read a connector source; admins only. */
+export function setAudience(user: User, id: string, audience: Audience) {
+  if (user.role !== 'admin') throw new UserError('err.adminOnly');
+  const s = getSource(id);
+  if (s.kind !== 'connector') throw new UserError('err.data.audienceConnectorOnly');
+  const clean = cleanAudience(audience);
+  run('UPDATE data_sources SET audience = ?, updated_at = ? WHERE id = ?', JSON.stringify(clean), now(), id);
+  clearCache(id);
+  return { id, audience: describeAudience(clean) };
 }
 
 export function deleteSource(user: User, id: string) {
@@ -176,6 +294,9 @@ const cache = new Map<string, { at: number; value: Promise<Result> }>();
 const tables = new Map<string, { at: number; value: Promise<Table> }>();
 function clearCache(id: string) {
   snapshots.delete(id);
+  shared.delete(id);
+  refreshingShared.delete(id);
+  rmSync(snapshotFile(`conn-${id}`), { force: true });
   rmSync(snapshotFile(id), { force: true });
   for (const m of [cache, tables, readable]) for (const k of m.keys()) if (k.startsWith(`${id}\u0000`)) m.delete(k);
 }
@@ -215,6 +336,7 @@ const readable = new Map<string, { at: number; ok: Promise<boolean> }>();
  * for 5 minutes (asking Lark on every chart would be slow), so access removed in Lark takes up to that long to apply.
  */
 export function canReadSource(user: User, s: SourceRow): Promise<boolean> {
+  if (s.kind === 'connector') return Promise.resolve(mayReadConnector(user, s));
   if (s.kind === 'app') {
     const app = get<App>('SELECT * FROM apps WHERE slug = ?', s.app_slug ?? '');
     return Promise.resolve(!!app && canAccessApp(app, user));
@@ -289,7 +411,9 @@ export function loadTable(user: User, s: SourceRow, fresh = false): Promise<Tabl
   const key = `${s.id}\u0000${user.id}`;
   const hit = tables.get(key);
   if (hit && !fresh && Date.now() - hit.at < TTL) return hit.value;
-  const value = s.kind === 'app'
+  const value = s.kind === 'connector'
+    ? (mayReadConnector(user, s) ? connectorTable(s, fresh) : Promise.reject(new UserError('err.data.audienceDenied')))
+    : s.kind === 'app'
     ? appTable(user, s)
     : (async () => {
       // a Base source saved while the hub still signed in with Lark
@@ -316,16 +440,75 @@ export function query(user: User, id: string, q: Query, fresh = false): Promise<
   return value;
 }
 
+/**
+ * The rows themselves, for agents answering questions ("who paid for the first time last week"), read with the
+ * person's own access like everything else: matching rows as plain text, newest or largest first when sorted, at
+ * most `limit`.
+ */
+export async function readRows(user: User, id: string, o: { where?: Condition[]; fields?: string[]; sort?: { field: string; desc?: boolean }; limit?: number }) {
+  const t = await loadTable(user, getSource(id));
+  const matched = filterRows(t.fields, t.rows, o.where, (r) => r.fields);
+  const show = o.fields?.length ? o.fields.map((n) => {
+    const f = t.fields.find((x) => x.name === n);
+    if (!f) throw new UserError('err.data.noField', { field: n, role: 'fields', fields: t.fields.map((x) => x.name).join(', ') });
+    return f;
+  }) : t.fields;
+  if (o.sort) {
+    const f = t.fields.find((x) => x.name === o.sort!.field);
+    if (!f) throw new UserError('err.data.noField', { field: o.sort.field, role: 'sort', fields: t.fields.map((x) => x.name).join(', ') });
+    const key = (r: Row) => { const v = r.fields[f.name]; const n = typeof v === 'number' ? v : Date.parse(String(v)); return Number.isFinite(n) ? n : String(plainText(v, f)); };
+    matched.sort((a, b) => { const x = key(a), y = key(b); const c = x < y ? -1 : x > y ? 1 : 0; return o.sort!.desc ? -c : c; });
+  }
+  const limit = Math.min(Math.max(o.limit ?? 50, 1), 200);
+  return {
+    total: t.rows.length,
+    matched: matched.length,
+    fields: show.map((f) => ({ name: f.name, type: f.uiType ?? f.type })),
+    rows: matched.slice(0, limit).map((r) => ({ ...Object.fromEntries(show.map((f) => [f.name, plainText(r.fields[f.name], f)])), ...(r.url ? { _url: r.url } : {}) })),
+    ...(matched.length > limit ? { note: `showing ${limit} of ${matched.length}; narrow it with where or raise limit (max 200)` } : {}),
+  };
+}
+
+/**
+ * For the detail page of a source: its name, where it lives (for an "open in …" link), and its fields sorted into
+ * dates, numbers and the rest, read with the viewer's access (so it fails the same way their charts would).
+ */
+export async function describeSource(user: User, id: string, locale: string) {
+  const s = getSource(id);
+  const t = await loadTable(user, s);
+  const kindOf = (f: Field): 'date' | 'number' | 'text' => isDateField(f) ? 'date' : f.type === FIELD.number || f.uiType === 'Number' || f.uiType === 'Currency' ? 'number' : 'text';
+  const where = s.kind === 'connector' ? { label: get<{ type: string }>('SELECT type FROM connections WHERE id = ?', s.connection_id ?? '')?.type ?? '', url: s.url }
+    : s.kind === 'app' ? { label: s.app_slug ?? '', url: `${config.hubUrl}/apps/${s.app_slug}` }
+    : { label: 'lark', url: s.url };
+  // how far back each date field goes, so the page does not draw days the source has no data for as zeros
+  const span = (f: Field) => {
+    let lo = Infinity, hi = -Infinity;
+    for (const r of t.rows) {
+      const v = r.fields[f.name];
+      const ms = typeof v === 'number' ? v : typeof v === 'string' ? Date.parse(v) : NaN;
+      if (Number.isFinite(ms)) { lo = Math.min(lo, ms); hi = Math.max(hi, ms); }
+    }
+    return Number.isFinite(lo) ? { from: lo, to: hi } : {};
+  };
+  return {
+    id: s.id, title: pick(JSON.parse(s.title_i18n), locale), kind: s.kind, item: s.item, where, records: t.rows.length,
+    fields: t.fields.map((f) => ({ name: f.name, kind: kindOf(f), ...(kindOf(f) === 'date' ? span(f) : {}) })),
+  };
+}
+
 /** Data for one home module: chart config for a chart, or { value, trend, delta } for a KPI tile. */
 export async function forModule(user: User, id: string, q: Query, kind: DataChartKind | 'stat', locale: string) {
   let r: Result;
+  // a tile shows one number: the first measure
+  if (kind === 'stat' && q.also) q = { ...q, also: undefined };
   try {
     r = await query(user, id, q);
   } catch (e) {
     // say where the data lives, so the page can link to it (Lark offers "request access"; an app page shows its owner)
-    if (e instanceof UserError && (e.key === 'err.data.denied' || e.key === 'err.data.appDenied')) {
+    if (e instanceof UserError && (e.key === 'err.data.denied' || e.key === 'err.data.appDenied' || e.key === 'err.data.audienceDenied')) {
       const s = getSource(id);
-      throw new UserError('err.data.deniedSource', { url: s.kind === 'app' ? `${config.hubUrl}/apps/${s.app_slug}` : s.url });
+      // a connector source has nothing to request access to: an admin decides
+      throw new UserError('err.data.deniedSource', { url: s.kind === 'app' ? `${config.hubUrl}/apps/${s.app_slug}` : s.kind === 'connector' ? '' : s.url });
     }
     throw e;
   }

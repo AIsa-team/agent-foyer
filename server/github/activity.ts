@@ -7,6 +7,7 @@
 import { config } from '../config.ts';
 import { all, type User } from '../db.ts';
 import { gh } from './app.ts';
+import { forgetContributions } from './contributions.ts';
 import { requireLogin } from './link.ts';
 
 interface SearchCommit { sha: string; html_url: string; repository: { full_name: string }; commit: { message: string; author: { date: string } } }
@@ -21,6 +22,7 @@ export type Activity = Awaited<ReturnType<typeof read>>;
 /** Drops what is cached for someone, when GitHub tells the hub they pushed or touched a pull request. */
 export function forgetActivity(login: string) {
   for (const k of cache.keys()) if (k.startsWith(login.toLowerCase() + '|')) cache.delete(k);
+  forgetContributions(login);
 }
 
 /** Commits GitHub pushed to the hub for this person in the window. */

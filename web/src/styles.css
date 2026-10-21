@@ -1,6 +1,7 @@
 @import './brand/fonts.css';
 @import './brand/aisa-tokens.css';
 @import './brand/aisa-charts.css';
+@import './brand/aisa-ui.css';
 
 /* Hub roles mapped onto the default theme tokens (the AIsa design system; light/dark both come from the tokens). */
 :root {
@@ -513,3 +514,58 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .nav a.nav-ext { color: var(--fg-2, var(--muted)); }
 .nav a.nav-ext svg:last-child { color: var(--muted); }
 .nav-ext__emoji { width: 16px; text-align: center; font-size: 14px; line-height: 1; }
+
+/* GitHub contributions module */
+.gh__head { display: flex; align-items: baseline; gap: 10px; }
+.gh__head .spacer { flex: 1; }
+.gh__head a { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.gh__summary { display: flex; align-items: flex-end; gap: 28px; flex-wrap: wrap; margin: 2px 0 14px; }
+.gh__total { display: flex; align-items: baseline; gap: 8px; }
+.gh__total b { font-size: 28px; font-weight: 700; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1; }
+.gh__figures { display: flex; gap: 22px; flex-wrap: wrap; margin: 0; }
+.gh__figures div { display: grid; gap: 2px; }
+.gh__figures dd { margin: 0; font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.gh__calendar--scroll .aisa-chart__plot { overflow-x: auto; }
+.gh__calendar--scroll .aisa-chart__svg { max-width: none; }
+.gh__repos { display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; margin-top: 10px; }
+.gh__repos a { text-decoration: none; color: var(--fg); }
+.gh__repos a:hover { text-decoration: underline; }
+.gh__longest { margin-left: auto; }
+
+/* data connections (admin) */
+.conn-field { display: grid; gap: 4px; }
+.conn-items { margin-top: 12px; max-height: 50vh; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.conn-item { display: flex; align-items: baseline; gap: 10px; width: 100%; text-align: left; padding: 9px 12px; border: 0; border-bottom: 1px solid var(--line); background: none; font: inherit; color: var(--fg); cursor: pointer; }
+.conn-item:last-child { border-bottom: 0; }
+.conn-item:hover { background: var(--surface-2); }
+.conn-item .small { flex: none; max-width: 30%; }
+.conn-chip { border: 1px solid var(--line); background: none; border-radius: 999px; padding: 4px 12px; font: inherit; font-size: 12.5px; color: var(--fg-2); cursor: pointer; }
+.conn-chip.on { background: var(--fg); border-color: var(--fg); color: var(--surface); }
+
+/* arranging the home page */
+.home-grid.is-editing .home-cell { outline: 1px dashed var(--line-strong, var(--line)); outline-offset: 6px; border-radius: 14px; }
+.module-tools { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; margin-bottom: 8px; }
+.seg--sm { padding: 2px; }
+.seg--sm button { padding: 3px 10px; font-size: 12px; }
+.home-hidden { display: grid; gap: 10px; justify-items: start; margin-top: 20px; }
+
+/* a number or chart opens its data source's detail page */
+.home-drill { display: block; color: inherit; text-decoration: none; transition: border-color 120ms ease; }
+.home-drill:hover { border-color: var(--fg-2); }
+/* below the chart, so it never meets the chart's own controls (legend, table toggle) */
+.home-more { display: flex; justify-content: flex-end; margin-top: 10px; font-size: 12px; }
+.home-more a { color: var(--muted); text-decoration: none; }
+.home-more a:hover { color: var(--fg); }
+
+/* data source detail page (AIsa kit components) */
+.ds-page { background: transparent; display: grid; gap: 16px; min-width: 0; }
+.ds-page > * { min-width: 0; }
+.ds-more { justify-self: start; margin-top: 10px; }
+.ds-overview, .ds-records { display: grid; gap: 16px; min-width: 0; }
+.ds-records > * { min-width: 0; }
+.ds-page .aisa-tabs { margin-bottom: 0; }
+.ds-note { margin: -4px 0 0; }
+.ds-page .aisa-page-head { margin: 0; }
+.ds-kpis { grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.ds-chip-x { border: 0; background: none; padding: 0 0 0 4px; color: inherit; cursor: pointer; display: inline-flex; }
+.ds-page .aisa-segmented button:disabled { opacity: 0.4; cursor: not-allowed; }

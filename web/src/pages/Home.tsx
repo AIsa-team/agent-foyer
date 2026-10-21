@@ -9,6 +9,7 @@ import { openSearch, searchShortcut } from '../Search';
 import { SkillUpdatesBanner } from './Skills';
 import { LEVEL_BADGE, type IssuesData } from './Issues';
 import { HeroPulse, type Pulse } from './HeroPulse';
+import { detailUrl } from './DataSource';
 
 // ---------------------------------------------------------------- layout types (mirror server/homepage.ts)
 type Text = Record<string, string>;
@@ -22,7 +23,8 @@ const CHARTS = {
   progress: progressList, segment: segmentBar, slope: slopeChart, diverging: divergingBar, gantt: ganttChart, calendar: calendarHeatmap,
 };
 type ChartKind = keyof typeof CHARTS;
-export type Module =
+type Base = { id?: string; own?: boolean };
+export type Module = Base & (
   | { type: 'apps'; width?: Width; title?: Text; pinned?: string[]; hidden?: string[]; limit?: number }
   | { type: 'stats'; width?: Width; title?: Text; items: { label: Text; value?: number | string; format?: object; delta?: number; period?: Text; goodWhenUp?: boolean; trend?: number[]; source?: Source }[] }
   | { type: 'chart'; width?: Width; title?: Text; subtitle?: Text; kind: ChartKind; data?: Record<string, unknown>; source?: Source; format?: object; height?: number }
@@ -33,7 +35,9 @@ export type Module =
   | { type: 'resources'; width?: Width; title?: Text }
   | { type: 'alerts'; width?: Width; title?: Text; showOk?: boolean }
   | { type: 'okr'; width?: Width; title?: Text; user?: string }
-  | { type: 'issues'; width?: Width; title?: Text };
+  | { type: 'github'; width?: Width; title?: Text; weeks?: number }
+  | { type: 'table'; width?: Width; title?: Text; source: { data: string; where?: object[]; sort?: { field: string; desc?: boolean }; fields?: string[] }; limit?: number }
+  | { type: 'issues'; width?: Width; title?: Text });
 
 export interface HomeData {
   layout: { modules: Module[] };
@@ -47,6 +51,9 @@ export interface HomeData {
   myDepartments: { id: string; name: string; canEdit: boolean }[];
   editableDepartments: { id: string; name: string }[];
   pulse: Pulse;
+  /** shared modules this person hid, and whether they changed anything */
+  hidden?: Module[];
+  adjusted?: boolean;
 }
 
 /** Per-language text from a layout, with the same fallback as the rest of the UI. */
@@ -151,7 +158,12 @@ function StatTileView({ item }: { item: Extract<Module, { type: 'stats' }>['item
   });
   if (needsLark(err) || noAccess(err)) return <div className="card pad"><div className="small muted" style={{ marginBottom: 8 }}>{text(item.label)}</div>{needsLark(err) ? <ConnectLark /> : <NoAccess err={err} />}</div>;
   if (err instanceof Error) return <div className="card pad"><div className="small muted">{text(item.label)}</div><div className="small" style={{ color: 'var(--danger)' }} title={err.message}>{t('home.sourceError')}</div></div>;
-  return <div className="card pad"><div ref={ref}>{value === undefined && <span className="small muted">{t('common.loading')}</span>}</div></div>;
+  // the chart library owns the inside of `ref`; the loading note sits beside it
+  const body = <><div ref={ref} />{value === undefined && <span className="small muted">{t('common.loading')}</span>}</>;
+  // a number from a data source opens its detail page
+  return item.source && 'data' in item.source
+    ? <Link className="card pad home-drill" to={detailUrl(item.source)} title={t('home.details')}>{body}</Link>
+    : <div className="card pad">{body}</div>;
 }
 
 function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
@@ -173,7 +185,8 @@ function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
   return (
     <div className="card pad home-module">
       {needsLark(err) || noAccess(err) ? <>{m.title && <div className="home-module__title">{text(m.title)}</div>}{needsLark(err) ? <ConnectLark /> : <NoAccess err={err} />}</>
-        : err instanceof Error ? <div className="small" style={{ color: 'var(--danger)' }} title={err.message}>{text(m.title)} · {t('home.sourceError')}</div> : <div ref={ref}>{!data && <span className="small muted">{t('common.loading')}</span>}</div>}
+        : err instanceof Error ? <div className="small" style={{ color: 'var(--danger)' }} title={err.message}>{text(m.title)} · {t('home.sourceError')}</div> : <><div ref={ref} />{!data && <span className="small muted">{t('common.loading')}</span>}</>}
+      {m.source && 'data' in m.source && !err && <div className="home-more"><Link to={detailUrl(m.source)}>{t('home.details')} →</Link></div>}
     </div>
   );
 }
@@ -313,6 +326,118 @@ export function OkrModule({ m }: { m: Extract<Module, { type: 'okr' }> }) {
   );
 }
 
+interface Contributions {
+  linked: boolean; connectUrl?: string; login: string; profile: string; from: string; to: string; days: { date: string; value: number }[];
+  total: number; commits: number; pullRequests: number; reviews: number; activeDays: number; streak: { current: number; longest: number };
+  repos: { name: string; url: string; commits: number }[];
+}
+
+/** The viewer's own GitHub contributions in the company organisation: totals, a calendar heatmap, where most commits went. */
+function GitHubModule({ m }: { m: Extract<Module, { type: 'github' }> }) {
+  const { t, locale } = useI18n();
+  const text = useText();
+  const ref = useRef<HTMLDivElement>(null);
+  const weeks = m.weeks ?? 52;
+  const { data, error } = useApi<Contributions>(`/github/contributions?weeks=${weeks}`);
+  const title = text(m.title) || t('home.module.github');
+  useEffect(() => {
+    if (!ref.current || !data?.linked) return;
+    const host = ref.current;
+    // on narrow screens keep the cells readable and scroll sideways, starting at the latest weeks
+    const narrow = host.clientWidth < 560;
+    const h = calendarHeatmap(host, {
+      data: data.days, start: data.from, end: data.to, format: { unit: t('home.github.unit'), unitSpace: !locale.startsWith('zh') },
+      ...(narrow ? { width: Math.ceil(data.days.length / 7 + 1) * 12 + 40 } : {}),
+    });
+    host.classList.toggle('gh__calendar--scroll', narrow);
+    const plot = host.querySelector<HTMLElement>('.aisa-chart__plot');
+    if (narrow && plot) requestAnimationFrame(() => { plot.scrollLeft = plot.scrollWidth; });
+    return () => h.destroy();
+  }, [data, locale]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!data) return <ModuleCard title={title}><Loading error={error} /></ModuleCard>;
+  if (!data.linked) {
+    return (
+      <ModuleCard title={title}>
+        <div className="home-connect">
+          <span className="small muted">{t('home.github.connect')}</span>
+          <a className="btn sm" href={data.connectUrl}>{t('home.github.connectCta')}</a>
+        </div>
+      </ModuleCard>
+    );
+  }
+  const n = (v: number) => v.toLocaleString(locale);
+  const figures: [string, string][] = [
+    [t('home.github.commits'), n(data.commits)],
+    [t('home.github.prs'), n(data.pullRequests)],
+    [t('home.github.reviews'), n(data.reviews)],
+    [t('home.github.activeDays'), n(data.activeDays)],
+    [t('home.github.streak'), t('home.github.days', { n: data.streak.current })],
+  ];
+  return (
+    <div className="card pad home-module gh">
+      <div className="home-module__title gh__head">
+        <span>{title}</span>
+        <span className="small muted">@{data.login}</span>
+        <span className="spacer" />
+        <a className="small muted" href={data.profile} target="_blank" rel="noreferrer">{t('home.github.profile')} <Icon name="external" size={12} /></a>
+      </div>
+      <div className="gh__summary">
+        <div className="gh__total">
+          <b>{n(data.total)}</b>
+          <span className="small muted">{weeks === 52 ? t('home.github.lastYear') : t('home.github.lastWeeks', { n: weeks })}</span>
+        </div>
+        <dl className="gh__figures">
+          {figures.map(([k, v]) => <div key={k}><dt className="small muted">{k}</dt><dd>{v}</dd></div>)}
+        </dl>
+      </div>
+      <div ref={ref} className="gh__calendar" />
+      {data.repos.length > 0 && (
+        <div className="gh__repos small">
+          <span className="muted">{t('home.github.repos')}</span>
+          {data.repos.map((r) => <a key={r.name} href={r.url} target="_blank" rel="noreferrer">{r.name} <span className="muted">{n(r.commits)}</span></a>)}
+          {data.streak.longest > data.streak.current && <span className="muted gh__longest">{t('home.github.longest', { n: data.streak.longest })}</span>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A few records of a data source as a table (AIsa kit), and the way to all of them. */
+function TableModule({ m }: { m: Extract<Module, { type: 'table' }> }) {
+  const { t, locale } = useI18n();
+  const text = useText();
+  const [data, setData] = useState<{ matched: number; fields: { name: string; type: string | number }[]; rows: Record<string, string>[] } | null>(null);
+  const [err, setErr] = useState<unknown>(null);
+  useEffect(() => {
+    api.post<NonNullable<typeof data>>('/data/rows', { source: m.source.data, where: m.source.where ?? [], sort: m.source.sort, limit: m.limit ?? 10 }).then(setData, setErr);
+  }, [JSON.stringify(m.source), m.limit]); // eslint-disable-line react-hooks/exhaustive-deps
+  const title = text(m.title);
+  if (needsLark(err) || noAccess(err)) return <ModuleCard title={title}>{needsLark(err) ? <ConnectLark /> : <NoAccess err={err} />}</ModuleCard>;
+  if (err instanceof Error) return <ModuleCard title={title}><div className="small" style={{ color: 'var(--danger)' }} title={err.message}>{t('home.sourceError')}</div></ModuleCard>;
+  const cols = data ? (m.source.fields?.length ? m.source.fields.map((n) => data.fields.find((f) => f.name === n)).filter((f): f is NonNullable<typeof f> => !!f) : data.fields) : [];
+  const isNum = (f: { type: string | number }) => f.type === 'Number' || f.type === 2;
+  return (
+    <div className="card pad home-module">
+      {title && <div className="home-module__title">{title}</div>}
+      {!data ? <span className="small muted">{t('common.loading')}</span> : data.rows.length === 0 ? <p className="small muted" style={{ margin: 0 }}>{t('home.table.empty')}</p> : (
+        <div className="aisa-table-wrap aisa-dense">
+          <table className="aisa-table">
+            <thead><tr>{cols.map((f) => <th key={f.name} className={isNum(f) ? 'is-num' : undefined}>{f.name}</th>)}</tr></thead>
+            <tbody>{data.rows.map((r, i) => <tr key={i}>{cols.map((f) => <td key={f.name} className={isNum(f) ? 'is-num' : undefined}>{r[f.name]}</td>)}</tr>)}</tbody>
+          </table>
+        </div>
+      )}
+      {data && (
+        <div className="home-more">
+          <Link to={`${detailUrl({ data: m.source.data, query: { measure: { op: 'count' }, ...(m.source.where?.length ? { where: m.source.where } : {}) } })}&tab=records`}>
+            {t('home.table.all', { n: data.matched.toLocaleString(locale) })} →
+          </Link>
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** "Issues assigned to me": what the viewer needs to fix, per check. */
 function IssuesModule({ m }: { m: Extract<Module, { type: 'issues' }> }) {
   const { t, ago } = useI18n();
@@ -398,6 +523,11 @@ export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
       return me.hub.features.lark ? <OkrModule m={m} /> : null;
     case 'issues':
       return <IssuesModule m={m} />;
+    case 'table':
+      return <TableModule m={m} />;
+    case 'github':
+      // a layout saved while the hub had GitHub
+      return me.hub.features.github ? <GitHubModule m={m} /> : null;
     case 'resources':
       return (
         <ModuleCard title={text(m.title) || t('home.module.resources')}>
@@ -443,14 +573,79 @@ function CustomizeDialog({ data, onClose }: { data: HomeData; onClose: () => voi
   );
 }
 
+/** A module's name for lists: its title, or what kind of module it is. */
+function useModuleName() {
+  const { t } = useI18n();
+  const text = useText();
+  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
+}
+
+const WIDTHS: Width[] = ['full', 'half', 'third'];
+
+/** On each module while adjusting the page: move it, change its width, hide it (shared) or remove it (one's own). */
+function ModuleTools({ m, at, modules, onChanged }: { m: Module; at: number; modules: Module[]; onChanged: () => void }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const adjust = (change: Record<string, unknown>) => run(() => api.post('/home/adjust', change)).then(onChanged);
+  const move = (by: number) => {
+    const ids = modules.map((x) => x.id!);
+    const [id] = ids.splice(at, 1);
+    ids.splice(at + by, 0, id);
+    adjust({ order: ids });
+  };
+  if (!m.id) return null;
+  return (
+    <div className="module-tools" role="toolbar" aria-label={t('home.adjust.tools')}>
+      <button className="btn sm ghost" disabled={busy || at === 0} onClick={() => move(-1)} type="button" title={t('home.adjust.up')} aria-label={t('home.adjust.up')}>↑</button>
+      <button className="btn sm ghost" disabled={busy || at === modules.length - 1} onClick={() => move(1)} type="button" title={t('home.adjust.down')} aria-label={t('home.adjust.down')}>↓</button>
+      <span className="seg seg--sm">
+        {WIDTHS.map((w) => (
+          <button key={w} className={(m.width ?? 'full') === w ? 'on' : ''} disabled={busy} onClick={() => adjust({ width: { id: m.id, width: w } })} type="button">{t(`home.adjust.width.${w}`)}</button>
+        ))}
+      </span>
+      <button className="btn sm ghost" disabled={busy} onClick={() => adjust(m.own ? { remove: m.id } : { hide: m.id })} type="button">{m.own ? t('common.remove') : t('home.adjust.hide')}</button>
+    </div>
+  );
+}
+
+/** Shared modules this person hid, to bring back, and a way back to the shared page as it is. */
+function HiddenModules({ data, onChanged }: { data: HomeData; onChanged: () => void }) {
+  const { t } = useI18n();
+  const name = useModuleName();
+  const { busy, run } = useAction();
+  const from = { department: t('home.adjust.fromDept', { department: data.department ?? '' }), company: t('home.adjust.fromCompany'), default: t('home.adjust.fromDefault') }[data.from as 'department' | 'company' | 'default'];
+  return (
+    <div className="home-hidden">
+      {(data.hidden ?? []).length > 0 && (
+        <div className="row" style={{ flexWrap: 'wrap', gap: 8 }}>
+          <span className="small muted">{t('home.adjust.hiddenList')}</span>
+          {data.hidden!.map((m) => (
+            <button key={m.id} className="btn sm" disabled={busy} onClick={() => run(() => api.post('/home/adjust', { show: m.id })).then(onChanged)} type="button">
+              <Icon name="plus" /> {name(m)}
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="small muted" style={{ margin: 0 }}>{t('home.adjust.note')}</p>
+      {data.adjusted && from && (
+        <button className="btn sm ghost" disabled={busy}
+          onClick={() => confirm(t('home.adjust.resetConfirm', { from })) && run(() => api.del('/home/adjust'), t('home.adjust.resetDone')).then(onChanged)} type="button">
+          {t('home.adjust.reset', { from })}
+        </button>
+      )}
+    </div>
+  );
+}
+
 export function HomePage() {
   const me = useMe();
   const { t, locale } = useI18n();
   const [params] = useSearchParams();
   const preview = params.get('preview');
-  const { data, error } = useApi<HomeData>(`/home${preview ? `?preview=${encodeURIComponent(preview)}` : ''}`);
+  const { data, error, reload } = useApi<HomeData>(`/home${preview ? `?preview=${encodeURIComponent(preview)}` : ''}`);
   const profile = useApi<{ agents: Agent[] }>('/profile');
   const [customizing, setCustomizing] = useState(false);
+  const [editing, setEditing] = useState(false);
   const now = new Date();
   const date = now.toLocaleDateString(locale, { month: 'long', day: 'numeric', weekday: 'long' });
   const fromLabel = data && {
@@ -491,14 +686,25 @@ export function HomePage() {
 
       {!data ? <Loading error={error} /> : (
         <>
-          <div className="home-grid">
+          <div className={`home-grid ${editing ? 'is-editing' : ''}`}>
             {data.layout.modules.map((m, i) => (
-              <div key={i} className={`home-cell home-cell--${m.width ?? 'full'}`}><RenderModule m={m} data={data} /></div>
+              <div key={m.id ?? i} className={`home-cell home-cell--${m.width ?? 'full'}`}>
+                {editing && <ModuleTools m={m} at={i} modules={data.layout.modules} onChanged={reload} />}
+                <RenderModule m={m} data={data} />
+              </div>
             ))}
           </div>
+          {editing && <HiddenModules data={data} onChanged={reload} />}
           <div className="home-foot">
-            <span className="small muted">{fromLabel}</span>
-            <button className="btn sm" onClick={() => setCustomizing(true)} type="button"><Icon name="settings" /> {t('home.customize.button')}</button>
+            <span className="small muted">{fromLabel}{data.from !== 'preview' && data.from !== 'user' && data.adjusted ? ` · ${t('home.adjust.yours')}` : ''}</span>
+            {data.from !== 'preview' && (
+              <span className="row">
+                <button className={`btn sm ${editing ? 'primary' : ''}`} onClick={() => setEditing(!editing)} type="button">
+                  <Icon name={editing ? 'check' : 'apps'} /> {editing ? t('home.adjust.done') : t('home.adjust.button')}
+                </button>
+                <button className="btn sm" onClick={() => setCustomizing(true)} type="button"><Icon name="settings" /> {t('home.customize.button')}</button>
+              </span>
+            )}
           </div>
         </>
       )}

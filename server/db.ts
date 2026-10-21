@@ -451,6 +451,35 @@ const MIGRATIONS: string[] = [
     created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     created_at INTEGER NOT NULL
   );
+  `,  // connections to other systems (Metabase…) that admins set up, and data sources read through them
+  `
+  CREATE TABLE connections (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,             -- a connector, see server/data/connectors
+    config TEXT NOT NULL,           -- JSON, settings that are not secret (e.g. the address)
+    secret TEXT,                    -- encrypted JSON of the secret settings (e.g. the API key)
+    status TEXT,                    -- ok:<acts as> | error:<message>, from the last test
+    checked_at INTEGER,
+    created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  ALTER TABLE data_sources ADD COLUMN connection_id TEXT REFERENCES connections(id);
+  ALTER TABLE data_sources ADD COLUMN item TEXT;          -- what in the other system, e.g. a Metabase question id
+  ALTER TABLE data_sources ADD COLUMN audience TEXT;      -- JSON {company?, people?, departments?}; who besides admins may read a connector source
+  `,  // a person's changes to the shared home page (see server/homepage.ts)
+  `
+  CREATE TABLE home_adjustments (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    hidden TEXT NOT NULL,           -- JSON ids of shared modules they hid
+    widths TEXT NOT NULL,           -- JSON {id: width}
+    order_ids TEXT NOT NULL,        -- JSON ids in the order they want
+    extra TEXT NOT NULL,            -- JSON modules of their own
+    updated_at INTEGER NOT NULL
+  );
+  `,  // boards imported from another system's dashboard, so they can be synced again
+  `
+  ALTER TABLE boards ADD COLUMN origin TEXT;  -- JSON {connection, board, tab, url}
   `,
 ];
 

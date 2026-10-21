@@ -10,6 +10,7 @@ import { mailboxName } from './mail.ts';
 import { forgetGoogle, googleConnection, googleConnectUrl } from './google/auth.ts';
 import { githubEnabled } from './github/app.ts';
 import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
+import { contributions } from './github/contributions.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
@@ -17,8 +18,11 @@ import { syncDirectory } from './lark/auth.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
+import { pick } from './library.ts';
 import * as homepage from './homepage.ts';
 import * as dataSources from './data/sources.ts';
+import * as connectors from './data/connectors/index.ts';
+import { importBoard, importedBoards } from './data/importBoard.ts';
 import * as alerts from './data/alerts.ts';
 import { querySchema, CHART_KINDS } from './data/query.ts';
 import { connection, connectUrl, forgetTokens } from './lark/userToken.ts';
@@ -82,7 +86,7 @@ api.get('/me', (c) => {
       url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName,
       accent: config.accent || null, devLogin: config.devLogin, login: loginName,
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
-      features: { lark: config.lark.enabled, messages: !!messenger },
+      features: { lark: config.lark.enabled, messages: !!messenger, github: githubEnabled() },
       /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
       mailbox: mailboxName() || null,
     },
@@ -117,10 +121,11 @@ api.get('/profile', (c) => {
   });
 });
 
-api.get('/home', (c) => {
+api.get('/home', async (c) => {
   const u = c.get('user');
   const L = localeOf(c);
-  const home = homepage.resolveHome(u, L, c.req.query('preview'));
+  const resolved = homepage.resolveHome(u, L, c.req.query('preview'));
+  const home = { ...resolved, layout: { modules: await homepage.forViewer(u, resolved.layout.modules) } };
   const visible = apps.listAppsFor(u, L).filter((a) => a.canOpen && a.status === 'online');
   const allSkills = skills.listSkills(u, L);
   const policies = lib.library(L).sections.find((x) => x.section === 'policies')?.groups.flatMap((g) => g.items) ?? [];
@@ -137,6 +142,18 @@ api.get('/home', (c) => {
   });
 });
 
+// a person's own changes to the shared home page, made on the page itself
+api.post('/home/adjust', async (c) => {
+  const b = await body<{ hide?: string; show?: string; width?: { id: string; width: 'full' | 'half' | 'third' }; order?: string[]; remove?: string }>(c);
+  if (b.width && !['full', 'half', 'third'].includes(b.width.width)) throw new UserError('err.home.badLayout', { details: 'width' });
+  homepage.adjustHome(c.get('user'), localeOf(c), {
+    hide: b.hide, show: b.show, width: b.width, remove: b.remove,
+    order: Array.isArray(b.order) ? b.order.map(String).slice(0, 48) : undefined,
+  });
+  return c.json({ ok: true });
+});
+api.delete('/home/adjust', (c) => c.json(homepage.resetHome(c.get('user'), 'me')));
+
 api.get('/home/source', async (c) => {
   const app = c.req.query('app') ?? '';
   const path = c.req.query('path') ?? '';
@@ -150,6 +167,14 @@ api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connect
 api.get('/github/status', (c) => {
   const u = c.get('user');
   return c.json({ available: githubEnabled(), org: config.github.org, login: u.github_login ?? null, connectUrl: githubConnectUrl('/me') });
+});
+// the viewer's own contribution calendar (home module); never someone else's, since the hub reads every repository
+api.get('/github/contributions', async (c) => {
+  const u = c.get('user');
+  if (!githubEnabled()) throw new UserError('err.github.disabled');
+  if (!u.github_login) return c.json({ linked: false, connectUrl: githubConnectUrl('/') });
+  const weeks = Math.min(53, Math.max(4, Number(c.req.query('weeks') ?? 52) || 52));
+  return c.json({ linked: true, ...(await contributions(u, weeks)) });
 });
 api.post('/github/disconnect', (c) => {
   unlinkGitHub(c.get('user'));
@@ -169,7 +194,7 @@ api.post('/lark/disconnect', (c) => {
   forgetReads(`okr-board|${c.get('user').id}|`);
   return c.json({ ok: true });
 });
-api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c)) }));
+api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c), c.get('user')) }));
 api.post('/data/module', async (c) => {
   const b = await body<{ source?: string; query?: unknown; kind?: string }>(c);
   const kind = b.kind === 'stat' || (CHART_KINDS as readonly string[]).includes(b.kind ?? '') ? (b.kind as 'stat') : undefined;
@@ -178,13 +203,26 @@ api.post('/data/module', async (c) => {
   if (!q.success) return c.json({ error: q.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ') }, 400);
   return c.json({ value: await dataSources.forModule(c.get('user'), b.source, q.data, kind, localeOf(c)) });
 });
+// the detail page of a data source: what it is, and its records (both read as the viewer)
+api.get('/data/sources/:id', async (c) => c.json(await dataSources.describeSource(c.get('user'), c.req.param('id'), localeOf(c))));
+api.post('/data/rows', async (c) => {
+  const b = await body<{ source?: string; where?: unknown; sort?: { field: string; desc?: boolean }; limit?: number }>(c);
+  const where = querySchema.shape.where.safeParse(b.where);
+  if (!b.source || !where.success) return c.json({ error: 'source required; where as in queries' }, 400);
+  return c.json(await dataSources.readRows(c.get('user'), b.source, { where: where.data, sort: b.sort?.field ? { field: String(b.sort.field), desc: !!b.sort.desc } : undefined, limit: Math.min(Number(b.limit) || 200, 200) }));
+});
 api.get('/alerts', (c) => c.json({ alerts: alerts.rulesFor(c.get('user'), localeOf(c)) }));
 api.post('/alerts/:id/mute', async (c) => {
   const b = await body<{ muted?: boolean }>(c);
   return c.json(alerts.muteRule(c.get('user'), Number(c.req.param('id')), b.muted !== false));
 });
 // ---- data boards, organisation, search ----
-api.get('/boards', (c) => c.json({ boards: boards.boardsFor(c.get('user'), localeOf(c)), canEditCompany: c.get('user').role === 'admin', editableDepartments: homepage.editableDepartments(c.get('user'), localeOf(c)) }));
+api.get('/boards', async (c) => {
+  const u = c.get('user');
+  // a board shows each person only the numbers they may see
+  const list = await Promise.all(boards.boardsFor(u, localeOf(c)).map(async (b) => ({ ...b, layout: { modules: await homepage.forViewer(u, b.layout.modules) } })));
+  return c.json({ boards: list, canEditCompany: u.role === 'admin', editableDepartments: homepage.editableDepartments(u, localeOf(c)) });
+});
 api.get('/org', (c) => c.json(organisation(localeOf(c))));
 api.get('/search', (c) => c.json(search(c.get('user'), c.req.query('q') ?? '', localeOf(c))));
 
@@ -415,6 +453,44 @@ api.get('/admin', (c) => {
   const pending = all<App>("SELECT * FROM apps WHERE visibility = 'public' AND public_status = 'pending'").map((a) => apps.serializeApp(a, u, localeOf(c)));
   const users = all<User>('SELECT id, name, email, avatar, role, last_seen_at FROM users ORDER BY last_seen_at DESC NULLS LAST, name');
   return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null });
+});
+
+// ---- data connections (Metabase…) and the sources read through them; admins only
+api.get('/admin/connections', (c) => {
+  requireAdmin(c.get('user'));
+  return c.json({
+    connectors: connectors.CONNECTORS.map((x) => ({ type: x.type, label: x.label, identity: x.identity, fields: x.fields, boards: !!x.board })),
+    connections: connectors.listConnections().map((cn) => ({
+      ...cn, imported: importedBoards(cn.id).map((b) => ({ id: b.id, title: pick(b.titles, localeOf(c)), board: b.origin.board, url: b.origin.url, updatedAt: b.updatedAt })),
+    })),
+    sources: dataSources.listSources(localeOf(c)).filter((s) => s.kind === 'connector'),
+    departments: all<{ id: string; name: string }>('SELECT id, name FROM departments ORDER BY name'),
+  });
+});
+api.post('/admin/connections', async (c) => {
+  const b = await body<{ id?: string; type: string; config: Record<string, string> }>(c);
+  return c.json(await connectors.saveConnection(c.get('user'), { id: b.id, type: String(b.type ?? ''), config: b.config ?? {} }));
+});
+api.post('/admin/connections/:id/test', async (c) => c.json(await connectors.testConnection(c.get('user'), c.req.param('id'))));
+api.delete('/admin/connections/:id', (c) => c.json(connectors.deleteConnection(c.get('user'), c.req.param('id'))));
+api.get('/admin/connections/:id/browse', async (c) => c.json(await connectors.browseConnection(c.get('user'), c.req.param('id'), c.req.query('q'))));
+api.get('/admin/connections/:id/boards', async (c) => c.json(await connectors.browseBoards(c.get('user'), c.req.param('id'), c.req.query('q'))));
+api.post('/admin/connections/:id/import', async (c) => {
+  const b = await body<{ board: string; audience?: dataSources.Audience }>(c);
+  return c.json(await importBoard(c.get('user'), c.req.param('id'), String(b.board ?? ''), { audience: b.audience, locale: localeOf(c) }));
+});
+api.post('/admin/data-sources', async (c) => {
+  const b = await body<{ id: string; title: Record<string, string>; connection: string; item: string; audience?: dataSources.Audience }>(c);
+  requireAdmin(c.get('user'));
+  return c.json(await dataSources.saveSource(c.get('user'), { id: String(b.id ?? ''), title: b.title ?? {}, connection: b.connection, item: b.item, audience: b.audience }));
+});
+api.post('/admin/data-sources/:id/audience', async (c) => {
+  const b = await body<{ audience: dataSources.Audience }>(c);
+  return c.json(dataSources.setAudience(c.get('user'), c.req.param('id'), b.audience ?? {}));
+});
+api.delete('/admin/data-sources/:id', (c) => {
+  requireAdmin(c.get('user'));
+  return c.json(dataSources.deleteSource(c.get('user'), c.req.param('id')));
 });
 
 api.post('/admin/alerts', async (c) => {

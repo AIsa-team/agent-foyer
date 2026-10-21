@@ -31,6 +31,8 @@ import { tr, UserError, type Msg } from './i18n/index.ts';
 import { localeCodes, type LocalizedMap } from './localized.ts';
 import { appGuide } from './appGuide.ts';
 import { sourceDownload } from './apps/source.ts';
+import * as connectors from './data/connectors/index.ts';
+import { importBoard } from './data/importBoard.ts';
 
 const LARK = config.lark.enabled;
 // where hub.lark.mailDraft puts drafts on this hub (Gmail or Lark Mail), so agents describe it right
@@ -55,9 +57,10 @@ Never put secrets in an upload; use set_app_env for API keys.
 
 Sharing a Skill: if it has no icon, draw a simple square SVG icon and pass icon_svg. The folder must have SKILL.md at its root with frontmatter "name" (lowercase-hyphen) and "description". create_upload(purpose="skill"), upload the folder contents, then publish_skill with localized market names/descriptions for every hub language. Republishing the same name creates a new version. To change only the market text later, use update_skill.
 ${LARK ? `Lark data (Base tables): the hub reads Lark Base with each person's own Lark access, so everyone only sees rows they could open in Lark. If a tool says Lark data is not connected, give the user the link it returns (they approve once in Lark) and continue after they confirm.\n` : ''}
+Company numbers (sign-ups, revenue, usage, orders…): when the user asks about them, look in the hub first: list_data_sources, then query_data for totals and trends or read_data_rows for the records themselves. Everything is read with the user's own access, so say so plainly when a source exists but they may not see it, and never work around it.
 To chart data: register it once as a data source (${LARK ? 'a Lark Base table: inspect_base(url) to see its tables and fields; ' : ''}a data app: see below), save_data_source with a short id and a title in every hub language, then try query_data until the numbers look right, then put it on a home page (chart/stats module with source {data: <id>, query}) via preview_homepage. Use count / sum / avg with groupBy for breakdowns and date {field, bucket, last} for trends; stats tiles with date get the trend and the change vs the previous bucket automatically (add date.complete: true so the current, unfinished period is not compared with a full one; the tile's period text is just "last month" / "上月").
 Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase, a database, a CRM, another SaaS) comes in through a small hub app the user's agent builds and publishes like any other app. The app answers GET <path> with JSON {"rows": [{...}, ...]} (or a bare array): one flat object per row; dates as ISO strings ("2026-07-20T06:32:29Z") or ms timestamps, numbers as numbers. Optional per row: "_id" (unique and stable; needed for data checks) and "_url" (link to the row in its own system). Optional top level "fields": [{"name", "type": "text|number|date|person|select|multi|checkbox"}] when inference is not enough. Put a person's name or email in a normal field (e.g. "owner") to assign data-check issues. Keep credentials in set_app_env, cache upstream results for a few minutes, and keep rows under ~50k. Visibility of the app = who may see its data: the hub fetches as the viewer (X-Hub-User-* headers) and only for people allowed to open the app. Then inspect_app_data, save_data_source with app + path, and use it like any other data source.
-Example, a Metabase question: in Metabase Admin → Authentication → API keys create a key (give it a group that only sees what is needed); set_app_env METABASE_URL and METABASE_API_KEY; a container app with GET /rows that POSTs {METABASE_URL}/api/card/<question id>/query/json with header x-api-key, caches the result 5 minutes, adds _id from the question's unique column and _url {METABASE_URL}/question/<id>, and returns {rows}.
+Data connections: systems the hub reads itself, set up by admins on the admin page with their key (today: Metabase). When one exists, register its items with save_data_source (connection + item; admins, see browse_connection) instead of building a data app; each such source has an audience that admins set (set_data_source_audience). For a system with no connection, build a data app.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
 ${LARK ? `Lark documents: read_lark_doc reads one as Markdown; create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). The first time, the user is asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write only after they agree. Ask for tomorrow's plan and blockers rather than inventing them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
@@ -357,16 +360,16 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     department_id: z.string().optional(),
   };
   server.registerTool('get_homepage', {
-    description: 'Read a hub home page layout (null = not customised yet) plus the departments you belong to / can configure. Start from this before changing a home page.',
+    description: 'Read a hub home page layout plus the departments you belong to / can configure. Start from this before changing a home page. For scope me it is the page as the user sees it: the company or department layout it is built on (modules with own: false) with their changes, and their own modules (own: true).',
     inputSchema: scopeArgs,
   }, guard((a: { scope: homepage.Scope; department_id?: string }) => ({
-    ...homepage.getHomeLayout(user, a.scope, a.department_id),
+    ...homepage.getHomeLayout(user, a.scope, a.department_id, locale),
     currentlyShownToYou: homepage.resolveHome(user, locale).from,
     defaultLayout: homepage.DEFAULT_LAYOUT,
     myDepartments: homepage.userDepartments(user, locale),
     editableDepartments: homepage.editableDepartments(user, locale),
     apps: apps.listAppsFor(user, locale).filter((x) => x.canOpen).map((x) => ({ slug: x.slug, name: x.name })),
-    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card.' : ' (The okr module needs Lark and is not available on this hub.)'} Always preview_homepage and send the user the link; save only after they confirm.`,
+    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Keep each module's id. A person's page is built on their department's or the company's layout: saving scope me keeps that link (shared modules left out become hidden for them, widths remembered, anything new or changed is theirs), so later company changes still reach them; people can also hide, move and resize modules on the page themselves. Modules on data a viewer may not see are left out for them. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card.' : ' (The okr module needs Lark and is not available on this hub.)'}${githubEnabled() ? ' The github module shows the viewer\'s own GitHub contributions as a calendar heatmap (each person sees their own).' : ''} Always preview_homepage and send the user the link; save only after they confirm.`,
   })));
 
   server.registerTool('preview_homepage', {
@@ -377,10 +380,10 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   server.registerTool('save_homepage', {
     description: 'Save a home page layout after the user approved the preview.',
     inputSchema: { ...scopeArgs, layout: homepage.layoutSchema },
-  }, guard((a: { scope: homepage.Scope; department_id?: string; layout: unknown }) => homepage.saveHome(user, a.scope, a.layout, a.department_id)));
+  }, guard((a: { scope: homepage.Scope; department_id?: string; layout: unknown }) => homepage.saveHome(user, a.scope, a.layout, a.department_id, locale)));
 
   server.registerTool('reset_homepage', {
-    description: 'Remove a customised home page so it falls back to the department / company / built-in default.',
+    description: 'Remove a customised home page so it falls back to the department / company / built-in default (for scope me: drop all of the user\'s own changes).',
     inputSchema: scopeArgs,
   }, guard((a: { scope: homepage.Scope; department_id?: string }) => homepage.resetHome(user, a.scope, a.department_id)));
 
@@ -400,11 +403,34 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   }
 
   server.registerTool('list_data_sources', {
-    description: 'Data sources registered in the hub (id, title, link, owner): Lark Base tables or data apps.',
-  }, guard(() => ({ sources: dataSources.listSources(locale) })));
+    description: 'Data sources registered in the hub (id, title, link, owner): Lark Base tables, data apps, and items read through a data connection (e.g. Metabase questions; only those the user may see are listed). Start here when the user asks about company numbers.',
+  }, guard(() => ({ sources: dataSources.listSources(locale, user) })));
+
+  server.registerTool('list_connections', {
+    description: 'Admins: the data connections (e.g. Metabase) set up on the hub\'s admin page, without their keys. Keys are only ever entered there, never through an agent.',
+  }, guard(() => {
+    if (user.role !== 'admin') throw new UserError('err.adminOnly');
+    return { connections: connectors.listConnections(), setUpAt: `${config.hubUrl}/admin#connections` };
+  }));
+
+  server.registerTool('browse_connection', {
+    description: 'Admins: what a data connection can read (e.g. Metabase questions), searchable, to register one with save_data_source (connection + item).',
+    inputSchema: { connection: z.string(), q: z.string().optional(), boards: z.boolean().optional().describe('list its dashboards (to import_board) instead of single items') },
+  }, guard((a: { connection: string; q?: string; boards?: boolean }) => (a.boards ? connectors.browseBoards(user, a.connection, a.q) : connectors.browseConnection(user, a.connection, a.q))));
+
+  server.registerTool('import_board', {
+    description: 'Admins: import (or sync) a dashboard of a data connection, e.g. a Metabase dashboard, as boards on the Data page: each chart\'s question becomes a data source (new ones seen by admins only unless you pass an audience), each card a module, one board per tab. Find dashboards with browse_connection (boards: true). Importing the same dashboard again rebuilds its boards.',
+    inputSchema: { connection: z.string(), board: z.string().describe('the dashboard id in that system'), audience: dataSources.audienceSchema.optional() },
+  }, guard((a: { connection: string; board: string; audience?: dataSources.Audience }) =>
+    importBoard(user, a.connection, a.board, { locale, audience: a.audience && { ...a.audience, people: a.audience.people ? resolveColleagues(a.audience.people) : undefined } })));
+
+  server.registerTool('set_data_source_audience', {
+    description: 'Admins: who besides admins may see a data source read through a data connection (everyone in the company, chosen colleagues, departments). Nothing = admins only. Lark tables follow Lark access and app data follows who may open the app instead.',
+    inputSchema: { id: z.string(), audience: dataSources.audienceSchema },
+  }, guard((a: { id: string; audience: dataSources.Audience }) => dataSources.setAudience(user, a.id, { ...a.audience, people: a.audience.people ? resolveColleagues(a.audience.people) : undefined })));
 
   server.registerTool('save_data_source', {
-    description: `Register (or update, if you own it) a named data source for home pages, boards, alerts and data checks: ${LARK ? 'either a Lark Base table (url) or ' : ''}rows served by a hub app (app + path, see "Data apps" in the instructions). The hub reads it once as the user to check it.`,
+    description: `Register (or update, if you own it) a named data source for home pages, boards, alerts and data checks: ${LARK ? 'a Lark Base table (url), ' : ''}rows served by a hub app (app + path, see "Data apps" in the instructions), or (admins) an item read through a data connection (connection + item, see browse_connection; new ones are seen by admins only until you set an audience). The hub reads it once to check it.`,
     inputSchema: {
       id: z.string().describe('short lowercase id, e.g. "sales-orders"'),
       title: i18nText().describe('name per hub language'),
@@ -414,8 +440,12 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       } : {}),
       app: z.string().optional().describe(LARK ? 'slug of a hub app that serves rows (instead of url)' : 'slug of a hub app that serves rows'),
       path: z.string().optional().describe('path on that app returning {"rows": [...]}, e.g. /api/rows'),
+      connection: z.string().optional().describe('admins: id of a data connection (list_connections)'),
+      item: z.string().optional().describe('what to read through it, e.g. a Metabase question id'),
+      audience: dataSources.audienceSchema.optional().describe('for connection sources: who besides admins may see it'),
     },
-  }, guard((a: { id: string; title: lib.I18nText; url?: string; table?: string; app?: string; path?: string }) => dataSources.saveSource(user, a)));
+  }, guard((a: { id: string; title: lib.I18nText; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: dataSources.Audience }) =>
+    dataSources.saveSource(user, { ...a, audience: a.audience && { ...a.audience, people: a.audience.people ? resolveColleagues(a.audience.people) : undefined } })));
 
   server.registerTool('inspect_app_data', {
     description: 'Fetch the rows a hub app serves for a data source, as the user would get them: field names and types the hub inferred, row count, how many rows have _id / _url, and 5 sample rows. Use it to check a data app before save_data_source.',
@@ -434,6 +464,18 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     const r = await dataSources.query(user, a.source, a.query, true);
     return { ...r, rows: r.rows.slice(0, 200), stat: toStat(r) };
   }));
+
+  server.registerTool('read_data_rows', {
+    description: 'The rows of a data source themselves (not totals), read with the user\'s own access: optionally filtered, only some fields, sorted, at most 200. Use it to answer questions like "who paid for the first time last week"; use query_data for counts and sums.',
+    inputSchema: {
+      source: z.string(),
+      where: querySchema.shape.where,
+      fields: z.array(z.string()).max(30).optional().describe('only these fields (default: all)'),
+      sort: z.object({ field: z.string(), desc: z.boolean().optional() }).optional(),
+      limit: z.number().int().min(1).max(200).optional().describe('default 50'),
+    },
+  }, guard((a: { source: string; where?: Query['where']; fields?: string[]; sort?: { field: string; desc?: boolean }; limit?: number }) =>
+    dataSources.readRows(user, a.source, { where: a.where, fields: a.fields, sort: a.sort, limit: a.limit })));
 
   server.registerTool('list_alert_rules', {
     description: 'Alert rules the user owns or is told about, with their current state (ok / firing / error / paused).',

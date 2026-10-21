@@ -18,6 +18,7 @@ const MePage = lazy(() => import('./pages/MePage').then((m) => ({ default: m.MeP
 const AdminPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AdminPage })));
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
 const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.DataPage })));
+const DataSourcePage = lazy(() => import('./pages/DataSource').then((m) => ({ default: m.DataSourcePage })));
 const OrgPage = lazy(() => import('./pages/Org').then((m) => ({ default: m.OrgPage })));
 const OkrPage = lazy(() => import('./pages/Okr').then((m) => ({ default: m.OkrPage })));
 
@@ -97,6 +98,7 @@ function Shell() {
           <Route path="/library" element={<LibraryPage />} />
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/data" element={<DataPage />} />
+          <Route path="/data/source/:id" element={<DataSourcePage />} />
           <Route path="/org" element={<OrgPage />} />
           {me.hub.features.lark && <Route path="/okr" element={<OkrPage />} />}
           <Route path="/apps" element={<AppsPage />} />

@@ -81,6 +81,7 @@ const lark = {
   googleEmail: 'alex@example.com',
   googleScope: '',
   ghQueries: [] as string[],
+  mbRuns: 0,
   searchCalls: 0,
   hideApi: false,
   denyOrders: false,
@@ -163,6 +164,72 @@ const larkServer = http.createServer(async (req, res) => {
     res.writeHead(status, { 'content-type': 'application/json' });
     res.end(JSON.stringify(o));
   };
+  // a fake Metabase dashboard's questions: one row per day with several value columns, numbers, a table, a funnel, categories
+const MB_CARDS: Record<string, { name: string; display: string; meta: { name: string; base_type: string }[]; rows: () => Record<string, unknown>[] }> = {
+  401: { name: '每日收入', display: 'line', meta: [{ name: 'date', base_type: 'type/Date' }, { name: 'payg_usd', base_type: 'type/Decimal' }, { name: 'builder_usd', base_type: 'type/Decimal' }, { name: 'success_rate', base_type: 'type/Decimal' }],
+    // Metabase's export names a currency column as displayed
+    rows: () => Array.from({ length: 20 }, (_, i) => ({ date: new Date(NOW - (19 - i) * DAY).toISOString().slice(0, 10), 'payg_usd ($)': 100 + i, builder_usd: 10, success_rate: 0.9 })) },
+  408: { name: '每日 API 调用', display: 'bar', meta: [{ name: 'date', base_type: 'type/Date' }, { name: 'api_name', base_type: 'type/Text' }, { name: 'calls', base_type: 'type/Integer' }],
+    rows: () => [0, 1].flatMap((d) => ['search', 'scrape'].map((api, j) => ({ date: new Date(NOW - d * DAY).toISOString().slice(0, 10), api_name: api, calls: 10 * (j + 1) }))) },
+  402: { name: '本周 PAYG', display: 'scalar', meta: [{ name: 'payg_week', base_type: 'type/Decimal' }], rows: () => [{ payg_week: 700 }] },
+  403: { name: '本周 Team', display: 'scalar', meta: [{ name: 'team_week', base_type: 'type/Decimal' }], rows: () => [{ team_week: 50 }] },
+  404: { name: '消费 Top', display: 'table', meta: [{ name: 'email', base_type: 'type/Text' }, { name: 'amount', base_type: 'type/Decimal' }], rows: () => [{ email: 'a@x.com', amount: 9 }, { email: 'b@x.com', amount: 5 }] },
+  405: { name: '激活漏斗', display: 'funnel', meta: [{ name: 'stage', base_type: 'type/Text' }, { name: 'users', base_type: 'type/Integer' }], rows: () => [{ stage: '注册', users: 100 }, { stage: '激活', users: 40 }, { stage: '付费', users: 8 }] },
+  406: { name: '充值间隔', display: 'bar', meta: [{ name: 'bucket', base_type: 'type/Text' }, { name: 'orders', base_type: 'type/Integer' }, { name: 'registrations', base_type: 'type/Integer' }],
+    rows: () => [{ bucket: 'b. 1-7 天', orders: 3, registrations: 5 }, { bucket: 'a. 当天', orders: 9, registrations: 12 }] },
+};
+// a fake Metabase: keys mb_good (an ordinary group) and mb_admin (the admin group); two questions
+  if (p.startsWith('/mb/')) {
+    const mp = p.slice(3);
+    const key = req.headers['x-api-key'];
+    if (key !== 'mb_good' && key !== 'mb_admin') return send({ message: 'Unauthenticated' }, 401);
+    if (mp === '/api/user/current') return send({ common_name: key === 'mb_admin' ? 'Admin' : 'AIsa Hub', is_superuser: key === 'mb_admin' });
+    if (mp === '/api/card') return send([
+      { id: 232, name: '每日新增用户', collection: { name: '运营' }, display: 'line' },
+      { id: 309, name: '每日收入拆分', collection: { name: '运营' }, display: 'line' },
+      { id: 5, name: 'Old one', archived: true },
+    ]);
+    // /api/card/:id → the question; /query → its result as cols + rows (what the hub reads, cached there); /query/json → the export
+    const card = mp.match(/^\/api\/card\/(\d+)(\/query(\/json)?)?$/);
+    const asQuery = (meta: { name: string; base_type: string; effective_type?: string }[], rows: Record<string, unknown>[], rowCount = rows.length) =>
+      send({ status: 'completed', row_count: rowCount, data: { cols: meta, rows: rows.map((r) => meta.map((m) => r[m.name] ?? r[`${m.name} ($)`] ?? null)) } });
+    if (card && card[1] === '232') {
+      const meta = [{ name: 'reg_date', base_type: 'type/Text', effective_type: 'type/Date' }, { name: 'real_users', base_type: 'type/BigInteger' }];
+      if (!card[2]) return send({ id: 232, name: '每日新增用户', result_metadata: meta });
+      lark.mbRuns++;
+      // MB_ROWS_FILE: real-looking rows for screenshots of a --keep demo
+      const rows = process.env.MB_ROWS_FILE ? JSON.parse((await import('node:fs')).readFileSync(process.env.MB_ROWS_FILE, 'utf8')) as Record<string, unknown>[]
+        : Array.from({ length: 10 }, (_, i) => ({ reg_date: new Date(NOW - (9 - i) * DAY).toISOString().slice(0, 10), real_users: 10 + i }));
+      return card[3] ? send(rows) : asQuery(meta, rows);
+    }
+    if (card && card[1] === '309') {
+      const meta = [{ name: 'date', base_type: 'type/Date' }, { name: 'payg_usd', base_type: 'type/Decimal' }];
+      return !card[2] ? send({ id: 309, name: '每日收入拆分', result_metadata: meta }) : card[3] ? send([{ date: '2026-10-20', payg_usd: 100 }]) : asQuery(meta, [{ date: '2026-10-20', payg_usd: 100 }]);
+    }
+    const fake = card && MB_CARDS[card[1]];
+    if (fake) {
+      if (!card[2]) return send({ id: Number(card[1]), name: fake.name, display: fake.display, result_metadata: fake.meta });
+      if (card[3]) return send(fake.rows());
+      // 401 says it reached the query endpoint's row limit, so the hub falls back to the export
+      return asQuery(fake.meta, fake.rows(), card[1] === '401' ? 2000 : undefined);
+    }
+    if (mp === '/api/dashboard') return send([{ id: 100, name: '每日运营', collection: { name: '运营' } }, { id: 7, name: 'Old', archived: true }]);
+    if (mp === '/api/dashboard/100') {
+      const dc = (tab: number, row: number, col: number, size: number, id?: number, vs: Record<string, unknown> = {}) =>
+        ({ dashboard_tab_id: tab, row, col, size_x: size, visualization_settings: id ? {} : vs, card: id ? { id, name: id === 232 ? '每日新增用户' : MB_CARDS[String(id)]?.name ?? 'gone', display: id === 232 ? 'bar' : MB_CARDS[String(id)]?.display ?? 'line', visualization_settings: vs } : null });
+      return send({ name: '每日运营', tabs: [{ id: 1, name: '基础' }, { id: 2, name: '明细' }, { id: 3, name: '空的' }], dashcards: [
+        dc(1, 0, 0, 24, undefined, { text: '## 口径\n**上海时间**，[说明](https://example.com/doc)' }),
+        dc(1, 1, 0, 24, 401, { 'graph.dimensions': ['date'], 'graph.metrics': ['payg_usd', 'builder_usd', 'success_rate'], series_settings: { payg_usd: { title: 'PAYG 收入' } } }),
+        dc(1, 2, 0, 24, undefined, { text: '**本周销售**' }),
+        dc(1, 3, 0, 12, 402), dc(1, 3, 12, 12, 403),
+        dc(1, 4, 0, 12, 406), dc(1, 4, 12, 12, 232, { 'graph.dimensions': ['reg_date'], 'graph.metrics': ['real_users'] }),
+        dc(1, 5, 0, 24, 408),
+        dc(2, 0, 0, 24, 404), dc(2, 1, 0, 12, 405), dc(2, 1, 12, 12, 407),
+        dc(3, 0, 0, 24, undefined, { text: 'only text' }),
+      ] });
+    }
+    return send({ message: 'Not found' }, 404);
+  }
   // a fake GitHub: App JWT → installation token, user sign-in, search and pull request commits
   if (p.startsWith('/gh/')) {
     const gp = p.slice(3);
@@ -185,6 +252,25 @@ const larkServer = http.createServer(async (req, res) => {
     if (gp.startsWith('/applications/')) { res.writeHead(204); return res.end(); }
     if (auth !== 'Bearer ghs_install') return send({ message: 'Bad credentials' }, 401);
     const iso = (ms: number) => new Date(ms).toISOString();
+    if (gp === '/orgs/acme') return send({ node_id: 'O_acme' });
+    // the contribution calendar: the last 3 days busy, the day before empty, every third day before that
+    if (gp === '/graphql') {
+      const v = JSON.parse(raw).variables as { login: string; org: string; from: string; to: string };
+      if (v.login !== 'alex-gh' || v.org !== 'O_acme') return send({ data: { user: null } });
+      const days: { date: string; contributionCount: number }[] = [];
+      const last = Date.parse(v.to.slice(0, 10));
+      for (let t = Date.parse(v.from.slice(0, 10)), i = 0; t <= last; t += DAY, i++) {
+        const back = Math.round((last - t) / DAY);
+        days.push({ date: iso(t).slice(0, 10), contributionCount: back < 3 ? 2 : back === 3 ? 0 : i % 3 === 0 ? 1 : 0 });
+      }
+      const total = days.reduce((s, d) => s + d.contributionCount, 0);
+      const weeks = Array.from({ length: Math.ceil(days.length / 7) }, (_, w) => ({ contributionDays: days.slice(w * 7, w * 7 + 7) }));
+      return send({ data: { user: { contributionsCollection: {
+        totalCommitContributions: total - 3, totalPullRequestContributions: 2, totalPullRequestReviewContributions: 1,
+        contributionCalendar: { totalContributions: total, weeks },
+        commitContributionsByRepository: [{ repository: { nameWithOwner: 'acme/hub', url: 'https://github.com/acme/hub' }, contributions: { totalCount: total - 5 } }],
+      } } } });
+    }
     if (gp === '/search/commits') {
       const q = url.searchParams.get('q') ?? '';
       lark.ghQueries.push(q);
@@ -1299,6 +1385,9 @@ try {
   // GitHub: link the account once, then agents read commits, pull requests and reviews through the hub
   const notLinked = await tool(alex.token, 'github_activity', {});
   check(notLinked.linked === false && String(notLinked.hint).includes('/auth/github/connect'), 'before linking, github_activity says how to link GitHub');
+  const calBefore = (await api(alex.jar, 'GET', '/github/contributions')).body;
+  check(calBefore.linked === false && String(calBefore.connectUrl).includes('/auth/github/connect'), 'the GitHub home module asks to link the account first');
+  check((await tool(alex.token, 'preview_homepage', { scope: 'me', layout: { modules: [{ type: 'github', weeks: 26 }] } })).previewUrl, 'home module "my GitHub contributions"');
   const ghStart = await fetch(`${HUB}/auth/github/connect?return=/me`, { redirect: 'manual', headers: { cookie: alex.jar.header() } });
   alex.jar.store(ghStart);
   const ghAuth = await fetch(ghStart.headers.get('location')!, { redirect: 'manual' });
@@ -1306,6 +1395,13 @@ try {
   check(ghBack.status === 302 && ghBack.headers.get('location') === '/me', 'linking GitHub returns to the Me page');
   const ghStatus = (await api(alex.jar, 'GET', '/github/status')).body;
   check(ghStatus.available === true && ghStatus.login === 'alex-gh' && ghStatus.org === 'acme', 'the Me page shows the linked GitHub username');
+  const cal = (await api(alex.jar, 'GET', '/github/contributions?weeks=12')).body as {
+    linked: boolean; days: { value: number }[]; profile: string; streak: { current: number; longest: number }; activeDays: number; commits: number; total: number; reviews: number; repos: { name: string; url: string }[];
+  };
+  check(cal.linked && cal.days.length === 84 && cal.days.at(-1)?.value === 2 && cal.profile.endsWith('/alex-gh'), 'the calendar has a count for every day of the window, up to today');
+  check(cal.streak.current === 3 && cal.streak.longest === 3 && cal.activeDays === cal.days.filter((d: { value: number }) => d.value > 0).length && cal.commits === cal.total - 3 && cal.reviews === 1,
+    'with the totals, active days and streaks');
+  check(cal.repos[0]?.name === 'hub' && cal.repos[0].url === 'https://github.com/acme/hub', 'and the repositories with the most commits');
   const act = await tool(alex.token, 'github_activity', {});
   check(act.login === 'alex-gh' && act.commits?.map((c: { sha: string }) => c.sha).join() === 'aaaaaaa,bbbbbbb', "commits: the person's own, on the default branch and inside their pull request, within the window");
   check(act.commits[0].message === 'fix: gateway keeps the session' && act.commits[1].pr === 12, 'with the first line of the message, and the pull request for branch work');
@@ -1407,6 +1503,139 @@ try {
   check((await api(alice.jar, 'POST', `/lark-links/${link.id}/sidebar`, { on: true })).status === 400, 'only admins pin shortcuts');
   await api(alex.jar, 'POST', `/lark-links/${link.id}/sidebar`, { on: true });
   check(((await api(alice.jar, 'GET', '/me')).body.sidebarLinks as { name: string }[])[0]?.name === '审批', 'a pinned shortcut shows in everyone\'s sidebar');
+
+  // data connections: an admin connects Metabase with a key; the hub decides who sees each question
+  const MB = `http://localhost:${LARK_PORT}/mb`;
+  check((await api(alice.jar, 'POST', '/admin/connections', { type: 'metabase', config: { url: MB, apiKey: 'mb_good' } })).status === 400, 'only admins set up data connections');
+  check(/管理员分组|admin group/.test(String((await api(alex.jar, 'POST', '/admin/connections', { type: 'metabase', config: { url: MB, apiKey: 'mb_admin' } })).body.error)), 'a key in the admin group is refused');
+  check(/API key/.test(String((await api(alex.jar, 'POST', '/admin/connections', { type: 'metabase', config: { url: MB, apiKey: 'mb_wrong' } })).body.error)), 'a wrong key is refused before anything is saved');
+  const conn = (await api(alex.jar, 'POST', '/admin/connections', { type: 'metabase', config: { url: MB, apiKey: 'mb_good' } })).body;
+  check(conn.id === 'metabase' && conn.as === 'AIsa Hub', 'a working key is saved, and the page says who it reads as');
+  const conns = (await api(alex.jar, 'GET', '/admin/connections')).body as { connections: { config: Record<string, string>; secretsSet: string[] }[] };
+  check(conns.connections[0].config.url === MB && !JSON.stringify(conns).includes('mb_good') && conns.connections[0].secretsSet.join() === 'apiKey', 'the key is never sent back, only that it is set');
+  check((await api(alex.jar, 'POST', '/admin/connections', { type: 'metabase', config: { url: MB, apiKey: '' } })).status === 200, 'changing the address keeps the stored key');
+  const items = (await api(alex.jar, 'GET', '/admin/connections/metabase/browse?q=收入')).body.items as { id: string }[];
+  check(items.map((i) => i.id).join() === '309', 'admins search the questions it can read (archived ones left out)');
+  const mbSaved = await api(alex.jar, 'POST', '/admin/data-sources', { id: 'mb-signups', title: { 'zh-CN': '每日新增用户', en: 'Daily sign-ups' }, connection: 'metabase', item: '232' });
+  check(mbSaved.status === 200, 'an admin adds a question as a data source');
+  check(!((await api(bob.jar, 'GET', '/data/sources')).body.sources as { id: string }[]).some((x) => x.id === 'mb-signups'), 'new connection sources are for admins only: others do not even see them listed');
+  check(String((await tool(bob.token, 'query_data', { source: 'mb-signups', query: { measure: { op: 'sum', field: 'real_users' } } })).error).length > 0, "and a colleague's agent cannot query it");
+  const mbAdmin = await tool(alex.token, 'query_data', { source: 'mb-signups', query: { measure: { op: 'sum', field: 'real_users' }, date: { field: 'reg_date', bucket: 'day', last: 3 } } });
+  check(mbAdmin.value === 18 + 19 + 17 && mbAdmin.rows?.length === 3, 'the question\'s date column works as a date (types come from Metabase)');
+  const mbDenied = await api(bob.jar, 'POST', '/data/module', { source: 'mb-signups', query: { measure: { op: 'count' } }, kind: 'stat' });
+  check(mbDenied.status === 400 && mbDenied.body.code === 'err.data.deniedSource', 'a home module on it tells a colleague they may not see it');
+  check((await api(alice.jar, 'POST', '/admin/data-sources/mb-signups/audience', { audience: { company: true } })).status === 400, 'only admins choose who sees it');
+  await api(alex.jar, 'POST', '/admin/data-sources/mb-signups/audience', { audience: { people: ['ou_dev_bob'] } });
+  const runs = lark.mbRuns;
+  const bobQ = await tool(bob.token, 'query_data', { source: 'mb-signups', query: { measure: { op: 'count' } } });
+  check(bobQ.value === 10, 'once added to the audience, the colleague (and their agent) can read it');
+  check(String((await tool(alice.token, 'query_data', { source: 'mb-signups', query: { measure: { op: 'count' } } })).error).length > 0, 'people outside the audience still cannot');
+  await api(bob.jar, 'POST', '/data/module', { source: 'mb-signups', query: { measure: { op: 'sum', field: 'real_users' } }, kind: 'stat' });
+  await api(alex.jar, 'POST', '/data/module', { source: 'mb-signups', query: { measure: { op: 'sum', field: 'real_users' } }, kind: 'stat' });
+  check(lark.mbRuns - runs <= 1, 'everyone shares one cached copy of the rows (it is the same key for all)');
+  const fsDb = new (await import('node:sqlite')).DatabaseSync(path.join(dataDir, 'hub.db'));
+  fsDb.prepare("INSERT OR IGNORE INTO departments (id, name, updated_at) VALUES ('od-growth', '增长', 0)").run();
+  fsDb.prepare("INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES ('ou_dev_alice', 'od-growth')").run();
+  await api(alex.jar, 'POST', '/admin/data-sources/mb-signups/audience', { audience: { departments: ['od-growth'] } });
+  check(!(await tool(alice.token, 'query_data', { source: 'mb-signups', query: { measure: { op: 'count' } } })).error, 'a department in the audience: its members can read it');
+  await api(alex.jar, 'POST', '/admin/data-sources/mb-signups/audience', { audience: { company: true } });
+  const mbListed = ((await api(alice.jar, 'GET', '/data/sources')).body.sources as { id: string; audience?: { company: boolean } }[]).find((x) => x.id === 'mb-signups');
+  check(mbListed?.audience?.company === true, 'the whole company: everyone sees it listed');
+  check((await api(alex.jar, 'DELETE', '/admin/connections/metabase')).status === 400, 'a connection in use cannot be deleted');
+  const intro2 = String(((await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) })).json()) as { result: { instructions: string } }).result.instructions);
+  check(intro2.includes('Data connections:') && !intro2.includes('METABASE_API_KEY'), 'agents are told to use a data connection instead of building a Metabase app');
+
+  // agents read the records themselves, with the person's access
+  const rowsBob = await tool(bob.token, 'read_data_rows', { source: 'mb-signups', where: [{ field: 'real_users', op: 'isGreater', value: 15 }], sort: { field: 'real_users', desc: true }, limit: 2 });
+  check(rowsBob.matched === 4 && rowsBob.rows?.length === 2 && rowsBob.rows[0].real_users === '19' && String(rowsBob.note).includes('2 of 4'), 'read_data_rows: matching records, sorted, limited, as the person');
+  await api(alex.jar, 'POST', '/admin/data-sources', { id: 'mb-revenue', title: { 'zh-CN': '每日收入', en: 'Daily revenue' }, connection: 'metabase', item: '309' });
+  check(String((await tool(bob.token, 'read_data_rows', { source: 'mb-revenue' })).error).length > 0, 'and not what they may not see');
+
+  // a whole dashboard comes in as boards: questions become sources, cards become modules, one board per tab
+  check((await api(bob.jar, 'POST', '/admin/connections/metabase/import', { board: '100' })).status === 400, 'only admins import dashboards');
+  check(((await api(alex.jar, 'GET', '/admin/connections/metabase/boards')).body.items as { id: string }[]).map((b) => b.id).join() === '100', 'admins see its dashboards (archived ones left out)');
+  const imp = (await api(alex.jar, 'POST', '/admin/connections/metabase/import', { board: '100' })).body as { boards: { id: string; title: string }[]; sources: { created: string[]; reused: string[] }; skipped: { name: string }[] };
+  check(imp.boards.map((b) => `${b.id}:${b.title}`).join() === 'metabase-100-1:每日运营 · 基础,metabase-100-2:每日运营 · 明细', 'one board per tab with charts (a tab of text only is left out)');
+  check(imp.sources.created.length === 7 && imp.sources.reused.join() === 'mb-signups' && imp.skipped.map((x) => x.name).join() === 'gone', 'each question is a data source once (one already connected is reused); a broken one is reported, not fatal');
+  const boardsAlex = (await api(alex.jar, 'GET', '/boards')).body.boards as { id: string; layout: { modules: Record<string, any>[] } }[];
+  const tabA = boardsAlex.find((b) => b.id === 'metabase-100-1')!.layout.modules;
+  check(tabA.map((m) => m.type === 'chart' ? `chart:${m.kind}` : m.type).join() === 'note,chart:line,chart:line,stats,chart:bar,chart:bar,chart:bar', 'cards keep their kind and order');
+  check(tabA[3].title?.['zh-CN'] === '本周销售', 'a short line right above numbers becomes their heading');
+  check(tabA[6].source.query.series === 'api_name' && tabA[6].source.query.date.bucket === 'day', 'a date chart with a text column is split by it (one series per API)');
+  check(tabA[0].body['zh-CN'] === '口径\n上海时间，说明 (https://example.com/doc)', 'text cards become notes without Markdown');
+  check(tabA[1].source.query.also?.[0]?.field === 'builder_usd' && tabA[1].source.query.date.bucket === 'day' && tabA[2].source.query.measure.op === 'avg' && tabA[2].source.query.measure.field === 'success_rate',
+    'several value columns share one chart; rates get one of their own, averaged');
+  check(tabA[3].items.length === 2 && tabA[3].width === 'full', 'numbers side by side become one row of tiles');
+  check(tabA[4].source.query.groupBy === 'bucket' && tabA[4].source.query.sort === 'label', 'a bar over categories keeps their order');
+  check(tabA[4].source.query.also?.[0]?.field === 'registrations' && tabA[4].source.query.also[0].op === 'sum', '"registrations" is a count, not a ratio');
+  const tabB = boardsAlex.find((b) => b.id === 'metabase-100-2')!.layout.modules;
+  check(tabB.map((m) => m.type === 'chart' ? `chart:${m.kind}` : m.type).join() === 'table,chart:funnel', 'tables become table modules, funnels funnels');
+  const lines = (await api(alex.jar, 'POST', '/data/module', { source: tabA[1].source.data, query: tabA[1].source.query, kind: 'line' })).body.value as { series: { name: string; values: number[] }[] };
+  check(lines.series.map((x) => x.name).join() === 'PAYG 收入,builder_usd' && lines.series[0].values.at(-1) === 119 && lines.series[1].values.at(-1) === 10,
+    'and the chart draws one line per value column, named as there (export names like "payg_usd ($)" mapped back)');
+  const tableRows = (await api(alex.jar, 'POST', '/data/rows', { source: tabB[0].source.data, where: [], limit: tabB[0].limit })).body as { rows: { email: string }[] };
+  check(tableRows.rows.length === 2, 'the table module reads the records');
+  const bobBoard = ((await api(bob.jar, 'GET', '/boards')).body.boards as { id: string; layout: { modules: Record<string, any>[] } }[]).find((b) => b.id === 'metabase-100-1')!.layout.modules;
+  check(bobBoard.map((m) => m.type).join() === 'note,chart' && bobBoard[1].source.data === 'mb-signups', 'new sources are for admins until opened up: others see the notes and what they may see');
+  const resync = (await api(alex.jar, 'POST', '/admin/connections/metabase/import', { board: '100' })).body as { boards: { id: string }[]; sources: { created: string[]; reused: string[] } };
+  check(resync.boards.length === 2 && resync.sources.created.length === 0 && resync.sources.reused.length === 8, 'syncing again rebuilds the same boards and keeps the sources');
+  check(((await api(alex.jar, 'GET', '/admin/connections')).body.connections as { imported: { id: string }[] }[])[0].imported.length === 2, 'the admin page lists the imported boards to sync');
+
+  // the detail page behind a number: what the source is and its records, read as the viewer
+  const dsMeta = (await api(bob.jar, 'GET', '/data/sources/mb-signups')).body as { fields: { name: string; kind: string }[]; where: { label: string; url: string }; records: number };
+  check(dsMeta.fields.map((f) => `${f.name}:${f.kind}`).join() === 'reg_date:date,real_users:number' && dsMeta.where.label === 'metabase' && dsMeta.where.url.endsWith('/question/232') && dsMeta.records === 10,
+    'a source describes itself for its detail page (fields sorted into dates and numbers, where it lives)');
+  const dsRows = (await api(bob.jar, 'POST', '/data/rows', { source: 'mb-signups', where: [{ field: 'reg_date', op: 'isGreater', value: NOW - 3 * DAY }], sort: { field: 'reg_date', desc: true } })).body as { matched: number; rows: { reg_date: string }[] };
+  check(dsRows.matched === 3 && dsRows.rows[0].reg_date > dsRows.rows[2].reg_date, 'and its records in a date range, newest first');
+  check((await api(bob.jar, 'GET', '/data/sources/mb-revenue')).status === 400, 'not for sources the viewer may not see');
+
+  // one company page for everyone: shared modules, each person's own changes on top, and only numbers they may see
+  const tile = (id: string, field: string) => ({ label: { 'zh-CN': id, en: id }, source: { data: id, query: { measure: { op: 'sum', field } } } });
+  await tool(alex.token, 'save_homepage', { scope: 'company', layout: { modules: [
+    { type: 'stats', items: [tile('mb-signups', 'real_users'), tile('mb-revenue', 'payg_usd')] },
+    { type: 'chart', kind: 'line', source: { data: 'mb-revenue', query: { measure: { op: 'sum', field: 'payg_usd' } } } },
+    { type: 'apps' },
+    { type: 'skills', width: 'half' },
+  ] } });
+  type HomeBody = { from: string; adjusted: boolean; hidden: { id: string }[]; layout: { modules: { id: string; type: string; width?: string; own?: boolean; items?: { label: Record<string, string> }[] }[] } };
+  const homeOf = async (jar: Jar) => (await api(jar, 'GET', '/home')).body as unknown as HomeBody;
+  let bobHome = await homeOf(bob.jar);
+  check(bobHome.from === 'company' && bobHome.layout.modules.every((m) => m.id), 'someone without a page of their own gets the company page, every module with an id');
+  check(bobHome.layout.modules[0].items?.length === 1 && bobHome.layout.modules[0].items[0].label.en === 'mb-signups' && !bobHome.layout.modules.some((m) => m.type === 'chart'),
+    'numbers they may not see are left out (a tile, or a whole chart)');
+  check((await homeOf(alex.jar)).layout.modules.some((m) => m.type === 'chart'), 'an admin sees them');
+  const [statsId, , appsId, skillsId] = (await tool(alex.token, 'get_homepage', { scope: 'company' })).layout.modules.map((m: { id: string }) => m.id);
+  await api(bob.jar, 'POST', '/home/adjust', { hide: appsId });
+  await api(bob.jar, 'POST', '/home/adjust', { width: { id: statsId, width: 'half' } });
+  await api(bob.jar, 'POST', '/home/adjust', { order: [skillsId, statsId, appsId] });
+  bobHome = await homeOf(bob.jar);
+  check(bobHome.adjusted && bobHome.hidden.map((m) => m.id).join() === appsId && bobHome.layout.modules.map((m) => m.id).join() === `${skillsId},${statsId}` && bobHome.layout.modules[1].width === 'half',
+    'a person hides, resizes and moves shared modules on the page itself');
+  await tool(alex.token, 'save_homepage', { scope: 'company', layout: { modules: [
+    ...(await tool(alex.token, 'get_homepage', { scope: 'company' })).layout.modules,
+    { type: 'note', body: { 'zh-CN': '新公告', en: 'News' } },
+  ] } });
+  bobHome = await homeOf(bob.jar);
+  check(bobHome.layout.modules.some((m) => m.type === 'note') && !bobHome.layout.modules.some((m) => m.id === appsId) && bobHome.layout.modules[0].id === skillsId,
+    'what the company adds later reaches them, and their changes stay');
+  const mine = (await tool(bob.token, 'get_homepage', { scope: 'me' })).layout.modules as { id: string; own: boolean }[];
+  await tool(bob.token, 'save_homepage', { scope: 'me', layout: { modules: [
+    ...mine.filter((m) => m.id !== skillsId),
+    { type: 'links', items: [{ label: { 'zh-CN': '文档', en: 'Docs' }, url: 'https://example.com/docs' }] },
+  ] } });
+  bobHome = await homeOf(bob.jar);
+  check(bobHome.from === 'company' && bobHome.hidden.map((m) => m.id).sort().join() === [appsId, skillsId].sort().join() && bobHome.layout.modules.at(-1)?.own === true,
+    "an agent saving their page keeps it built on the company page: left-out modules hidden, new ones their own");
+  await api(bob.jar, 'POST', '/home/adjust', { show: appsId });
+  check((await homeOf(bob.jar)).layout.modules.some((m) => m.id === appsId), 'a hidden module comes back');
+  await api(bob.jar, 'DELETE', '/home/adjust');
+  bobHome = await homeOf(bob.jar);
+  check(!bobHome.adjusted && !bobHome.layout.modules.some((m) => m.own), 'and back to the company page as it is');
+  check((await api(bob.jar, 'POST', '/home/adjust', { hide: 'nope' })).status === 400, 'unknown modules are refused');
+  const revBoard = await tool(alex.token, 'save_board', { id: 'revenue', title: { 'zh-CN': '收入', en: 'Revenue' }, layout: { modules: [{ type: 'chart', kind: 'line', source: { data: 'mb-revenue', query: { measure: { op: 'sum', field: 'payg_usd' } } } }, { type: 'note', body: { 'zh-CN': '说明', en: 'About' } }] } });
+  const bobBoards = (await api(bob.jar, 'GET', '/boards')).body.boards as { id: string; layout: { modules: { type: string }[] } }[];
+  check(!!revBoard.id && bobBoards.find((b) => b.id === revBoard.id)?.layout.modules.map((m) => m.type).join() === 'note', 'boards leave out what the viewer may not see too');
 
   if (KEEP) {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert

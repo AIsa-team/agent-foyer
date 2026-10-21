@@ -67,5 +67,14 @@ export async function gh<T>(p: string): Promise<T> {
   return call<T>(await installationToken(), p);
 }
 
+/** A GraphQL query as the organisation's installation (GitHub Enterprise serves it at /api/graphql). */
+export async function ghGraphql<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  const r = await call<{ data?: T; errors?: { message: string }[] }>(await installationToken(), `${config.github.apiBase.replace(/\/v3\/?$/, '')}/graphql`, {
+    method: 'POST', body: JSON.stringify({ query, variables }),
+  });
+  if (r.errors?.length || !r.data) throw new GitHubError(502, `GitHub GraphQL: ${r.errors?.map((e) => e.message).join('; ') ?? 'no data'}`);
+  return r.data;
+}
+
 /** A call with someone's own user token (only used to learn who they are when they link their account). */
 export const asGitHubUser = <T>(token: string, p: string) => call<T>(token, p);

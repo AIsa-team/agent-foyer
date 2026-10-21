@@ -8,11 +8,15 @@ import { config } from '../config.ts';
 import { UserError } from '../i18n/index.ts';
 import { FIELD, plainNumber, plainText, plainValues, timeOf, type Condition, type Field } from '../lark/base.ts';
 
+const measureSchema = z.object({
+  op: z.enum(['count', 'sum', 'avg', 'min', 'max']).describe('count rows, or sum/avg/min/max a number field'),
+  field: z.string().optional().describe('number field (not needed for count)'),
+  label: z.string().max(60).optional().describe('series name when a chart shows several measures (default: the field)'),
+});
 export const querySchema = z.object({
-  measure: z.object({
-    op: z.enum(['count', 'sum', 'avg', 'min', 'max']).describe('count rows, or sum/avg/min/max a number field'),
-    field: z.string().optional().describe('number field (not needed for count)'),
-  }),
+  measure: measureSchema,
+  also: z.array(measureSchema).max(5).optional()
+    .describe('more measures on the same chart, one line / bar series each (e.g. the PAYG, Builder and Team columns of a table that has one row per day); not with series'),
   groupBy: z.string().optional().describe('field to group by: one bar / slice / row per value (multi-select and people count once per value)'),
   series: z.string().optional().describe('second grouping, one series per value (bar/line only; keep it to ≤ 8 values)'),
   date: z.object({
@@ -124,7 +128,26 @@ function matches(rec: Record<string, unknown>, c: Condition, f: Field): boolean 
 }
 
 /** Runs a query over a source's fields and rows (already loaded, see sources.ts loadTable). */
+/** The rows matching every condition (fields checked by name, like queries). */
+export function filterRows<T>(fields: Field[], rows: T[], where: Condition[] = [], fieldsOf: (r: T) => Record<string, unknown> = (r) => r as Record<string, unknown>): T[] {
+  for (const w of where) checkField(fields, w.field, 'where');
+  return rows.filter((r) => where.every((c) => matches(fieldsOf(r), c, fields.find((f) => f.name === c.field)!)));
+}
+
 export function runQuery(q: Query, table: { fields: Field[]; rows: Record<string, unknown>[] }): Result {
+  // several measures: one run each, as series named after the measure (groups keep the first measure's order)
+  if (q.also?.length) {
+    if (q.series) throw new UserError('err.data.alsoWithSeries');
+    const ms = [q.measure, ...q.also];
+    const runs = ms.map((m) => runQuery({ ...q, measure: m, also: undefined }, table));
+    const name = (m: Query['measure']) => m.label ?? m.field ?? 'count';
+    const keys = runs[0].buckets ?? runs[0].rows.map((r) => r.key);
+    return {
+      ...runs[0],
+      rows: runs.flatMap((r, i) => r.rows.filter((x) => keys.includes(x.key)).map((x) => ({ ...x, series: name(ms[i]) }))),
+      measure: ms.map((m) => (m.op === 'count' ? 'count' : `${m.op}(${m.field})`)).join(', '),
+    };
+  }
   const fields = table.fields;
   const measureField = checkField(fields, q.measure.field, 'measure');
   if (q.measure.op !== 'count' && !measureField) throw new UserError('err.data.measureField');

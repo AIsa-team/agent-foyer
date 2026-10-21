@@ -125,6 +125,9 @@ export const config = {
     hostDataDir: process.env.HOST_DATA_DIR ?? '',
   },
   maxUploadBytes: Number(env('MAX_UPLOAD_MB', '200')) * 1024 * 1024,
+  /** how old rows read through a data connection (Metabase…) may get before a page view refreshes them in the background;
+   *  those queries often run on a production database, so not too often */
+  connectorRefreshMs: Math.max(1, Number(env('CONNECTOR_REFRESH_MINUTES', '30'))) * 60_000,
 };
 
 // Dev login lets anyone pick any user. Never allow it on a real (https) deployment.

@@ -174,8 +174,14 @@ export function plainNumber(v: unknown): number | null {
 }
 
 /** A cell shown as text, e.g. for agents inspecting a table. */
+/** An ISO date-time as people read it: the date alone at midnight, else date and time as written (its own offset). */
+const readableIso = (x: string) => {
+  const m = x.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?$/);
+  return !m ? x : m[2] === '00:00' ? m[1] : `${m[1]} ${m[2]}`;
+};
+
 export function plainText(v: unknown, f?: Field): string {
   const vals = plainValues(v);
-  if (f && isDateField(f)) return vals.map((x) => (typeof x === 'number' ? new Date(x).toISOString().slice(0, 10) : String(x))).join(', ');
+  if (f && isDateField(f)) return vals.map((x) => (typeof x === 'number' ? new Date(x).toISOString().slice(0, 10) : readableIso(String(x)))).join(', ');
   return vals.map((x) => String(x)).join(', ');
 }

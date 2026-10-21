@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type AppInfo, type LarkLink } from '../api';
 import { useI18n } from '../i18n';
+import { ConnectionsSection } from '../connections';
 import { AppIcon, Avatar, Icon, LinkIcon, Loading, useAction, useApi, useMe, useToast } from '../ui';
 
 interface AdminData {
@@ -222,6 +223,11 @@ export function AdminPage() {
           </div>
         </div>
       )}
+
+      <div className="section" id="connections">
+        <div className="section-title">{t('admin.connections')} <span className="count">{t('admin.connectionsHint')}</span></div>
+        <ConnectionsSection />
+      </div>
 
       <div className="section">
         <div className="section-title">{t('admin.members')} <span className="count">{t('admin.memberCount', { n: data.users.length })}</span><span className="spacer" />
