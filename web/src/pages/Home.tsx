@@ -10,6 +10,7 @@ import { SkillUpdatesBanner } from './Skills';
 import { LEVEL_BADGE, type IssuesData } from './Issues';
 import { HeroPulse, type Pulse } from './HeroPulse';
 import { detailUrl } from './DataSource';
+import type { AppRequest } from './Requests';
 
 // ---------------------------------------------------------------- layout types (mirror server/homepage.ts)
 type Text = Record<string, string>;
@@ -37,7 +38,8 @@ export type Module = Base & (
   | { type: 'okr'; width?: Width; title?: Text; user?: string }
   | { type: 'github'; width?: Width; title?: Text; weeks?: number }
   | { type: 'table'; width?: Width; title?: Text; source: { data: string; where?: object[]; sort?: { field: string; desc?: boolean }; fields?: string[] }; limit?: number }
-  | { type: 'issues'; width?: Width; title?: Text });
+  | { type: 'issues'; width?: Width; title?: Text }
+  | { type: 'requests'; width?: Width; title?: Text; limit?: number });
 
 export interface HomeData {
   layout: { modules: Module[] };
@@ -463,6 +465,36 @@ function IssuesModule({ m }: { m: Extract<Module, { type: 'issues' }> }) {
   );
 }
 
+/** "Requests": apps colleagues need that wait for someone (the pool, and invitations to the viewer). */
+function RequestsModule({ m }: { m: Extract<Module, { type: 'requests' }> }) {
+  const { t } = useI18n();
+  const text = useText();
+  const { data, error } = useApi<{ requests: AppRequest[] }>('/requests?status=open&waiting=1');
+  const shown = (data?.requests ?? []).slice(0, m.limit ?? 5);
+  return (
+    <ModuleCard title={text(m.title) || t('home.module.requests')}>
+      {!data ? <Loading error={error} /> : shown.length === 0 ? (
+        <Empty title={t('requests.none.open')} hint={t('home.requests.emptyHint')} />
+      ) : (
+        <div className="home-links">
+          {shown.map((r) => (
+            <Link key={r.id} to={`/requests/${r.id}`} className="home-link">
+              <span className="small muted mono">#{r.id}</span>
+              <span className="grow ellipsis">{r.title}</span>
+              {r.scope === 'invite' ? <span className="badge warn">{t('home.requests.invitedYou')}</span>
+                : r.voters.length > 0 && <span className="small muted">{t('requests.alsoNeed', { n: r.voters.length })}</span>}
+            </Link>
+          ))}
+        </div>
+      )}
+      <div className="home-more" style={{ gap: 14 }}>
+        <Link to="/requests?new=1">{t('requests.new')}</Link>
+        <Link to="/requests">{t('home.requests.all')} →</Link>
+      </div>
+    </ModuleCard>
+  );
+}
+
 export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
   const { t } = useI18n();
   const text = useText();
@@ -523,6 +555,8 @@ export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
       return me.hub.features.lark ? <OkrModule m={m} /> : null;
     case 'issues':
       return <IssuesModule m={m} />;
+    case 'requests':
+      return <RequestsModule m={m} />;
     case 'table':
       return <TableModule m={m} />;
     case 'github':
@@ -577,7 +611,7 @@ function CustomizeDialog({ data, onClose }: { data: HomeData; onClose: () => voi
 function useModuleName() {
   const { t } = useI18n();
   const text = useText();
-  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
+  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github', 'requests'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
 }
 
 const WIDTHS: Width[] = ['full', 'half', 'third'];

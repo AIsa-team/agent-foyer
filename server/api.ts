@@ -36,6 +36,8 @@ import * as collab from './collab.ts';
 import { usageDetail } from './apps/visits.ts';
 import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
+import * as requests from './requests.ts';
+import { botChats } from './lark/chats.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
 import { isSupportedLocale, requestLocale, tr, UserError } from './i18n/index.ts';
@@ -272,7 +274,7 @@ api.get('/okr', async (c) => {
 });
 
 // ---- apps ----
-api.get('/apps', (c) => c.json({ apps: apps.listAppsFor(c.get('user'), localeOf(c)), larkLinks: larkLinks() }));
+api.get('/apps', (c) => c.json({ apps: apps.listAppsFor(c.get('user'), localeOf(c)), larkLinks: larkLinks(), requestsWaiting: requests.waitingCount(c.get('user')) }));
 
 api.get('/apps/:slug', (c) => {
   const u = c.get('user');
@@ -452,13 +454,29 @@ api.delete('/lark-links/:id', (c) => {
   return c.json({ ok: true });
 });
 
+// ---- app requests (需求)
+api.get('/requests', (c) => {
+  const u = c.get('user');
+  const status = c.req.query('status') as requests.Status | 'all' | undefined;
+  return c.json({ requests: requests.listRequests(u, localeOf(c), { status, mine: c.req.query('mine') === '1', waiting: c.req.query('waiting') === '1', query: c.req.query('q') }), waiting: requests.waitingCount(u) });
+});
+api.get('/requests/:id', (c) => c.json(requests.getRequest(c.get('user'), Number(c.req.param('id')), localeOf(c))));
+api.post('/requests', async (c) => {
+  const b = await body<{ title?: string; body?: string; due?: string | null; invite?: string | null }>(c);
+  return c.json(await requests.createRequest(c.get('user'), { title: String(b.title ?? ''), body: String(b.body ?? ''), due: b.due ?? null, invite: b.invite ?? null }, localeOf(c)));
+});
+api.post('/requests/:id', async (c) => {
+  const b = await body<requests.Action>(c);
+  return c.json(await requests.actOn(c.get('user'), Number(c.req.param('id')), b, localeOf(c)));
+});
+
 // ---- admin ----
 api.get('/admin', (c) => {
   requireAdmin(c.get('user'));
   const u = c.get('user');
   const pending = all<App>("SELECT * FROM apps WHERE visibility = 'public' AND public_status = 'pending'").map((a) => apps.serializeApp(a, u, localeOf(c)));
   const users = all<User>('SELECT id, name, email, avatar, role, last_seen_at FROM users ORDER BY last_seen_at DESC NULLS LAST, name');
-  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null });
+  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null, requestsChat: requests.requestsChat() });
 });
 
 // ---- data connections (Metabase…) and the sources read through them; admins only
@@ -497,6 +515,16 @@ api.post('/admin/data-sources/:id/audience', async (c) => {
 api.delete('/admin/data-sources/:id', (c) => {
   requireAdmin(c.get('user'));
   return c.json(dataSources.deleteSource(c.get('user'), c.req.param('id')));
+});
+
+api.get('/admin/lark-chats', async (c) => {
+  requireAdmin(c.get('user'));
+  return c.json({ chats: config.lark.enabled ? await botChats() : [] });
+});
+api.post('/admin/requests-chat', async (c) => {
+  const b = await body<{ chat?: { id: string; name: string } | null }>(c);
+  requests.setRequestsChat(c.get('user'), b.chat ? { id: String(b.chat.id ?? '').trim(), name: String(b.chat.name ?? '') } : null);
+  return c.json({ ok: true, requestsChat: requests.requestsChat() });
 });
 
 api.post('/admin/alerts', async (c) => {

@@ -12,6 +12,46 @@ interface AdminData {
   devLogin: boolean;
   alertNotify: 'admins' | 'everyone';
   okrOwner: string | null;
+  requestsChat: { id: string; name: string } | null;
+}
+
+/** The Lark group new pool requests are posted to: picked from the groups the bot is in, or entered by id. */
+function RequestsChatSection({ chat, reload }: { chat: AdminData['requestsChat']; reload: () => void }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const [chats, setChats] = useState<{ id: string; name: string }[] | null>(null);
+  const [problem, setProblem] = useState('');
+  const [manual, setManual] = useState({ id: '', name: '' });
+  useEffect(() => {
+    api.get<{ chats: { id: string; name: string }[] }>('/admin/lark-chats').then((r) => setChats(r.chats), (e: Error) => { setChats([]); setProblem(e.message); });
+  }, []);
+  const save = (c: { id: string; name: string } | null) => run(() => api.post('/admin/requests-chat', { chat: c }), t('admin.alertsSaved')).then(reload);
+  return (
+    <div className="section">
+      <div className="section-title">{t('admin.requestsChat')}</div>
+      <div className="card pad">
+        <p className="small muted" style={{ marginTop: 0 }}>{t('admin.requestsChatHint')}</p>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          <select className="select" style={{ maxWidth: 320 }} disabled={busy || chats === null} value={chat?.id ?? ''}
+            onChange={(e) => save(e.target.value ? chats?.find((c) => c.id === e.target.value) ?? chat : null)}>
+            <option value="">{t('admin.requestsChatNone')}</option>
+            {chat && !chats?.some((c) => c.id === chat.id) && <option value={chat.id}>{chat.name}</option>}
+            {(chats ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+        {problem && (
+          <div className="stack" style={{ gap: 8, marginTop: 12 }}>
+            <p className="small muted" style={{ margin: 0 }}>{problem}</p>
+            <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+              <input className="input" style={{ maxWidth: 220 }} placeholder="oc_…" value={manual.id} onChange={(e) => setManual({ ...manual, id: e.target.value })} />
+              <input className="input" style={{ maxWidth: 200 }} placeholder={t('admin.requestsChatName')} value={manual.name} onChange={(e) => setManual({ ...manual, name: e.target.value })} />
+              <button className="btn sm" type="button" disabled={busy || !manual.id.trim()} onClick={() => save({ id: manual.id.trim(), name: manual.name.trim() || manual.id.trim() })}>{t('admin.requestsChatUse')}</button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
 }
 
 interface CatalogItem { key: string; name: string; description: string; icon: string; url: string }
@@ -198,6 +238,8 @@ export function AdminPage() {
           </div>
         </div>
       )}
+
+      {me.hub.features.messages && me.hub.features.lark && <RequestsChatSection chat={data.requestsChat} reload={reload} />}
 
       {me.hub.features.lark && (
         <div className="section" id="lark-links">

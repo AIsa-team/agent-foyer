@@ -70,10 +70,21 @@ export function PublishDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+/** 应用 | 需求, on top of both pages. */
+export function AppsTabs({ active, waiting }: { active: 'apps' | 'requests'; waiting?: number }) {
+  const { t } = useI18n();
+  return (
+    <div className="seg" style={{ marginBottom: 18 }}>
+      <Link to="/apps" className={active === 'apps' ? 'on' : ''}>{t('requests.tab.apps')}</Link>
+      <Link to="/requests" className={active === 'requests' ? 'on' : ''}>{t('requests.tab.requests')}{waiting ? <span className="seg__count">{waiting}</span> : null}</Link>
+    </div>
+  );
+}
+
 export function AppsPage() {
   const { t } = useI18n();
   const me = useMe();
-  const { data, error } = useApi<{ apps: AppInfo[]; larkLinks: LarkLink[] }>('/apps');
+  const { data, error } = useApi<{ apps: AppInfo[]; larkLinks: LarkLink[]; requestsWaiting?: number }>('/apps');
   const [q, setQ] = useState('');
   const [publishing, setPublishing] = useState(false);
   if (!data) return <Loading error={error} />;
@@ -89,6 +100,7 @@ export function AppsPage() {
           <button className="btn primary" onClick={() => setPublishing(true)} type="button">{t('apps.publish')}</button>
         </div>
       </div>
+      <AppsTabs active="apps" waiting={data.requestsWaiting} />
 
       <div className="section-title">{t('apps.own')} <span className="count">{t('common.count', { n: apps.length })}</span></div>
       {apps.length ? (

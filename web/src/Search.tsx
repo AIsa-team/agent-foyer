@@ -11,6 +11,7 @@ interface Results {
   resources: { id: number; title: string; group: string; url: string }[];
   people: { id: string; name: string; email: string | null; avatar: string | null }[];
   boards: { id: string; title: string; department: string | null }[];
+  requests: { id: number; title: string; status: 'open' | 'taken' | 'done' | 'closed'; scope: 'pool' | 'invite'; invited: boolean; requester: string }[];
 }
 interface Hit { key: string; group: MessageKey; label: string; sub?: string; icon: React.ReactNode; go: () => void }
 
@@ -18,7 +19,7 @@ const OPEN_EVENT = 'hub:search';
 export const openSearch = () => window.dispatchEvent(new Event(OPEN_EVENT));
 export const searchShortcut = () => (/Mac|iPhone|iPad/.test(navigator.platform) ? '⌘K' : 'Ctrl K');
 
-/** Hub-wide search (⌘K / Ctrl+K): pages, apps, Skills, resources, colleagues and data boards. */
+/** Hub-wide search (⌘K / Ctrl+K): pages, apps, app requests, Skills, resources, colleagues and data boards. */
 export function SearchBox({ pages }: { pages: { to: string; label: string; icon: IconName }[] }) {
   const { t } = useI18n();
   const nav = useNavigate();
@@ -63,12 +64,16 @@ export function SearchBox({ pages }: { pages: { to: string; label: string; icon:
     if (res) {
       out.push(...res.apps.map((a) => ({ key: `a${a.slug}`, group: 'search.apps' as MessageKey, label: a.name, sub: a.description, icon: <AppIcon src={a.icon} name={a.name} size="sm" />, go: close(() => nav(`/apps/${a.slug}`)) })));
       out.push(...res.skills.map((s) => ({ key: `s${s.slug}`, group: 'search.skills' as MessageKey, label: s.name, sub: s.description, icon: <Icon name="skill" />, go: close(() => nav(`/skills/${s.slug}`)) })));
+      out.push(...(res.requests ?? []).map((r) => {
+        const status = r.status === 'open' && r.scope === 'invite' ? (r.invited ? 'invited' : 'declined') : r.status;
+        return { key: `q${r.id}`, group: 'search.requests' as MessageKey, label: `#${r.id} ${r.title}`, sub: `${t(`requests.status.${status}` as MessageKey)} · ${r.requester}`, icon: <Icon name="plus" />, go: close(() => nav(`/requests/${r.id}`)) };
+      }));
       out.push(...res.boards.map((b) => ({ key: `b${b.id}`, group: 'search.boards' as MessageKey, label: b.title, sub: b.department ?? undefined, icon: <Icon name="chart" />, go: close(() => nav(`/data?board=${b.id}`)) })));
       out.push(...res.resources.map((r) => ({ key: `r${r.id}`, group: 'search.resources' as MessageKey, label: r.title, sub: r.group, icon: <Icon name="doc" />, go: close(() => window.open(r.url, '_blank', 'noopener')) })));
       out.push(...res.people.map((p) => ({ key: `u${p.id}`, group: 'search.people' as MessageKey, label: p.name, sub: p.email ?? undefined, icon: <Avatar person={p} />, go: close(() => nav(`/org?person=${encodeURIComponent(p.id)}`)) })));
     }
     return out;
-  }, [res, q, pages, nav]);
+  }, [res, q, pages, nav, t]);
   useEffect(() => setSel(0), [hits.length]);
 
   const onKey = (e: React.KeyboardEvent) => {

@@ -18,6 +18,7 @@ Work through these steps in order. Decide what you can yourself and say what you
 ## 0. Look for what exists
 - list_my_apps: if an app already does what is asked, improve that one instead of making a second: list_feedback, then get_app_source for the code of its live version (never an old copy you happen to find on disk).
 - list_apps: if a colleague's app already does it, tell the user and offer to use it (call_app) or ask its owner for what is missing.
+- Building for an app request (需求 #id): get_app_request for what is needed and who else needs it (their notes are requirements too), take it (update_app_request take) if nobody has, and pass request_id to publish_app. Otherwise list_app_requests (query) for a request asking for the same, and mention it.
 - check_slug for a new subdomain. If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator (set_collaborators).
 
 ## 1. Fill in the defaults

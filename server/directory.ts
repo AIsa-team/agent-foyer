@@ -8,6 +8,7 @@ import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
 import { boardsFor } from './boards.ts';
+import { listRequests } from './requests.ts';
 
 interface DeptRow { id: string; name: string; name_i18n: string | null; parent_id: string | null; leader_ids: string | null }
 
@@ -44,7 +45,7 @@ function allTexts(json: string | null): string[] {
 
 export function search(user: User, raw: string, locale: string) {
   const q = raw.trim().toLowerCase();
-  if (!q) return { apps: [], skills: [], resources: [], people: [], boards: [] };
+  if (!q) return { apps: [], skills: [], resources: [], people: [], boards: [], requests: [] };
   const lim = <T>(xs: T[]) => xs.slice(0, 6);
   const library = lib.library(locale);
   return {
@@ -56,6 +57,9 @@ export function search(user: User, raw: string, locale: string) {
       .filter((r) => has(q, r.title, r.description, r.group)).map((r) => ({ id: r.id, title: r.title, group: r.group, url: r.url }))),
     people: lim(all<{ id: string; name: string; en_name: string | null; email: string | null; avatar: string | null }>('SELECT id, name, en_name, email, avatar FROM users')
       .filter((p) => has(q, p.name, p.en_name, p.email)).map((p) => ({ id: p.id, name: p.name, email: p.email, avatar: p.avatar }))),
+    // ones still in play first, then live and closed ones
+    requests: lim(listRequests(user, locale, { status: 'all', query: q }).sort((a, b) => Number(['done', 'closed'].includes(a.status)) - Number(['done', 'closed'].includes(b.status)))
+      .map((r) => ({ id: r.id, title: r.title, status: r.status, scope: r.scope, invited: !!r.invitee, requester: r.requester?.name ?? '' }))),
     boards: lim(boardsFor(user, locale).filter((b) => has(q, b.title, b.department?.name, ...allTexts(get<{ title_i18n: string }>('SELECT title_i18n FROM boards WHERE id = ?', b.id)?.title_i18n ?? null))).map((b) => ({ id: b.id, title: b.title, department: b.department?.name ?? null }))),
   };
 }

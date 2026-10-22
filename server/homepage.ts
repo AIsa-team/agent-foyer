@@ -82,6 +82,8 @@ const moduleSchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('resources'), id: moduleId, width, title: text().optional() }).describe('quick links from the resources page'),
   z.object({ type: z.literal('issues'), id: moduleId, width, title: text().optional() })
     .describe('data issues assigned to the viewer (records they need to fix), from the data checks'),
+  z.object({ type: z.literal('requests'), id: moduleId, width, title: text().optional(), limit: z.number().int().min(1).max(10).optional().describe('requests shown (default 5)') })
+    .describe('app requests (需求) waiting for someone: the pool, and invitations to the viewer, with a way to ask for an app'),
   z.object({
     type: z.literal('okr'), id: moduleId, width, title: text().optional(),
     user: z.string().optional().describe('whose OKRs: an email or open_id; default = whoever views the page (so one department/company layout shows each person their own)'),

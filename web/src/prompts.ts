@@ -15,3 +15,5 @@ export const iconPrompt = (me: Me, t: T, slug: string) => t('prompt.icon', { hub
 export const feedbackPrompt = (me: Me, t: T, kind: 'app' | 'skill', slug: string) => t(`prompt.feedback.${kind}`, { hub: hub(me, t), slug });
 export const agentUsePrompt = (me: Me, t: T, name: string) => t('prompt.agentUse', { hub: hub(me, t), name });
 export const agentAddPrompt = (me: Me, t: T, slug: string) => t('prompt.agentAdd', { hub: hub(me, t), slug });
+export const requestAskPrompt = (me: Me, t: T) => t('prompt.requestAsk', { hub: hub(me, t) });
+export const requestBuildPrompt = (me: Me, t: T, id: number, title: string) => t('prompt.requestBuild', { hub: hub(me, t), id, title });

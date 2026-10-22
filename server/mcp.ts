@@ -33,6 +33,7 @@ import { localeCodes, type LocalizedMap } from './localized.ts';
 import { appGuide } from './appGuide.ts';
 import { sourceDownload } from './apps/source.ts';
 import * as agentActions from './apps/agentActions.ts';
+import * as appRequests from './requests.ts';
 import * as connectors from './data/connectors/index.ts';
 import { importBoard } from './data/importBoard.ts';
 
@@ -54,6 +55,7 @@ ${LARK ? `- Business data lives in Lark, never only in the app: a table the user
 `}${config.designSkills.length ? `- The interface uses the company design system: install_skill ${config.designSkills.join(', ')} and build from its kit and templates, no other UI library.
 ` : ''}- Check it works (locally against a fake hub, then get_app_status), without writing test data into real tables or mailboxes, and end with the short report app_guide describes.
 Using apps: colleagues' apps offer operations to agents: finding, adding and changing records in their Lark tables (<table>.find / .add / .update) and their own actions (e.g. create a quote). When the user wants something done in one of the company's apps, or asks for something an app may already do, list_apps (query by topic), then list_apps with app for the arguments, and call_app; never reach an app's URLs or its Lark tables another way. Operations with write: true change data: say what you will do and call after the user agrees, unless they asked beforehand for it to be done without asking; then tell them afterwards what was done. If call_app says the user must first agree to the app's Lark access, give them the link.
+App requests (需求): colleagues post apps they need, invite someone to build one, or leave it in the pool for whoever has time. When the user needs an app built by someone else ("帮我提个需求", "ask someone to make…"), create_app_request (after checking list_app_requests and list_apps for one that exists, and after the user agrees to the text). When they want to help or build a request ("做需求 #12"), get_app_request, take it, follow app_guide, and publish_app with request_id.
 Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app, or through their agent. When the user asks to improve one of their apps or Skills (or what people said), list_feedback, change and republish, then resolve_feedback each item with a short reply. When they hit a problem with someone else's app or Skill, draft it with send_feedback and send only after they agree with the text.
 Working together: an app or Skill can have collaborators (set_collaborators). They publish and change settings like the owner; only the owner (or an admin) deletes it, changes collaborators or hands it over (transfer_ownership). If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator.
 Never put secrets in an upload; use set_app_env for API keys.
@@ -196,15 +198,27 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       localized: localizedSchema(),
       related_skill: z.string().optional().describe('optional: slug of the Skill that goes with this app (most apps have none; "" removes the link)'),
       source_upload_id: z.string().optional().describe('when the upload is a build (e.g. dist), an upload (purpose "source") of the project folder it was built from, so the app can be changed later on any machine'),
+      request_id: z.number().int().optional().describe('the app request (需求) this app answers: once the app is online the request is marked done, the requester becomes a collaborator and everyone who asked is told'),
     },
   }, guard(async (a: {
     upload_id: string; slug: string; kind: 'static' | 'container'; name?: string; description?: string; visibility?: apps.Visibility;
     members?: string[]; static_dir?: string; container_port?: number; icon_svg?: string; icon_png_base64?: string; localized?: LocalizedMap; related_skill?: string; source_upload_id?: string;
-  }) => apps.publishApp(user, {
-    uploadId: a.upload_id, slug: a.slug, kind: a.kind, name: a.name, description: a.description, visibility: a.visibility,
-    memberIds: a.members ? resolveColleagues(a.members) : undefined, staticDir: a.static_dir, containerPort: a.container_port,
-    iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, localized: a.localized, relatedSkill: a.related_skill, sourceUploadId: a.source_upload_id,
-  }).then((r) => ({ ...r, notes: r.notes.map(say) }))));
+    request_id?: number;
+  }) => {
+    const r = await apps.publishApp(user, {
+      uploadId: a.upload_id, slug: a.slug, kind: a.kind, name: a.name, description: a.description, visibility: a.visibility,
+      memberIds: a.members ? resolveColleagues(a.members) : undefined, staticDir: a.static_dir, containerPort: a.container_port,
+      iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, localized: a.localized, relatedSkill: a.related_skill, sourceUploadId: a.source_upload_id,
+    });
+    const notes = r.notes.map(say);
+    if (a.request_id !== undefined) {
+      if (r.status === 'online') {
+        const d = await appRequests.deliverFromPublish(user, a.request_id, r.slug, locale);
+        notes.push(`Request #${a.request_id} is done; the requester and everyone who asked for it were told.`, ...d.notes);
+      } else notes.push(`Request #${a.request_id} is not marked done yet: once the app is online, call update_app_request with action "deliver".`);
+    }
+    return { ...r, notes };
+  }));
 
   server.registerTool('get_app_status', {
     description: 'Status, recent releases with build logs, and runtime logs of one of your apps.',
@@ -232,6 +246,47 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       input: z.record(z.string(), z.unknown()).optional().describe('arguments, as the action\'s input schema describes'),
     },
   }, guard((a: { app: string; action: string; input?: Record<string, unknown> }) => agentActions.callAction(user, a.app, a.action, a.input ?? {}, agentName)));
+
+  server.registerTool('list_app_requests', {
+    description: 'App requests (需求): apps colleagues need and want someone to build. Pool requests are open to everyone; invitations only to the people involved. status: open (waiting for someone), taken, done, closed, all; mine: the ones the user asked for, was invited to, builds or also needs; query: words in title or text.',
+    inputSchema: { status: z.enum(['open', 'taken', 'done', 'closed', 'all']).optional(), mine: z.boolean().optional(), query: z.string().optional() },
+  }, guard((a: { status?: appRequests.Status | 'all'; mine?: boolean; query?: string }) =>
+    appRequests.listRequests(user, locale, { status: a.status ?? 'open', mine: a.mine, query: a.query }).map((r) => ({
+      id: r.id, title: r.title, status: r.status, scope: r.scope, requester: r.requester?.name, invitee: r.invitee?.name, builder: r.builder?.name,
+      due: r.due, alsoNeeded: r.voters.length, app: r.app?.slug ?? null, url: r.url,
+    }))));
+
+  server.registerTool('get_app_request', {
+    description: 'One app request in full: what is needed and why, who asked, who else needs it (with their notes), its state and what the user may do with it (can). To build it: take it (update_app_request take), follow app_guide, and publish_app with request_id.',
+    inputSchema: { id: z.number().int() },
+  }, guard(({ id }: { id: number }) => appRequests.getRequest(user, id, locale)));
+
+  server.registerTool('create_app_request', {
+    description: 'Ask for an app (需求) on the user\'s behalf: put it in the pool for whoever has time (posted to the team\'s Lark group) or invite one colleague. Write it so a builder can start: the problem, who will use it, where the data is (a Lark table link…), what done looks like. First list_app_requests (query) and list_apps for something that already does it. Show the user the text and who it goes to, and submit after they agree.',
+    inputSchema: {
+      title: z.string().describe('short, in the user\'s language'),
+      body: z.string().describe('what is needed and why, who uses it, data, what done looks like'),
+      due: z.string().optional().describe('wanted by, YYYY-MM-DD'),
+      invite: z.string().optional().describe('a colleague (name or email) to ask; leave out to put it in the pool'),
+    },
+  }, guard((a: { title: string; body: string; due?: string; invite?: string }) => appRequests.createRequest(user, {
+    title: a.title, body: a.body, due: a.due ?? null, invite: a.invite ? resolveColleagues([a.invite])[0] : null, via: 'agent', agent: agentName,
+  }, locale)));
+
+  server.registerTool('update_app_request', {
+    description: 'Act on an app request (see its can). take: start building it. decline: say no to an invitation. release: give it back. invite (user): ask a colleague. to_pool: open it to everyone. close (reason): no longer needed. edit (title/body/due). me_too (note): the user needs it too; not_me undoes it. deliver (app): it became this app (publish_app with request_id does it for you). The people concerned are told in Lark, so confirm with the user first.',
+    inputSchema: {
+      id: z.number().int(),
+      action: z.enum(['take', 'decline', 'release', 'invite', 'to_pool', 'close', 'edit', 'me_too', 'not_me', 'deliver']),
+      user: z.string().optional().describe('invite: name or email'),
+      reason: z.string().optional(), note: z.string().optional(),
+      title: z.string().optional(), body: z.string().optional(), due: z.string().optional(),
+      app: z.string().optional().describe('deliver: the app slug'),
+    },
+  }, guard((a: { id: number; action: appRequests.Action['action']; user?: string; reason?: string; note?: string; title?: string; body?: string; due?: string; app?: string }) => {
+    const act = { ...a, ...(a.action === 'invite' ? { user: resolveColleagues([a.user ?? ''])[0] } : {}) } as unknown as appRequests.Action;
+    return appRequests.actOn(user, a.id, act, locale);
+  }));
 
   server.registerTool('set_collaborators', {
     description: 'Colleagues who look after an app or Skill with its owner: they can publish new versions, change the listing, access and env, and handle feedback; deleting, choosing collaborators and handing it over stay with the owner (and admins). Added people get a Lark message. Call with neither add nor remove to see the list. Anyone can remove themselves.',

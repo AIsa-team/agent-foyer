@@ -12,6 +12,9 @@ point.
   `https://<name>.<apps domain>`, behind Lark sign-in. Four visibility levels: only me / chosen colleagues / the
   company / everyone (public needs an admin's approval).
 - **Skill market**: share and install Skills with versions; people who installed one are told when it updates.
+- **App requests**: ask a colleague to build an app, or leave it in a pool (posted to a Lark group) for whoever has time;
+  others add "I need this too". The builder's agent picks it up (`get_app_request`) and publishing with `request_id`
+  marks it live and makes the requester a collaborator.
 - **Working together**: an app or Skill can have collaborators who publish and change it with the owner; only the
   owner (or an admin) deletes it, picks the collaborators or hands it over.
 - **Feedback to authors**: colleagues tell an app's or Skill's owner what is wrong, from the hub page, a button inside

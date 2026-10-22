@@ -340,6 +340,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   }
   if (p === '/authen/v1/user_info') return userOk() ? send({ code: 0, data: { open_id: 'ou_dev_alex', name: 'Alex' } }) : send({ code: 99991668, msg: 'bad token' });
   if (p === '/auth/v3/tenant_access_token/internal') return send({ code: 0, tenant_access_token: 't-app', expire: 7200 });
+  if (p === '/im/v1/chats') return bearer === 't-app' ? send({ code: 0, data: { items: [{ chat_id: 'oc_dev', name: '开发群' }, { chat_id: 'oc_finance', name: '财务' }], has_more: false } }) : send({ code: 99991663, msg: 'bad tenant token' });
   if (p === '/im/v1/messages') {
     if (bearer !== 't-app') return send({ code: 99991663, msg: 'bad tenant token' });
     lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text });
@@ -1297,7 +1298,7 @@ try {
   check(String((await tool(bob.token, 'list_feedback', { slug: 'invoice-check' })).error).length > 0, "and nobody else's agent can");
   lark.messages = [];
   await tool(alex.token, 'resolve_feedback', { id: sent.id, status: 'done', reply: 'v2 支持专票了' });
-  await new Promise((r) => setTimeout(r, 300));
+  for (let i = 0; i < 50 && !lark.messages.length; i++) await new Promise((r) => setTimeout(r, 100));
   check(lark.messages[0]?.id === 'ou_dev_alice' && lark.messages[0].text.includes('v2 支持专票了'), 'and resolving tells the sender');
   check(String((await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'no-such-skill', body: '你好' })).error).length > 0, 'feedback on something that does not exist is refused');
   lark.messages = [];
@@ -1798,6 +1799,78 @@ try {
   const revBoard = await tool(alex.token, 'save_board', { id: 'revenue', title: { 'zh-CN': '收入', en: 'Revenue' }, layout: { modules: [{ type: 'chart', kind: 'line', source: { data: 'mb-revenue', query: { measure: { op: 'sum', field: 'payg_usd' } } } }, { type: 'note', body: { 'zh-CN': '说明', en: 'About' } }] } });
   const bobBoards = (await api(bob.jar, 'GET', '/boards')).body.boards as { id: string; layout: { modules: { type: string }[] } }[];
   check(!!revBoard.id && bobBoards.find((b) => b.id === revBoard.id)?.layout.modules.map((m) => m.type).join() === 'note', 'boards leave out what the viewer may not see too');
+
+  // app requests: the pool (posted to the group admins chose), invitations, me too, taking and delivering
+  {
+    check((await api(alice.jar, 'POST', '/admin/requests-chat', { chat: { id: 'oc_dev', name: '开发群' } })).status >= 400, 'only admins choose the requests group');
+    const chats = (await api(alex.jar, 'GET', '/admin/lark-chats')).body.chats as { id: string }[];
+    await api(alex.jar, 'POST', '/admin/requests-chat', { chat: { id: 'oc_dev', name: '开发群' } });
+    check(chats.map((c) => c.id).join() === 'oc_dev,oc_finance' && ((await api(alex.jar, 'GET', '/admin')).body.requestsChat as { id: string }).id === 'oc_dev', 'admins pick the group from the ones the bot is in');
+    const wait = async (n: number) => { for (let i = 0; i < 50 && lark.messages.length < n; i++) await new Promise((r) => setTimeout(r, 100)); };
+    lark.messages = [];
+    check((await api(alice.jar, 'POST', '/requests', { title: 'x', body: 'too short' })).status === 400, 'a request needs a title and enough detail');
+    const pool = (await api(alice.jar, 'POST', '/requests', { title: 'KOL 周报', body: '每周一汇总 KOL 合作进度，数据在 KOL 名单表里，市场组用', due: '2026-12-01' })).body as { id: number; scope: string; status: string };
+    await wait(1);
+    check(pool.scope === 'pool' && pool.status === 'open' && lark.messages[0]?.id === 'oc_dev' && lark.messages[0].text.includes('KOL 周报') && lark.messages[0].text.includes(`/requests/${pool.id}`), 'a pool request is posted to the requests group');
+    const bobList = (await api(bob.jar, 'GET', '/requests?status=open')).body as { requests: { id: number }[]; waiting: number };
+    check(bobList.requests.some((r) => r.id === pool.id) && bobList.waiting >= 1 && ((await api(bob.jar, 'GET', '/apps')).body.requestsWaiting as number) >= 1, 'everyone sees pool requests, and the apps page counts the waiting ones');
+    await api(bob.jar, 'POST', `/requests/${pool.id}`, { action: 'me_too', note: '我们组也要' });
+    check((await api(alice.jar, 'POST', `/requests/${pool.id}`, { action: 'me_too' })).status === 400, 'the requester does not vote for their own request');
+    const voted = (await api(alice.jar, 'GET', `/requests/${pool.id}`)).body as { voters: { name: string; note: string }[] };
+    check(voted.voters.length === 1 && voted.voters[0].note === '我们组也要', 'colleagues who need it too add a line about their case');
+
+    // an invitation is private to the people involved
+    lark.messages = [];
+    const inv = (await api(alice.jar, 'POST', '/requests', { title: '报销小助手', body: '帮我做个报销单填写工具，只有财务和我用', invite: 'ou_dev_alex' })).body as { id: number; scope: string };
+    await wait(1);
+    check(inv.scope === 'invite' && lark.messages[0]?.id === 'ou_dev_alex' && lark.messages[0].text.includes('报销小助手') && !lark.messages.some((m) => m.id === 'oc_dev'), 'an invitation messages the person invited, not the group');
+    check((await api(bob.jar, 'GET', `/requests/${inv.id}`)).status === 400 && !((await api(bob.jar, 'GET', '/requests?status=all')).body.requests as { id: number }[]).some((r) => r.id === inv.id), 'others cannot see an invitation');
+    check((await api(bob.jar, 'POST', `/requests/${inv.id}`, { action: 'take' })).status === 400, 'and cannot take it');
+    lark.messages = [];
+    const declined = (await api(alex.jar, 'POST', `/requests/${inv.id}`, { action: 'decline', reason: '这周没空' })).body as { request: { invitee: unknown; status: string; scope: string } };
+    await wait(1);
+    check(declined.request.invitee === null && declined.request.status === 'open' && declined.request.scope === 'invite' && lark.messages[0]?.id === 'ou_dev_alice' && lark.messages[0].text.includes('这周没空'), 'declining tells the requester why, and the request stays private');
+    lark.messages = [];
+    await api(alice.jar, 'POST', `/requests/${inv.id}`, { action: 'to_pool' });
+    await wait(1);
+    check(lark.messages[0]?.id === 'oc_dev' && ((await api(bob.jar, 'GET', `/requests/${inv.id}`)).body as { scope: string }).scope === 'pool', 'moved to the pool, it is posted and everyone sees it');
+    await api(alice.jar, 'POST', `/requests/${inv.id}`, { action: 'close', reason: '不需要了' });
+    check(((await api(bob.jar, 'GET', `/requests/${inv.id}`)).body as { status: string; can: { take: boolean } }).can.take === false, 'a closed request cannot be taken');
+
+    // an agent takes the pool request and delivers it by publishing with request_id
+    const listed = await tool(alex.token, 'list_app_requests', {}) as { id: number; alsoNeeded: number }[];
+    check(listed.find((r) => r.id === pool.id)?.alsoNeeded === 1, 'agents list waiting requests');
+    const full = await tool(alex.token, 'get_app_request', { id: pool.id }) as { body: string; voters: { note: string }[]; can: { take: boolean } };
+    check(full.body.includes('KOL 名单') && full.voters[0].note === '我们组也要' && full.can.take, 'and read one in full, with what colleagues added');
+    lark.messages = [];
+    const siteDir = mkdtempSync(path.join(tmpdir(), 'hub-req-'));
+    fsx.writeFileSync(path.join(siteDir, 'index.html'), '<h1>KOL weekly</h1>');
+    const pub = await tool(alex.token, 'publish_app', { upload_id: await putTar('app', siteDir), slug: 'kol-weekly', kind: 'static', name: 'KOL 周报', request_id: pool.id });
+    rmSync(siteDir, { recursive: true, force: true });
+    await wait(2);
+    const done = (await api(alice.jar, 'GET', `/requests/${pool.id}`)).body as { status: string; builder: { id: string }; app: { slug: string } };
+    const collabs = (await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'kol-weekly' })).collaborators as { id: string }[];
+    check(pub.status === 'online' && pub.notes.join(' ').includes(`#${pool.id}`) && done.status === 'done' && done.builder.id === 'ou_dev_alex' && done.app.slug === 'kol-weekly',
+      'publish_app with request_id takes the request and marks it live');
+    check(collabs.some((c) => c.id === 'ou_dev_alice'), 'the requester becomes a collaborator on the app');
+    check(lark.messages.some((m) => m.id === 'ou_dev_alice' && m.text.includes('KOL 周报')) && lark.messages.some((m) => m.id === 'ou_dev_bob' && m.text.includes('kol-weekly')), 'the requester and everyone who needed it are told');
+    const created = await tool(bob.token, 'create_app_request', { title: '招聘看板', body: '把招聘进度从 Lark 表里汇总成看板，HR 每周看', invite: 'alice@example.com' }) as { id: number; via: string; invitee: { id: string } };
+    check(created.via === 'agent' && created.invitee.id === 'ou_dev_alice', 'agents submit requests for the user, inviting a colleague by name or email');
+    await tool(alex.token, 'delete_app', { slug: 'kol-weekly', confirm_slug: 'kol-weekly' });
+
+    // the home page module and the search
+    const secret = (await api(alice.jar, 'POST', '/requests', { title: '保密的薪酬工具', body: '只想请 Alex 帮忙做的薪酬测算工具，先别公开' , invite: 'ou_dev_alex' })).body as { id: number };
+    const poolOpen = (await api(bob.jar, 'POST', '/requests', { title: '会议室预约', body: '大家都在群里抢会议室，想要一个预约页面，按时间段占用' })).body as { id: number };
+    const waitingFor = async (jar: Jar) => ((await api(jar, 'GET', '/requests?status=open&waiting=1')).body.requests as { id: number }[]).map((r) => r.id);
+    const aliceWaits = await waitingFor(alice.jar);
+    const alexWaits = await waitingFor(alex.jar);
+    check(aliceWaits.includes(poolOpen.id) && !aliceWaits.includes(secret.id) && aliceWaits.includes(created.id) && alexWaits.includes(secret.id),
+      'the requests module lists the pool and invitations to the viewer, not invitations they sent');
+    check((await tool(bob.token, 'preview_homepage', { scope: 'me', layout: { modules: [{ type: 'requests', width: 'half', limit: 3 }] } })).error === undefined, 'a home page takes a requests module');
+    const found = async (jar: Jar, q: string) => ((await api(jar, 'GET', `/search?q=${encodeURIComponent(q)}`)).body.requests as { id: number }[]).map((r) => r.id);
+    check((await found(bob.jar, '会议室')).includes(poolOpen.id) && (await found(alice.jar, 'KOL')).includes(pool.id), 'search finds requests');
+    check(!(await found(bob.jar, '薪酬')).includes(secret.id) && (await found(alex.jar, '薪酬')).includes(secret.id), 'but not invitations the searcher may not see');
+  }
 
   if (KEEP) {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert

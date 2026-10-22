@@ -501,6 +501,36 @@ const MIGRATIONS: string[] = [
     at INTEGER NOT NULL
   );
   CREATE INDEX app_agent_calls_app ON app_agent_calls (app_slug, at);
+  `,  // app requests (requests.ts)
+  `
+  CREATE TABLE app_requests (
+    id INTEGER PRIMARY KEY,
+    title TEXT NOT NULL,
+    body TEXT NOT NULL,
+    due TEXT,                         -- wanted by, YYYY-MM-DD
+    scope TEXT NOT NULL,              -- pool (whole company) | invite (requester, invitee, builder, admins)
+    status TEXT NOT NULL,             -- open | taken | done | closed
+    requester_id TEXT NOT NULL,
+    invitee_id TEXT,
+    declined_by TEXT,                 -- the last person who declined an invitation or gave it back
+    builder_id TEXT,
+    app_slug TEXT,
+    close_reason TEXT,
+    via TEXT NOT NULL DEFAULT 'web',  -- web | agent
+    agent TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    taken_at INTEGER,
+    done_at INTEGER
+  );
+  CREATE INDEX app_requests_status ON app_requests (status, updated_at);
+  CREATE TABLE app_request_votes (
+    request_id INTEGER NOT NULL,
+    user_id TEXT NOT NULL,
+    note TEXT,
+    at INTEGER NOT NULL,
+    PRIMARY KEY (request_id, user_id)
+  );
   `,
 ];
 

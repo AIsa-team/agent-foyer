@@ -1,6 +1,6 @@
 import { lazy, StrictMode, Suspense, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, NavLink, Route, Routes } from 'react-router';
+import { BrowserRouter, NavLink, Route, Routes, useLocation } from 'react-router';
 import { api, type Me } from './api';
 import { I18nProvider, LocaleSelect, useI18n } from './i18n';
 import { Avatar, Icon, LinkIcon, Loading, MeProvider, ToastHost, useMe } from './ui';
@@ -21,6 +21,8 @@ const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.Dat
 const DataSourcePage = lazy(() => import('./pages/DataSource').then((m) => ({ default: m.DataSourcePage })));
 const OrgPage = lazy(() => import('./pages/Org').then((m) => ({ default: m.OrgPage })));
 const OkrPage = lazy(() => import('./pages/Okr').then((m) => ({ default: m.OkrPage })));
+const RequestsPage = lazy(() => import('./pages/Requests').then((m) => ({ default: m.RequestsPage })));
+const RequestDetailPage = lazy(() => import('./pages/Requests').then((m) => ({ default: m.RequestDetailPage })));
 
 /** The company's brand colour (HUB_ACCENT) over the default theme, with its hover, pressed and soft shades. */
 function applyAccent(accent: string | null) {
@@ -40,14 +42,17 @@ function Shell() {
   useEffect(() => {
     document.title = t('nav.hubName', { company: me.hub.companyName });
   }, [t, me.hub.companyName]);
-  const nav = [
+  const { pathname } = useLocation();
+  // a nav item also lights up on the pages it holds (Apps: the requests page)
+  const navClass = (n: { also?: string }) => ({ isActive }: { isActive: boolean }) => (isActive || (n.also && pathname.startsWith(n.also)) ? 'active' : '');
+  const nav: { to: string; label: string; icon: 'home' | 'target' | 'library' | 'chart' | 'issues' | 'org' | 'apps' | 'skill' | 'user' | 'settings'; end?: boolean; also?: string }[] = [
     { to: '/', label: t('nav.home'), icon: 'home' as const, end: true },
     ...(me.hub.features.lark ? [{ to: '/okr', label: 'OKR', icon: 'target' as const }] : []),
     { to: '/library', label: t('nav.library'), icon: 'library' as const },
     { to: '/data', label: t('nav.data'), icon: 'chart' as const },
     { to: '/issues', label: t('nav.issues'), icon: 'issues' as const },
     { to: '/org', label: t('nav.org'), icon: 'org' as const },
-    { to: '/apps', label: t('nav.apps'), icon: 'apps' as const },
+    { to: '/apps', label: t('nav.apps'), icon: 'apps' as const, also: '/requests' },
     { to: '/skills', label: t('nav.skills'), icon: 'skill' as const },
     { to: '/me', label: t('nav.me'), icon: 'user' as const },
     ...(me.user.role === 'admin' ? [{ to: '/admin', label: t('nav.admin'), icon: 'settings' as const }] : []),
@@ -63,7 +68,7 @@ function Shell() {
         <SearchBox pages={nav.map((n) => ({ to: n.to, label: n.label, icon: n.icon }))} />
         <nav className="nav">
           {nav.map((n) => (
-            <NavLink key={n.to} to={n.to} end={n.end}><Icon name={n.icon} />{n.label}</NavLink>
+            <NavLink key={n.to} to={n.to} end={n.end} className={navClass(n)}><Icon name={n.icon} />{n.label}</NavLink>
           ))}
           {me.sidebarLinks.length > 0 && <div className="nav-sep" />}
           {me.sidebarLinks.map((l) => (
@@ -87,7 +92,7 @@ function Shell() {
       </aside>
       <nav className="topbar">
         <img src="/brand/logo.svg" alt="" width={22} />
-        {nav.map((n) => <NavLink key={n.to} to={n.to} end={n.end}>{n.label}</NavLink>)}
+        {nav.map((n) => <NavLink key={n.to} to={n.to} end={n.end} className={navClass(n)}>{n.label}</NavLink>)}
         <span className="grow" />
         <LocaleSelect />
       </nav>
@@ -103,6 +108,8 @@ function Shell() {
           {me.hub.features.lark && <Route path="/okr" element={<OkrPage />} />}
           <Route path="/apps" element={<AppsPage />} />
           <Route path="/apps/:slug" element={<AppDetailPage />} />
+          <Route path="/requests" element={<RequestsPage />} />
+          <Route path="/requests/:id" element={<RequestDetailPage />} />
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/skills/:slug" element={<SkillDetailPage />} />
           <Route path="/me" element={<MePage />} />
