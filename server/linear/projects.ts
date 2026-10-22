@@ -26,13 +26,14 @@ interface IssueNode {
 }
 interface TeamNode { id: string; name: string; key: string; states?: { nodes: { id: string; name: string; type: string; position: number }[] }; members?: { nodes: Person[] } }
 
+// Linear prices a query by the page size of every nested list (50 when not given), so each one is capped.
 const PROJECT_FIELDS = `
   id name description url icon color progress startDate targetDate updatedAt health
   status { name type }
   lead { id name displayName avatarUrl }
-  teams { nodes { id name key } }
-  members { nodes { id name displayName avatarUrl } }
-  projectMilestones { nodes { id name targetDate } }`;
+  teams(first: 10) { nodes { id name key } }
+  members(first: 50) { nodes { id name displayName avatarUrl } }
+  projectMilestones(first: 20) { nodes { id name targetDate } }`;
 
 const person = (p?: Person | null) => (p ? { name: p.displayName || p.name || '', avatar: p.avatarUrl ?? null } : null);
 const update = (u?: Update) => (u ? { body: (u.body ?? '').trim(), health: u.health ?? null, at: u.createdAt ?? null, by: person(u.user), url: u.url ?? null } : null);
@@ -83,10 +84,10 @@ export function listProjects(user: User) {
     const me: Viewer = { id: v.viewer.id, issueProjects: new Set(v.viewer.assignedIssues.nodes.flatMap((i) => (i.project ? [i.project.id] : []))) };
     const out: ProjectNode[] = [];
     let after: string | null = null;
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 20; i++) {
       const r: { projects: { nodes: ProjectNode[]; pageInfo: { hasNextPage: boolean; endCursor: string | null } } } = await linearQuery(user, `
         query Projects($after: String) {
-          projects(first: 50, after: $after) {
+          projects(first: 25, after: $after) {
             nodes { ${PROJECT_FIELDS} projectUpdates(first: 1) { nodes { body health createdAt user { name displayName avatarUrl } } } }
             pageInfo { hasNextPage endCursor }
           }
@@ -112,8 +113,7 @@ export function getProject(user: User, id: string) {
         project(id: $id) {
           ${PROJECT_FIELDS}
           projectUpdates(first: 5) { nodes { id body health createdAt url user { name displayName avatarUrl } } }
-          projectMilestones { nodes { id name targetDate } }
-          editTeams: teams { nodes { ${TEAM_OPTIONS} } }
+          editTeams: teams(first: 10) { nodes { ${TEAM_OPTIONS} } }
           issues(first: 250) {
             nodes {
               id identifier title url priority priorityLabel dueDate estimate updatedAt completedAt
