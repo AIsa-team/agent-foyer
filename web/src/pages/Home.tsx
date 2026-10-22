@@ -37,6 +37,7 @@ export type Module = Base & (
   | { type: 'alerts'; width?: Width; title?: Text; showOk?: boolean }
   | { type: 'okr'; width?: Width; title?: Text; user?: string }
   | { type: 'github'; width?: Width; title?: Text; weeks?: number }
+  | { type: 'agenda'; width?: Width; title?: Text; calendar?: boolean; days?: number }
   | { type: 'table'; width?: Width; title?: Text; source: { data: string; where?: object[]; sort?: { field: string; desc?: boolean }; fields?: string[] }; limit?: number }
   | { type: 'issues'; width?: Width; title?: Text }
   | { type: 'requests'; width?: Width; title?: Text; limit?: number });
@@ -404,6 +405,154 @@ function GitHubModule({ m }: { m: Extract<Module, { type: 'github' }> }) {
   );
 }
 
+interface CalEvent {
+  id: string; title: string; allDay: boolean; start: number; end: number;
+  location: string | null; meetingUrl: string | null; organizer: string | null; rooms: string[]; link: string | null; free: boolean;
+}
+
+/** The viewer's own Lark calendar: a small month calendar to pick a day, and that day's events (now, next, meeting links). */
+function AgendaModule({ m }: { m: Extract<Module, { type: 'agenda' }> }) {
+  const { t, locale } = useI18n();
+  const text = useText();
+  const withCal = m.calendar !== false;
+  const days = withCal ? 1 : m.days ?? 1;
+  const [month, setMonth] = useState<string | null>(null);
+  const [picked, setPicked] = useState<string | null>(null);
+  const [data, setData] = useState<AgendaData | null>(null);
+  const [error, setError] = useState<unknown>(null);
+  useEffect(() => {
+    const q = withCal ? `month=${month ?? 'current'}` : `days=${days}`;
+    api.get<AgendaData>(`/calendar?${q}&return=${encodeURIComponent(location.pathname)}`).then((d) => { setData(d); setError(null); }, setError);
+  }, [withCal, month, days]);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => { const id = setInterval(() => setNow(Date.now()), 30_000); return () => clearInterval(id); }, []);
+  const title = text(m.title) || t(days > 1 ? 'home.agenda.titleDays' : 'home.module.agenda');
+  if (needsLark(error)) return <ModuleCard title={title}><ConnectLark /></ModuleCard>;
+  if (error instanceof ApiError && error.code === 'err.calendar.scope') {
+    return (
+      <ModuleCard title={title}>
+        <div className="home-connect">
+          <span className="small muted">{t('home.agenda.connect')}</span>
+          <a className="btn sm" href={String(error.params?.url ?? '')}>{t('home.agenda.connectCta')}</a>
+        </div>
+      </ModuleCard>
+    );
+  }
+  if (!data) return <ModuleCard title={title}><Loading error={error instanceof Error ? error.message : null} /></ModuleCard>;
+  const tz = data.timezone;
+  const hm = (ms: number) => new Intl.DateTimeFormat(locale, { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(ms));
+  const dayOf = (ms: number) => new Intl.DateTimeFormat('en-CA', { timeZone: tz }).format(new Date(ms));
+  const longDate = (d: string) => new Intl.DateTimeFormat(locale, { timeZone: 'UTC', month: 'short', day: 'numeric', weekday: 'short' }).format(new Date(`${d}T00:00:00Z`));
+  const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+  const on = (d: string) => data.events.filter((e) => dayOf(e.start) <= d && dayOf(e.end - 1) >= d);
+  const inRange = (d: string) => d >= data.from && d <= data.to;
+  const day = picked && inRange(picked) ? picked : inRange(data.today) ? data.today : data.from;
+  const isToday = day === data.today;
+  // the first upcoming timed event today gets a countdown when it is within the hour
+  const next = isToday ? data.events.find((e) => !e.allDay && e.start > now) : undefined;
+  const meta = (e: CalEvent) => [e.rooms.join('、') || e.location, e.organizer].filter(Boolean).join(' · ');
+  const item = (e: CalEvent, d: string) => {
+    const live = !e.allDay && e.start <= now && now < e.end;
+    const past = e.end <= now;
+    const soon = next === e && e.start - now <= 60 * 60_000 ? Math.max(1, Math.round((e.start - now) / 60_000)) : null;
+    // an event that began on an earlier day shows from when it started
+    const starts = e.allDay ? null : dayOf(e.start) === d ? hm(e.start) : t('home.agenda.continues');
+    return (
+      <div key={`${d}-${e.id}`} className={`aisa-agenda__item${live ? ' is-now' : ''}${past ? ' agenda__past' : ''}`}>
+        <div className="aisa-agenda__time">{e.allDay ? t('home.agenda.allDay') : <>{starts}<span>{hm(e.end)}</span></>}</div>
+        <span className="aisa-agenda__mark" />
+        <div className="agenda__body">
+          <div className="agenda__line">
+            {e.link ? <a className="aisa-agenda__title agenda__title" href={e.link} target="_blank" rel="noreferrer">{e.title || t('home.agenda.untitled')}</a>
+              : <span className="aisa-agenda__title">{e.title || t('home.agenda.untitled')}</span>}
+            {live && <span className="small agenda__when">{t('home.agenda.now')}</span>}
+            {soon !== null && <span className="small agenda__when">{t('home.agenda.startsIn', { n: soon })}</span>}
+          </div>
+          {meta(e) && <div className="aisa-agenda__meta">{meta(e)}</div>}
+        </div>
+        {e.meetingUrl && !past && (live || soon !== null) && <a className="btn sm agenda__join" href={e.meetingUrl} target="_blank" rel="noreferrer">{t('home.agenda.join')}</a>}
+      </div>
+    );
+  };
+  const listDays = Array.from({ length: days }, (_, i) => addDays(day, i)).filter(inRange);
+  const list = (
+    <div className="aisa-agenda">
+      {listDays.map((d, i) => {
+        const events = on(d);
+        if (days > 1 && !events.length) return null;
+        const name = d === data.today ? t('home.agenda.today') : d === addDays(data.today, 1) ? t('home.agenda.tomorrow') : '';
+        return (
+          <div key={d} className="aisa-agenda__day">
+            {(withCal || days > 1) && <div className="aisa-agenda__label">{name && <b>{name}</b>}{longDate(d)}</div>}
+            {events.length ? events.map((e) => item(e, d)) : i === 0 && <p className="small muted agenda__none">{t(isToday ? 'home.agenda.none' : 'home.agenda.noneDay')}</p>}
+          </div>
+        );
+      })}
+      {days > 1 && !listDays.some((d) => on(d).length) && <p className="small muted agenda__none">{t('home.agenda.noneDays')}</p>}
+    </div>
+  );
+  return (
+    <div className="card pad home-module agenda">
+      <div className="home-module__title agenda__head">
+        <span>{title}</span>
+        {!withCal && days === 1 && <span className="small muted">{longDate(data.today)}</span>}
+        <span className="spacer" />
+        <a className="small muted" href={data.openUrl} target="_blank" rel="noreferrer">{t('home.agenda.open')} <Icon name="external" size={12} /></a>
+      </div>
+      {withCal ? (
+        <div className="agenda__split">
+          <MiniMonth
+            month={data.from.slice(0, 7)} today={data.today} picked={day} busy={(d) => on(d).length}
+            onPick={(d) => { setPicked(d); if (d.slice(0, 7) !== data.from.slice(0, 7)) setMonth(d.slice(0, 7)); }}
+            onMonth={(mo) => { setMonth(mo); setPicked(mo === data.today.slice(0, 7) ? data.today : `${mo}-01`); }}
+          />
+          {list}
+        </div>
+      ) : list}
+    </div>
+  );
+}
+
+interface AgendaData { today: string; from: string; to: string; timezone: string; openUrl: string; events: CalEvent[] }
+
+/** A small month calendar (Monday first): today filled, the picked day ringed, a dot under days with events. */
+function MiniMonth({ month, today, picked, busy, onPick, onMonth }: {
+  month: string; today: string; picked: string; busy: (d: string) => number; onPick: (d: string) => void; onMonth: (m: string) => void;
+}) {
+  const { t, locale } = useI18n();
+  const [y, mo] = month.split('-').map(Number);
+  const first = new Date(Date.UTC(y, mo - 1, 1));
+  const lead = (first.getUTCDay() + 6) % 7;
+  const inMonth = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  const cells = Array.from({ length: Math.ceil((lead + inMonth) / 7) * 7 }, (_, i) => new Date(Date.UTC(y, mo - 1, 1 - lead + i)).toISOString().slice(0, 10));
+  const shift = (n: number) => new Date(Date.UTC(y, mo - 1 + n, 1)).toISOString().slice(0, 7);
+  const dow = Array.from({ length: 7 }, (_, i) => new Intl.DateTimeFormat(locale, { timeZone: 'UTC', weekday: 'narrow' }).format(new Date(Date.UTC(2024, 0, 1 + i))));
+  return (
+    <div className="mini-cal">
+      <div className="mini-cal__head">
+        <b>{new Intl.DateTimeFormat(locale, { timeZone: 'UTC', year: 'numeric', month: 'long' }).format(first)}</b>
+        <span className="spacer" />
+        {month !== today.slice(0, 7) && <button type="button" className="mini-cal__today" onClick={() => onMonth(today.slice(0, 7))}>{t('home.agenda.today')}</button>}
+        <button type="button" className="mini-cal__nav" aria-label={t('home.agenda.prevMonth')} onClick={() => onMonth(shift(-1))}><Icon name="back" size={14} /></button>
+        <button type="button" className="mini-cal__nav" aria-label={t('home.agenda.nextMonth')} onClick={() => onMonth(shift(1))}><Icon name="forward" size={14} /></button>
+      </div>
+      <div className="mini-cal__grid">
+        {dow.map((d, i) => <span key={i} className="mini-cal__dow">{d}</span>)}
+        {cells.map((d) => {
+          const n = d.slice(0, 7) === month ? busy(d) : 0;
+          const cls = ['mini-cal__day', d.slice(0, 7) !== month && 'is-other', d === today && 'is-today', d === picked && 'is-picked'].filter(Boolean).join(' ');
+          return (
+            <button key={d} type="button" className={cls} onClick={() => onPick(d)} aria-pressed={d === picked} title={n ? t('home.agenda.eventsN', { n }) : undefined}>
+              <span className="mini-cal__num">{Number(d.slice(8))}</span>
+              <span className="mini-cal__dots">{Array.from({ length: Math.min(n, 3) }, (_, i) => <i key={i} />)}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** A few records of a data source as a table (AIsa kit), and the way to all of them. */
 function TableModule({ m }: { m: Extract<Module, { type: 'table' }> }) {
   const { t, locale } = useI18n();
@@ -562,6 +711,8 @@ export function RenderModule({ m, data }: { m: Module; data: HomeData }) {
     case 'github':
       // a layout saved while the hub had GitHub
       return me.hub.features.github ? <GitHubModule m={m} /> : null;
+    case 'agenda':
+      return me.hub.features.lark ? <AgendaModule m={m} /> : null;
     case 'resources':
       return (
         <ModuleCard title={text(m.title) || t('home.module.resources')}>
@@ -611,7 +762,7 @@ function CustomizeDialog({ data, onClose }: { data: HomeData; onClose: () => voi
 function useModuleName() {
   const { t } = useI18n();
   const text = useText();
-  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github', 'requests'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
+  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github', 'requests', 'agenda'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
 }
 
 const WIDTHS: Width[] = ['full', 'half', 'third'];

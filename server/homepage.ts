@@ -88,6 +88,11 @@ const moduleSchema = z.discriminatedUnion('type', [
     type: z.literal('okr'), id: moduleId, width, title: text().optional(),
     user: z.string().optional().describe('whose OKRs: an email or open_id; default = whoever views the page (so one department/company layout shows each person their own)'),
   }).describe('Lark OKR for the current period as a pace card (progress vs time passed) plus objectives and key results'),
+  z.object({
+    type: z.literal('agenda'), id: moduleId, width, title: text().optional(),
+    calendar: z.boolean().optional().describe('a small month calendar beside the list, to pick a day (default true; best at full width)'),
+    days: z.number().int().min(1).max(7).optional().describe('without the month calendar: days listed from today (default 1)'),
+  }).describe('the viewer\'s own Lark calendar: a small month calendar with the days that have events, and the picked day\'s events (today by default) with what is on now and next and meeting links (each person sees their own; asks them once to allow reading their calendar)'),
   z.object({ type: z.literal('alerts'), id: moduleId, width, title: text().optional(), showOk: z.boolean().optional().describe('also list rules that are fine (default: only firing / failing ones)') })
     .describe('alert rules on data sources that the viewer owns or is told about'),
   z.object({
@@ -175,7 +180,7 @@ export function parseLayout(raw: unknown): Layout {
     if (m.type === 'chart' && m.source && 'data' in m.source && !(CHART_KINDS as readonly string[]).includes(m.kind)) {
       throw new UserError('err.home.badLayout', { details: `modules.${i}.kind: "${m.kind}" cannot use a data source (use ${CHART_KINDS.join(', ')})` });
     }
-    if (m.type === 'okr' && !config.lark.enabled) throw new UserError('err.lark.disabled');
+    if ((m.type === 'okr' || m.type === 'agenda') && !config.lark.enabled) throw new UserError('err.lark.disabled');
     if (m.type === 'github' && !githubEnabled()) throw new UserError('err.github.disabled');
   });
   return r.data;

@@ -59,7 +59,7 @@ export function periodRange(name: string): { start: number; end: number } | null
 }
 
 /** Midnight of a calendar date in the company time zone, as epoch ms. */
-function zonedMidnight(y: number, m: number, d: number): number {
+export function zonedMidnight(y: number, m: number, d: number): number {
   const guess = Date.UTC(y, m - 1, d);
   const shown = new Intl.DateTimeFormat('en-US', { timeZone: config.timezone, hour: 'numeric', hourCycle: 'h23', day: 'numeric' }).formatToParts(new Date(guess));
   const hour = Number(shown.find((p) => p.type === 'hour')?.value ?? 0);

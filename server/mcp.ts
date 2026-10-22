@@ -25,6 +25,7 @@ import { githubEnabled } from './github/app.ts';
 import { githubActivity } from './github/activity.ts';
 import { githubConnectUrl } from './github/link.ts';
 import { createDoc, editDoc, listWiki, readDoc } from './lark/docs.ts';
+import { calendarEvents, localTime, today as calendarToday } from './lark/calendar.ts';
 import * as boards from './boards.ts';
 import { createUpload, type UploadPurpose } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -69,7 +70,7 @@ Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase,
 Data connections: systems the hub reads itself, set up by admins on the admin page with their key (today: Metabase). When one exists, register its items with save_data_source (connection + item; admins, see browse_connection) instead of building a data app; each such source has an audience that admins set (set_data_source_audience). For a system with no connection, build a data app.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Lark documents: read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Lark documents: read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Calendar: list_calendar_events reads the user's own Lark calendar (read-only), e.g. "what meetings do I have this afternoon" or the meetings of a day for a daily report. The first time, the user is asked once to allow reading their calendar. Lark itself reminds people before events; the hub cannot create or change events. The agenda home module {type: "agenda"} shows each viewer their own day.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -485,7 +486,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     myDepartments: homepage.userDepartments(user, locale),
     editableDepartments: homepage.editableDepartments(user, locale),
     apps: apps.listAppsFor(user, locale).filter((x) => x.canOpen).map((x) => ({ slug: x.slug, name: x.name })),
-    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Keep each module's id. A person's page is built on their department's or the company's layout: saving scope me keeps that link (shared modules left out become hidden for them, widths remembered, anything new or changed is theirs), so later company changes still reach them; people can also hide, move and resize modules on the page themselves. Modules on data a viewer may not see are left out for them. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card.' : ' (The okr module needs Lark and is not available on this hub.)'}${githubEnabled() ? ' The github module shows the viewer\'s own GitHub contributions as a calendar heatmap (each person sees their own).' : ''} Always preview_homepage and send the user the link; save only after they confirm.`,
+    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Keep each module's id. A person's page is built on their department's or the company's layout: saving scope me keeps that link (shared modules left out become hidden for them, widths remembered, anything new or changed is theirs), so later company changes still reach them; people can also hide, move and resize modules on the page themselves. Modules on data a viewer may not see are left out for them. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card; the agenda module shows each viewer their own Lark calendar for today (or a few days).' : ' (The okr module needs Lark and is not available on this hub.)'}${githubEnabled() ? ' The github module shows the viewer\'s own GitHub contributions as a calendar heatmap (each person sees their own).' : ''} Always preview_homepage and send the user the link; save only after they confirm.`,
   })));
 
   server.registerTool('preview_homepage', {
@@ -785,6 +786,29 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
         tables: z.boolean().optional(),
       },
     }, guard((a: { url: string; tables?: boolean }) => readDoc(user, a.url, { tables: a.tables })));
+
+    server.registerTool('list_calendar_events', {
+      description: 'The user\'s own events in their Lark primary calendar, read with their Lark access: title, start and end (company time zone), all-day or not, location, meeting rooms, video meeting link, organizer, link to the event and its description. Recurring events are expanded; cancelled ones are left out. Dates are YYYY-MM-DD in the company time zone; default today; at most 31 days.',
+      inputSchema: {
+        from: z.string().optional().describe('first day, YYYY-MM-DD (default today)'),
+        to: z.string().optional().describe('last day, YYYY-MM-DD (default = from)'),
+      },
+    }, guard(async (a: { from?: string; to?: string }) => {
+      const from = a.from ?? calendarToday();
+      const events = await calendarEvents(user, from, a.to ?? from);
+      return {
+        timezone: config.timezone, from, to: a.to ?? from,
+        events: events.map((e) => ({
+          title: e.title, allDay: e.allDay,
+          start: e.allDay ? localTime(e.start).slice(0, 10) : localTime(e.start),
+          end: e.allDay ? localTime(e.end - 86_400_000).slice(0, 10) : localTime(e.end),
+          ...(e.location ? { location: e.location } : {}), ...(e.rooms.length ? { rooms: e.rooms } : {}),
+          ...(e.meetingUrl ? { meetingUrl: e.meetingUrl } : {}), ...(e.organizer ? { organizer: e.organizer } : {}),
+          ...(e.free ? { showsAsFree: true } : {}), ...(e.link ? { link: e.link } : {}),
+          ...(e.description ? { description: e.description.length > 1000 ? `${e.description.slice(0, 1000)}…` : e.description } : {}),
+        })),
+      };
+    }));
 
     server.registerTool('list_lark_wiki', {
       description: 'The pages under a Lark wiki page (title, link, type, when created), with the user\'s own Lark access, e.g. to find a page by its title among many. title keeps the pages whose title contains it.',

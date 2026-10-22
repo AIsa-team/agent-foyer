@@ -516,6 +516,46 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .nav-ext__emoji { width: 16px; text-align: center; font-size: 14px; line-height: 1; }
 
 /* GitHub contributions module */
+/* agenda: the viewer's own Lark calendar (kit aisa-agenda, plus a join button and the time to the next one) */
+.agenda { container-type: inline-size; }
+.agenda__head { display: flex; align-items: baseline; gap: 10px; }
+.agenda__head .spacer { flex: 1; }
+.agenda__head a { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }
+.agenda__split { display: grid; grid-template-columns: 252px minmax(0, 1fr); gap: 28px; align-items: start; }
+.agenda__split > .aisa-agenda { padding-left: 28px; border-left: 1px solid var(--line); min-height: 100%; align-content: start; }
+.agenda__none { margin: 4px 0 0; }
+@container (max-width: 560px) {
+  .agenda__split { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .agenda__split > .aisa-agenda { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--line); }
+  .mini-cal { max-width: 320px; }
+}
+/* the kit's month calendar, made small: numbers only, a dot under days with events */
+.mini-cal { display: grid; gap: 8px; }
+.mini-cal__head { display: flex; align-items: center; gap: 4px; font-size: var(--aisa-text-sm); }
+.mini-cal__head .spacer { flex: 1; }
+.mini-cal__nav, .mini-cal__today { border: 0; background: none; color: var(--aisa-text-secondary); cursor: pointer; border-radius: 6px; font: inherit; }
+.mini-cal__nav { width: 26px; height: 26px; display: grid; place-items: center; }
+.mini-cal__today { font-size: var(--aisa-text-xs); padding: 3px 8px; }
+.mini-cal__nav:hover, .mini-cal__today:hover { background: var(--aisa-surface-sunken); color: var(--aisa-text); }
+.mini-cal__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); row-gap: 2px; }
+.mini-cal__dow { font-size: 11px; color: var(--aisa-text-muted); text-align: center; padding: 2px 0 4px; }
+.mini-cal__day { border: 0; background: none; padding: 2px 0 0; cursor: pointer; display: grid; justify-items: center; gap: 1px; font: inherit; color: var(--aisa-text); }
+.mini-cal__num { width: 26px; height: 26px; display: grid; place-items: center; border-radius: 50%; font-size: var(--aisa-text-xs); font-variant-numeric: tabular-nums; }
+.mini-cal__day:hover .mini-cal__num { background: var(--aisa-surface-sunken); }
+.mini-cal__day.is-other { color: var(--aisa-text-disabled); }
+.mini-cal__day.is-picked .mini-cal__num { box-shadow: inset 0 0 0 1.5px var(--aisa-text); }
+.mini-cal__day.is-today .mini-cal__num { background: var(--aisa-inverse); color: var(--aisa-on-inverse); font-weight: 600; }
+.mini-cal__dots { display: flex; gap: 2px; height: 4px; }
+.mini-cal__dots i { width: 4px; height: 4px; border-radius: 50%; background: var(--aisa-text-muted); }
+.mini-cal__day.is-today .mini-cal__dots i, .mini-cal__day.is-picked .mini-cal__dots i { background: var(--aisa-text); }
+.agenda .aisa-agenda__item { grid-template-columns: 48px 3px minmax(0, 1fr) auto; align-items: start; }
+.agenda .aisa-agenda__mark { align-self: stretch; }
+.agenda .aisa-agenda__item.agenda__past { opacity: .5; }
+.agenda__line { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; min-width: 0; }
+.agenda__title { color: inherit; text-decoration: none; min-width: 0; }
+.agenda__title:hover { text-decoration: underline; text-decoration-color: var(--line-strong, currentColor); text-underline-offset: 3px; }
+.agenda__when { color: var(--accent); white-space: nowrap; font-weight: 500; }
+.agenda__join { align-self: center; }
 .gh__head { display: flex; align-items: baseline; gap: 10px; }
 .gh__head .spacer { flex: 1; }
 .gh__head a { text-decoration: none; display: inline-flex; align-items: center; gap: 4px; }

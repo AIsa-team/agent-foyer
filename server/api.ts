@@ -15,7 +15,7 @@ import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
 import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, myIssues, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
-import { HUB_COOKIE, sessionUser } from './auth/session.ts';
+import { HUB_COOKIE, safeReturnPath, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
 import { syncDirectory } from './lark/auth.ts';
 import * as apps from './apps/service.ts';
@@ -41,6 +41,7 @@ import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as requests from './requests.ts';
 import { botChats } from './lark/chats.ts';
+import { calendarAppUrl, calendarEvents, today as calendarToday } from './lark/calendar.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
 import { isSupportedLocale, requestLocale, tr, UserError } from './i18n/index.ts';
@@ -65,7 +66,7 @@ api.use('*', async (c, next) => {
 const localeOf = (c: Context) => requestLocale((h) => c.req.header(h));
 
 // what only exists when the hub signs in with Lark
-for (const p of ['/lark/*', '/okr', '/okr/*', '/admin/okr-owner', '/admin/sync-directory', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*']) {
+for (const p of ['/lark/*', '/okr', '/okr/*', '/calendar', '/admin/okr-owner', '/admin/sync-directory', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*']) {
   api.use(p, async (_c, next) => {
     if (!config.lark.enabled) throw new UserError('err.lark.disabled');
     await next();
@@ -248,6 +249,7 @@ api.post('/lark/disconnect', (c) => {
   // what was read with that access goes too
   forgetReads(`okr|${c.get('user').id}|`);
   forgetReads(`okr-board|${c.get('user').id}|`);
+  forgetReads(`calendar|${c.get('user').id}|`);
   return c.json({ ok: true });
 });
 api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c), c.get('user')) }));
@@ -324,6 +326,30 @@ api.get('/okr', async (c) => {
   // the home page's OKR card: served at once from the last read, refreshed in the background after 5 minutes
   return c.json(await cachedRead(`okr|${u.id}|${target ?? u.id}|${period ?? ''}|${L}`, { fresh: 300_000, keep: 7 * 86_400_000 },
     () => userOkrs(u, { userId: target, periodId: period, locale: L })));
+});
+
+/**
+ * The viewer's own Lark calendar for the home page's agenda: a whole month (`month=YYYY-MM`, or `month=current`),
+ * or `days` days (1-7) from today.
+ */
+api.get('/calendar', async (c) => {
+  const u = c.get('user');
+  const today = calendarToday();
+  const month = c.req.query('month') === 'current' ? today.slice(0, 7) : c.req.query('month');
+  let from = today, to = today;
+  if (month) {
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new UserError('err.calendar.badRange');
+    const [y, mo] = month.split('-').map(Number);
+    from = `${month}-01`;
+    to = `${month}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, '0')}`;
+  } else {
+    const days = Math.min(7, Math.max(1, Number(c.req.query('days')) || 1));
+    to = new Date(Date.parse(`${from}T00:00:00Z`) + (days - 1) * 86_400_000).toISOString().slice(0, 10);
+  }
+  const back = safeReturnPath(c.req.query('return'));
+  // served at once from the last read, refreshed in the background after a minute
+  const events = await cachedRead(`calendar|${u.id}|${from}|${to}`, { fresh: 60_000, keep: 86_400_000 }, () => calendarEvents(u, from, to, back));
+  return c.json({ today, from, to, timezone: config.timezone, openUrl: calendarAppUrl(), events });
 });
 
 // ---- apps ----

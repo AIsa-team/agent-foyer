@@ -75,6 +75,10 @@ const ghKeys = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncodi
 
 const lark = {
   appInfo: false,
+  calendarTokens: new Set<string>(),
+  calendarQueries: [] as { start: number; end: number }[],
+  /** extra events for the demo, at real times */
+  calendarExtra: [] as Record<string, unknown>[],
   access: new Set<string>(),
   refresh: new Set<string>(),
   refreshes: 0,
@@ -154,6 +158,7 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('docx:document') && lark.scopesAsked.split(' ').includes('docx:document:create')) lark.docsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('wiki:wiki')) lark.wikiTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -536,6 +541,26 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const only = url.searchParams.getAll('period_ids');
     const list = only.length ? mine.filter((e) => only.includes(e.period_id)) : mine;
     return send({ code: 0, data: { okr_list: list, total: list.length } });
+  }
+  // the person's own calendar: needs the calendar scope; events are placed from the start of the range asked for
+  if (p === '/calendar/v4/calendars/primary' && req.method === 'POST') {
+    if (!lark.calendarTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [calendar:calendar:readonly]' });
+    return send({ code: 0, data: { calendars: [{ calendar: { calendar_id: 'cal_alex@group.calendar', type: 'primary', role: 'owner' }, user_id: 'ou_dev_alex' }] } });
+  }
+  if (p === '/calendar/v4/calendars/cal_alex%40group.calendar/events/instance_view' || p === '/calendar/v4/calendars/cal_alex@group.calendar/events/instance_view') {
+    if (!lark.calendarTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [calendar:calendar:readonly]' });
+    const s0 = Number(url.searchParams.get('start_time')), e0 = Number(url.searchParams.get('end_time'));
+    lark.calendarQueries.push({ start: s0, end: e0 });
+    const at = (h: number) => ({ timestamp: String(s0 + h * 3600), timezone: 'UTC' });
+    const day = new Date(s0 * 1000).toISOString().slice(0, 10);
+    return send({ code: 0, data: { items: [
+      { event_id: 'e-all', summary: '团建', start_time: { date: day }, end_time: { date: day }, status: 'confirmed' },
+      { event_id: 'e-week_1', summary: '周会', start_time: at(9), end_time: at(10), status: 'confirmed', app_link: 'https://applink.larksuite.com/client/calendar/event/detail?key=w',
+        vchat: { vc_type: 'vc', meeting_url: 'vc.larksuite.com/j/123' }, event_organizer: { display_name: 'Bo' }, attendees: [{ type: 'resource', display_name: '会议室 A' }], description: '议程：本周进展' },
+      { event_id: 'e-gone', summary: '取消了', start_time: at(11), end_time: at(12), status: 'cancelled' },
+      { event_id: 'e-blank', start_time: at(14), end_time: at(15), status: 'confirmed', location: { name: '前台' }, free_busy_status: 'free' },
+      ...lark.calendarExtra,
+    ] } });
   }
   // creating and reading documents
   const noDocs = () => send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [docx:document:create]' });
@@ -2145,9 +2170,54 @@ try {
     await api(alex.jar, 'DELETE', '/admin/services/selfhub');
   }
 
+  // ---------------------------------------------------------------- the person's own Lark calendar (read-only)
+  {
+    const first = await tool(alex.token, 'list_calendar_events');
+    check(String(first.error).includes('calendar=1'), 'reading the calendar first asks the person to allow it');
+    const noScope = await api(alex.jar, 'GET', '/calendar?return=%2F');
+    check(noScope.status >= 400 && noScope.body.code === 'err.calendar.scope' && String((noScope.body.params as { url: string }).url).includes('return=%2F'), 'the home page gets the same, with a link back to it');
+    await connect(alex.jar, '&calendar=1');
+    check(lark.scopesAsked.split(' ').includes('calendar:calendar:readonly'), 'allowing it asks Lark for calendar reading only');
+    const today = new Date().toISOString().slice(0, 10);
+    const day = await tool(alex.token, 'list_calendar_events') as { from: string; events: { title: string; allDay: boolean; start: string; end: string; meetingUrl?: string; rooms?: string[]; organizer?: string; location?: string; showsAsFree?: boolean; description?: string }[] };
+    const q = lark.calendarQueries.at(-1)!;
+    check(day.from === today && q.end - q.start === 86_400 && new Date(q.start * 1000).toISOString().slice(0, 10) === today, 'by default today, from midnight to midnight in the company time zone');
+    check(day.events.map((e) => e.title).join() === '团建,周会,' && !day.events.some((e) => e.title === '取消了'), 'all-day first, then by time; cancelled events left out');
+    const week = day.events[1];
+    check(day.events[0].allDay && day.events[0].start === today && day.events[0].end === today, 'an all-day event is its dates');
+    check(week.start === `${today} 09:00` && week.end === `${today} 10:00` && week.meetingUrl === 'https://vc.larksuite.com/j/123' && week.rooms?.[0] === '会议室 A' && week.organizer === 'Bo' && week.description === '议程：本周进展',
+      'a meeting comes with its local times, meeting link, room, organizer and description');
+    check(day.events[2].location === '前台' && day.events[2].showsAsFree === true, 'and the place, and whether it shows as free');
+    const later = new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10);
+    await tool(alex.token, 'list_calendar_events', { from: today, to: later });
+    check(lark.calendarQueries.at(-1)!.end - lark.calendarQueries.at(-1)!.start === 6 * 86_400, 'a range of days is read in one go');
+    const tooLong = new Date(Date.now() + 40 * 86_400_000).toISOString().slice(0, 10);
+    check(String((await tool(alex.token, 'list_calendar_events', { from: today, to: tooLong })).error).includes('31'), 'at most 31 days');
+    const month = await api(alex.jar, 'GET', '/calendar?month=current');
+    const lastDay = new Date(Date.UTC(Number(today.slice(0, 4)), Number(today.slice(5, 7)), 0)).toISOString().slice(0, 10);
+    check(month.status === 200 && month.body.from === `${today.slice(0, 7)}-01` && month.body.to === lastDay && month.body.today === today
+      && lark.calendarQueries.at(-1)!.end - lark.calendarQueries.at(-1)!.start === Number(lastDay.slice(8)) * 86_400 && String(month.body.openUrl).includes('/calendar/open'),
+      'the month calendar reads the whole month, and links to Lark calendar');
+    check((await api(alex.jar, 'GET', '/calendar?month=2026-13')).status === 400, 'a month that does not exist is refused');
+    const home = await api(alex.jar, 'GET', '/calendar?days=3');
+    check(home.status === 200 && (home.body.events as unknown[]).length === 3 && home.body.from === today && lark.calendarQueries.at(-1)!.end - lark.calendarQueries.at(-1)!.start === 3 * 86_400, 'the agenda module reads the next days the same way');
+    await connect(alex.jar);
+    check(lark.scopesAsked.split(' ').includes('calendar:calendar:readonly'), 'reconnecting Lark keeps calendar reading');
+    check(!(await tool(alex.token, 'save_homepage', { scope: 'me', layout: { modules: [{ type: 'agenda', width: 'half' }, { type: 'apps' }] } })).error, 'an agenda module can be put on a home page');
+    check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
+  }
+
   if (KEEP) {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert
     await connect(alex.jar);
+    const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
+    lark.calendarExtra.push(
+      { event_id: 'e-now', summary: '产品评审', start_time: minutes(-20), end_time: minutes(25), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/9' }, attendees: [{ type: 'resource', display_name: '会议室 B' }], event_organizer: { display_name: 'Alex L' } },
+      { event_id: 'e-soon', summary: 'Tether 支付对接', start_time: minutes(35), end_time: minutes(80), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/10' }, event_organizer: { display_name: 'Bo' } },
+      { event_id: 'e-tmr', summary: '增长周会', start_time: minutes(24 * 60 + 30), end_time: minutes(24 * 60 + 90), status: 'confirmed', event_organizer: { display_name: 'Alex L' } },
+      { event_id: 'e-tmr2', summary: '客户回访', start_time: minutes(24 * 60 + 180), end_time: minutes(24 * 60 + 210), status: 'confirmed' },
+      { event_id: 'e-d3', summary: '全员会', start_time: minutes(3 * 24 * 60), end_time: minutes(3 * 24 * 60 + 60), status: 'confirmed', location: { name: '大会议室' } },
+    );
     await tool(alex.token, 'save_alert_rule', {
       title: { 'zh-CN': 'API 订单数', en: 'API orders' }, source: 'orders', query: { measure: { op: 'count' }, where: [{ field: 'Channel', op: 'is', value: 'API' }] },
       condition: { type: 'below', value: 300 }, recipients: [],
@@ -2161,6 +2231,7 @@ try {
         { label: { 'zh-CN': '本月金额', en: 'Amount this month' }, period: { 'zh-CN': '上月', en: 'last month' }, source: { data: 'orders', query: { measure: { op: 'sum', field: 'Amount' }, date: { field: 'Date', bucket: 'month', last: 6, complete: true } } } },
         { label: { 'zh-CN': '全部订单', en: 'All orders' }, source: { data: 'orders', query: { measure: { op: 'count' } } } },
       ] },
+      { type: 'agenda' },
       { type: 'chart', kind: 'line', width: 'half', title: { 'zh-CN': '每周订单', en: 'Orders per week' }, source: { data: 'orders', query: { measure: { op: 'count' }, date: { field: 'Date', bucket: 'week', last: 12, complete: true } } } },
       { type: 'chart', kind: 'donut', width: 'half', title: { 'zh-CN': '渠道构成', en: 'By channel' }, source: { data: 'orders', query: { measure: { op: 'sum', field: 'Amount' }, groupBy: 'Channel' } } },
       { type: 'okr', width: 'half' },
@@ -2171,6 +2242,7 @@ try {
     lark.fixP1 = false;
     await tool(alex.token, 'run_checks', {});
     await tool(alice.token, 'save_homepage', { scope: 'me', layout: { modules: [
+      { type: 'agenda', width: 'half' },
       { type: 'issues', width: 'half' },
       { type: 'alerts', width: 'half' },
     ] } });
