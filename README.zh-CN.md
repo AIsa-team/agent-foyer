@@ -13,6 +13,7 @@
 - **OKR**：个人的和公司的，读自 Lark OKR。
 - **资料和组织**：按主题分组的制度、SOP 链接，Lark 通讯录，以及覆盖以上全部内容的 ⌘K 搜索。
 - **基于 Lark 的应用**：应用声明它要读写哪些多维表格、可以给谁发消息；每个人同意一次后，应用就能通过一个小 SDK 以这个人的身份调用 Lark。
+- **Agent 使用应用**：应用在 `hub-agent.json` 里写明同事的 Agent 能在里面做什么：查找、新增（可设必填和去重列）、修改它在 Lark 表里的记录，由中台执行并校验；容器应用还可以开放调用自己服务器的操作。Agent 用 `list_apps` 找到它们，用 `call_app` 以这个人的身份执行。
 
 **用不用 Lark 都可以。** 用 Lark 登录能用全部功能。用 OpenID Connect 登录能用核心功能：应用、Skill、Agent 接入、首页、资料，以及基于数据应用的看板、异常项和指标提醒；多维表格、OKR、通讯录同步、Lark 消息和应用调用 Lark 会关闭（见 [docs/OIDC_SETUP.zh-CN.md](docs/OIDC_SETUP.zh-CN.md)）。
 

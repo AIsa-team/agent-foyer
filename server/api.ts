@@ -34,6 +34,7 @@ import * as appLark from './apps/larkApi.ts';
 import * as feedback from './feedback.ts';
 import * as collab from './collab.ts';
 import { usageDetail } from './apps/visits.ts';
+import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
@@ -204,6 +205,10 @@ api.post('/data/module', async (c) => {
   return c.json({ value: await dataSources.forModule(c.get('user'), b.source, q.data, kind, localeOf(c)) });
 });
 // the detail page of a data source: what it is, and its records (both read as the viewer)
+api.post('/data/sources/:id/description', async (c) => {
+  const b = await body<{ description?: Record<string, string> | null }>(c);
+  return c.json(await dataSources.setDescription(c.get('user'), c.req.param('id'), b.description ?? null));
+});
 api.get('/data/sources/:id', async (c) => c.json(await dataSources.describeSource(c.get('user'), c.req.param('id'), localeOf(c))));
 api.post('/data/rows', async (c) => {
   const b = await body<{ source?: string; where?: unknown; sort?: { field: string; desc?: boolean }; limit?: number }>(c);
@@ -284,6 +289,7 @@ api.get('/apps/:slug', (c) => {
     app: data, releases, lark: config.lark.enabled ? appLark.describeManifest(u, app) : null, larkConsentUrl: appLark.consentUrl(app.slug, '/'),
     feedback: feedback.feedbackFor(u, 'app', app.slug),
     usage: data.canManage ? usageDetail(app) : null,
+    agent: describeActions(u, app),
   });
 });
 
@@ -314,7 +320,7 @@ api.get('/apps/:slug/releases/:version/log', (c) => {
 });
 
 api.patch('/apps/:slug', async (c) => {
-  const b = await body<{ name?: string; description?: string; localized?: Record<string, { name?: string; description?: string }>; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean; feedbackButton?: boolean }>(c);
+  const b = await body<{ name?: string; description?: string; localized?: Record<string, { name?: string; description?: string }>; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean; feedbackButton?: boolean; agentAccess?: boolean }>(c);
   return c.json({ ok: true, ...apps.updateApp(c.get('user'), c.req.param('slug'), b) });
 });
 

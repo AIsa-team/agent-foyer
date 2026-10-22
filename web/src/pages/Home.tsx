@@ -27,7 +27,7 @@ type Base = { id?: string; own?: boolean };
 export type Module = Base & (
   | { type: 'apps'; width?: Width; title?: Text; pinned?: string[]; hidden?: string[]; limit?: number }
   | { type: 'stats'; width?: Width; title?: Text; items: { label: Text; value?: number | string; format?: object; delta?: number; period?: Text; goodWhenUp?: boolean; trend?: number[]; source?: Source }[] }
-  | { type: 'chart'; width?: Width; title?: Text; subtitle?: Text; kind: ChartKind; data?: Record<string, unknown>; source?: Source; format?: object; height?: number }
+  | { type: 'chart'; width?: Width; title?: Text; subtitle?: Text; kind: ChartKind; data?: Record<string, unknown>; source?: Source; format?: object; height?: number; stacked?: boolean }
   | { type: 'links'; width?: Width; title?: Text; items: { label: Text; url: string; icon?: string }[] }
   | { type: 'note'; width?: Width; title?: Text; body: Text }
   | { type: 'image'; width?: Width; url: string; alt?: Text; height?: number; fit?: 'cover' | 'contain' }
@@ -177,7 +177,7 @@ function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
   }, [sourceKey(m.source), m.kind]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!ref.current || !data) return;
-    const cfg = { ...data, title: text(m.title) || undefined, subtitle: text(m.subtitle) || undefined, format: m.format ?? data.format, height: m.height };
+    const cfg = { ...data, title: text(m.title) || undefined, subtitle: text(m.subtitle) || undefined, format: m.format ?? data.format, height: m.height, ...(m.stacked ? { stacked: true } : {}) };
     const fn = CHARTS[m.kind] ?? barChart;
     const h = fn(ref.current, m.kind === 'area' ? { ...cfg, area: true } : cfg);
     return () => h.destroy();

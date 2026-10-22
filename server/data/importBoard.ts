@@ -16,7 +16,7 @@ import { saveBoard } from '../boards.ts';
 import { NOTE_MAX } from '../homepage.ts';
 import { connectionConfig } from './connectors/index.ts';
 import type { BoardCard } from './connectors/types.ts';
-import { getSource, loadTable, saveSource, type Audience, type Table } from './sources.ts';
+import { getSource, loadTable, refreshDescription, saveSource, type Audience, type Table } from './sources.ts';
 import { FIELD, isDateField, type Field } from '../lark/base.ts';
 
 type Width = 'full' | 'half' | 'third';
@@ -74,7 +74,7 @@ function modulesFor(card: BoardCard, source: string, table: Table): Module[] | n
   if (card.chart === 'number') {
     const f = values[0];
     if (!f) return null;
-    return [{ type: 'stats', width, items: [{ label: title, source: { data: source, query: { measure: { op: op(f), field: f.name } } } }] }];
+    return [{ type: 'stats', width, items: [{ label: title, source: { data: source, query: { measure: { op: op(f), field: f.name } } }, ...(card.currency && op(f) === 'sum' ? { format: { style: 'currency', currency: card.currency } } : {}) }] }];
   }
   if (card.chart === 'table' || card.chart === 'other' || !axis || !values.length) {
     const date = fields.find(isDateField);
@@ -100,7 +100,13 @@ function modulesFor(card: BoardCard, source: string, table: Table): Module[] | n
       q.sort = card.chart === 'row' ? 'value_desc' : 'label';
       q.limit = 24;
     }
-    return { type: 'chart', width, title: suffix ? everyLocale(`${card.name} · ${suffix}`) : title, kind: k, source: { data: source, query: q } };
+    const amounts = !suffix && vs.every((f) => op(f) === 'sum');
+    return {
+      type: 'chart', width, title: suffix ? everyLocale(`${card.name} · ${suffix}`) : title, kind: k, source: { data: source, query: q },
+      ...(card.note && !suffix ? { subtitle: everyLocale(card.note.slice(0, 400)) } : {}),
+      ...(amounts && card.stacked && vs.length > 1 && (k === 'bar' || k === 'area') ? { stacked: true } : {}),
+      ...(amounts && card.currency ? { format: { style: 'currency', currency: card.currency } } : {}),
+    };
   };
   const out: Module[] = [];
   if (amounts.length) out.push(chart(amounts, kind));
@@ -140,7 +146,10 @@ export async function importBoard(user: User, connection: string, board: string,
       if (!existing) {
         await saveSource(user, { id, title: everyLocale(card.name ?? item), connection, item, audience: opts.audience ?? {} });
         created.push(id);
-      } else reused.push(id);
+      } else {
+        reused.push(id);
+        await refreshDescription(id);
+      }
       sourceOf.set(item, { id, table: await loadTable(user, getSource(id)) });
     } catch (e) {
       sourceOf.set(item, { error: e instanceof UserError ? e.localized(opts.locale ?? config.defaultLocale) : (e as Error).message });

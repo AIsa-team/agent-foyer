@@ -55,6 +55,7 @@ const moduleSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('chart'), id: moduleId, width, title: text().optional(), subtitle: text().optional(),
     kind: z.enum(['bar', 'line', 'area', 'donut', 'ring', 'rank', 'funnel', 'waffle', 'progress', 'segment', 'slope', 'diverging', 'gantt', 'calendar']),
+    stacked: z.boolean().optional().describe('bar / area with several series: stack them, so each bar shows the total'),
     data: z.record(z.string(), z.unknown()).optional().describe([
       'chart config by kind:',
       'bar {categories, series:[{name,values}], stacked?, orientation?, plan?:[...], target?, accent?:"last"};',

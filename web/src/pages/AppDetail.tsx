@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { api, VISIBILITY_KEYS, type AppInfo, type Feedback, type LocalizedMap, type Person, type SkillInfo, type Visibility } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
-import { iconPrompt } from '../prompts';
+import { agentAddPrompt, agentUsePrompt, iconPrompt } from '../prompts';
 import { FeedbackCard } from '../feedback';
 import { CollaboratorsCard } from '../collab';
 import { AppIcon, Avatar, CopyBox, Icon, IconEditor, LinkEditor, LocalizedFields, Loading, PersonPicker, sameLocalized, useAction, useApi, useMe } from '../ui';
@@ -11,6 +11,49 @@ interface Usage { days: { day: string; people: number }[]; last30: number; total
 interface Release { version: number; status: string; created_at: number; created_by_name: string; kind: string }
 interface LarkAccess { tables: { name: string; url: string; access: 'read' | 'write' }[]; notify: { people: string[]; chats: string[]; appUsers?: boolean }; mailDrafts: boolean; mailbox: string;
   docs: { parent: string | null; share: 'view' | 'edit' | 'none' | 'wiki' } | null; consented: boolean }
+interface AgentOp { name: string; write: boolean; description?: string; table?: { alias: string; op: 'find' | 'add' | 'update'; description: string | null; fields: string[] | null } }
+interface AgentAccess { enabled: boolean; actions: AgentOp[]; calls30?: number }
+
+/** What people's agents can do in the app (its hub-agent.json), and for whoever looks after it the switch. */
+function AgentCard({ app, agent, reload }: { app: AppInfo; agent: AgentAccess; reload: () => void }) {
+  const { t } = useI18n();
+  const me = useMe();
+  const { busy, run } = useAction();
+  const has = agent.actions.length > 0;
+  const sep = t('common.listSeparator');
+  const what = (a: AgentOp) => {
+    if (!a.table) return a.description;
+    const table = a.table.description || a.table.alias;
+    if (a.table.op === 'find') return t('appDetail.agent.find', { table });
+    return t(`appDetail.agent.${a.table.op}`, { table, fields: (a.table.fields ?? []).join(sep) });
+  };
+  return (
+    <div className="card pad">
+      <h3>{t('appDetail.agent.title')}</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>{has ? (agent.enabled ? t('appDetail.agent.hint') : t('appDetail.agent.off')) : t('appDetail.agent.none')}</p>
+      {has && (
+        <div className="agent-actions">
+          {agent.actions.map((a) => (
+            <div key={a.name} className="agent-action">
+              <div className="row small"><span className="mono grow">{a.name}</span><span className={`badge ${a.write ? 'warn' : ''}`}>{t(a.write ? 'appDetail.agent.write' : 'appDetail.agent.read')}</span></div>
+              <div className="small muted">{what(a)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      {has && agent.enabled && app.canOpen && <div style={{ marginTop: 12 }}><CopyBox text={agentUsePrompt(me, t, app.name)} /></div>}
+      {!has && app.canManage && <div style={{ marginTop: 4 }}><CopyBox text={agentAddPrompt(me, t, app.slug)} /></div>}
+      {app.canManage && has && (
+        <label className="row small" style={{ gap: 8, marginTop: 12, alignItems: 'flex-start' }}>
+          <input type="checkbox" checked={agent.enabled} disabled={busy} style={{ marginTop: 2 }}
+            onChange={(e) => run(() => api.patch(`/apps/${app.slug}`, { agentAccess: e.target.checked }), t('appDetail.agent.updated')).then(reload)} />
+          <span><b style={{ fontWeight: 500 }}>{t('appDetail.agent.allow')}</b><br /><span className="muted">{t('appDetail.agent.allowHint')}</span></span>
+        </label>
+      )}
+      {agent.calls30 !== undefined && has && <p className="small muted" style={{ margin: '10px 0 0' }}>{t('appDetail.agent.calls', { n: agent.calls30 })}</p>}
+    </div>
+  );
+}
 
 /** What the app may do in Lark as the person using it, and whether this person agreed (with a way to take it back). */
 function LarkCard({ lark, consentUrl, slug, reload }: { lark: LarkAccess; consentUrl: string; slug: string; reload: () => void }) {
@@ -214,7 +257,7 @@ function UsageCard({ usage }: { usage: Usage }) {
 export function AppDetailPage() {
   const { t } = useI18n();
   const { slug } = useParams();
-  const { data, error, reload } = useApi<{ app: AppInfo; releases: Release[]; lark: LarkAccess | null; larkConsentUrl: string; feedback: Feedback[]; usage: Usage | null }>(`/apps/${slug}`);
+  const { data, error, reload } = useApi<{ app: AppInfo; releases: Release[]; lark: LarkAccess | null; larkConsentUrl: string; feedback: Feedback[]; usage: Usage | null; agent: AgentAccess }>(`/apps/${slug}`);
   // poll while a deployment is running
   useEffect(() => {
     if (data?.app.status !== 'building') return;
@@ -248,6 +291,7 @@ export function AppDetailPage() {
       {!app.canManage ? (
         <div className="stack">
           <div className="card pad"><p style={{ margin: 0 }}>{app.description || t('common.noDescription')}</p></div>
+          {data.agent.actions.length > 0 && <AgentCard app={app} agent={data.agent} reload={reload} />}
           {data.lark && <LarkCard lark={data.lark} consentUrl={data.larkConsentUrl} slug={app.slug} reload={reload} />}
           <FeedbackCard kind="app" slug={app.slug} canSend={app.canOpen} canManage={app.canManage} button={app.feedbackButton} items={data.feedback} reload={reload} />
         </div>
@@ -262,6 +306,7 @@ export function AppDetailPage() {
           <div className="stack">
             <RunCard app={app} reload={reload} />
             <InfoCard app={app} reload={reload} />
+            <AgentCard app={app} agent={data.agent} reload={reload} />
             <IconCard app={app} reload={reload} />
             {data.lark && <LarkCard lark={data.lark} consentUrl={data.larkConsentUrl} slug={app.slug} reload={reload} />}
             <CollaboratorsCard kind="app" slug={app.slug} owner={app.owner} collaborators={app.collaborators} canAdminister={app.canAdminister} reload={reload} />

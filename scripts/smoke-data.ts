@@ -36,7 +36,7 @@ const ORDERS = Array.from({ length: 700 }, (_, i) => ({
 }));
 const FIELDS = [
   { field_id: 'f1', field_name: 'Name', type: 1, ui_type: 'Text' },
-  { field_id: 'f2', field_name: 'Channel', type: 3, ui_type: 'SingleSelect' },
+  { field_id: 'f2', field_name: 'Channel', type: 3, ui_type: 'SingleSelect', property: { options: CHANNELS.map((name) => ({ name })) } },
   { field_id: 'f3', field_name: 'Amount', type: 2, ui_type: 'Number' },
   { field_id: 'f4', field_name: 'Date', type: 5, ui_type: 'DateTime' },
   { field_id: 'f5', field_name: 'Owner', type: 11, ui_type: 'User' },
@@ -195,7 +195,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       send({ status: 'completed', row_count: rowCount, data: { cols: meta, rows: rows.map((r) => meta.map((m) => r[m.name] ?? r[`${m.name} ($)`] ?? null)) } });
     if (card && card[1] === '232') {
       const meta = [{ name: 'reg_date', base_type: 'type/Text', effective_type: 'type/Date' }, { name: 'real_users', base_type: 'type/BigInteger' }];
-      if (!card[2]) return send({ id: 232, name: '每日新增用户', result_metadata: meta });
+      if (!card[2]) return send({ id: 232, name: '每日新增用户', description: '每日有效注册，排除 bot 和内部账号；上海时间归日。', result_metadata: meta });
       lark.mbRuns++;
       // MB_ROWS_FILE: real-looking rows for screenshots of a --keep demo
       const rows = process.env.MB_ROWS_FILE ? JSON.parse((await import('node:fs')).readFileSync(process.env.MB_ROWS_FILE, 'utf8')) as Record<string, unknown>[]
@@ -222,7 +222,8 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
         dc(1, 1, 0, 24, 401, { 'graph.dimensions': ['date'], 'graph.metrics': ['payg_usd', 'builder_usd', 'success_rate'], series_settings: { payg_usd: { title: 'PAYG 收入' } } }),
         dc(1, 2, 0, 24, undefined, { text: '**本周销售**' }),
         dc(1, 3, 0, 12, 402), dc(1, 3, 12, 12, 403),
-        dc(1, 4, 0, 12, 406), dc(1, 4, 12, 12, 232, { 'graph.dimensions': ['reg_date'], 'graph.metrics': ['real_users'] }),
+        dc(1, 4, 0, 12, 406, { 'stackable.stack_type': 'stacked', 'graph.y_axis.title_text': '订单（未扣退款）', column_settings: { '["name","orders"]': { number_style: 'currency', currency: 'USD' } } }),
+        dc(1, 4, 12, 12, 232, { 'graph.dimensions': ['reg_date'], 'graph.metrics': ['real_users'] }),
         dc(1, 5, 0, 24, 408),
         dc(2, 0, 0, 24, 404), dc(2, 1, 0, 12, 405), dc(2, 1, 12, 12, 407),
         dc(3, 0, 0, 24, undefined, { text: 'only text' }),
@@ -573,6 +574,8 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     let rows = lark.hideApi ? ORDERS.filter((r) => r.Channel !== 'API') : ORDERS;
     for (const c of body.filter?.conditions ?? []) {
       if (c.operator === 'is') rows = rows.filter((r) => String((r as Record<string, unknown>)[c.field_name]) === c.value[0]);
+      const text = (v: unknown) => (Array.isArray(v) ? v.map((x) => (typeof x === 'object' && x ? (x as { text?: string }).text ?? '' : String(x))).join('') : String(v ?? ''));
+      if (c.operator === 'contains') rows = rows.filter((r) => text((r as Record<string, unknown>)[c.field_name]).toLowerCase().includes(String(c.value[0]).toLowerCase()));
     }
     const size = Number(url.searchParams.get('page_size') ?? 20);
     const start = Number(url.searchParams.get('page_token') || 0);
@@ -922,6 +925,50 @@ try {
   const told = await (await post('/__hub/notify', { to: ['bob@example.com', 'finance'], text: '有一张新的开票申请', link: 'https://invoice.example/req/1' })).json() as { sent: number };
   check(told.sent === 2 && lark.messages.map((m) => m.id).sort().join() === 'oc_finance,ou_dev_bob' && lark.messages[0].text.includes('Alex'), 'notify reaches declared people and groups, naming who sent it');
   check((await post('/__hub/notify', { to: ['alice@example.com'], text: 'hi' })).status === 400, 'undeclared recipients are refused');
+  // people's agents use the app's tables through hub-agent.json, run by the hub as the person after the same consent as the app
+  {
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(path.join(dataDir, 'hub.db'));
+    const tables = {
+      projects: { description: '项目', find: true, add: { fields: ['项目名称'] } },
+      requests: { description: '开票申请', find: { fields: ['Name', 'Amount'] }, add: { fields: ['Name', 'Amount', 'Channel', 'Date', 'Owner', 'Tags'], required: ['Name'], unique: ['Name'], defaults: { Owner: '$me', Date: '$now' } }, update: { fields: ['Channel'] } },
+      ghost: { find: true },
+    };
+    db.prepare("UPDATE app_releases SET agent_manifest = ? WHERE app_slug = 'invoice' AND version = (SELECT current_release FROM apps WHERE slug = 'invoice')").run(JSON.stringify({ tables, actions: [{ name: 'x', description: 'x', method: 'GET', path: '/x', input: { type: 'object', properties: {}, required: [] }, write: false }] }));
+    const offer = (await tool(bob.token, 'list_apps', { app: 'invoice' }) as { actions: { name: string; write: boolean; input?: { note?: string } }[] }[])[0].actions;
+    check(offer.map((a) => a.name).join() === 'projects.find,requests.find,requests.add,requests.update' && offer[2].write && !offer[1].write,
+      "a static app offers the table operations its Lark declaration allows (no writes to a read table, no undeclared tables, no server actions)");
+    check(String(offer[2].input?.note).includes('/auth/app-lark?app=invoice'), 'columns come once the person agreed to the app; until then the schema says where to agree');
+    const notYet = await tool(bob.token, 'call_app', { app: 'invoice', action: 'requests.find' });
+    check(String(notYet.error).includes('/auth/app-lark?app=invoice'), 'someone who has not agreed to the app\'s Lark access gets the link first');
+    const schema = (await tool(alex.token, 'list_apps', { app: 'invoice' }) as { actions: { name: string; input: { properties: { fields: { properties: Record<string, { enum?: string[] }>; required?: string[] } } } }[] }[])[0]
+      .actions.find((a) => a.name === 'requests.add')!.input.properties.fields;
+    check(schema.properties.Channel.enum?.join() === CHANNELS.join() && schema.required?.join() === 'Name' && !('Score' in schema.properties), 'add takes the columns listed, typed from the table (select options as enum)');
+    const proj = await tool(alex.token, 'call_app', { app: 'invoice', action: 'projects.find', input: { max: 3 } });
+    check(proj.ok && proj.result.records.length === 3 && proj.result.records[0].id && proj.result.records[0]['项目名称'] === '春季投放', 'find reads the table as the person, as text');
+    const req = await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.find', input: { max: 2 } });
+    check(Object.keys(req.result.records[0]).sort().join() === 'Amount,Name,id', 'find returns only the columns listed');
+    const before = lark.created.length;
+    const addedByAgent = await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'Agent 开票', Amount: '1,200', Channel: 'API', Tags: ['vip'] } } });
+    const row = lark.created.at(-1)!.fields;
+    check(addedByAgent.ok && addedByAgent.write && addedByAgent.result.id && lark.created.length === before + 1 && row.Amount === 1200 && JSON.stringify(row.Owner) === '[{"id":"ou_dev_alex"}]' && typeof row.Date === 'number' && JSON.stringify(row.Tags) === '["vip"]',
+      'add writes typed values with the defaults ($me, $now)');
+    const dup = await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: ' order 5 ' } } });
+    check(String(dup.error).includes('Order 5') === false && String(dup.error).includes('order 5') && String(dup.error).includes('rec') && lark.created.length === before + 1, 'a record that already exists in a unique column is refused, naming it (case and spaces ignored)');
+    check((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'Order 5b' } } })).ok && lark.created.length === before + 2, 'a value that only contains an existing one is not a duplicate');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Channel: 'Fax' } } })).error).includes('API') && lark.created.length === before + 2, 'a value the select does not have is refused, naming the options');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Score: 1 } } })).error).includes('Score'), 'columns not listed cannot be written');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Amount: 1 } } })).error).includes('Name'), 'required columns must be given');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Amount: 'lots' } } })).error).includes('Amount'), 'and values must fit the column');
+    const changed = await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.update', input: { id: 'recNew1', fields: { Channel: 'Skills' } } });
+    check(changed.ok && lark.updated.at(-1)?.record === 'recNew1' && lark.updated.at(-1)?.fields.Channel === 'Skills', 'update changes the columns listed');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'projects.add', input: { fields: { 项目名称: 'x' } } })).error).includes('requests.add'), 'a table the app may only read offers no writes, whatever hub-agent.json says');
+    const card = (await api(alex.jar, 'GET', '/apps/invoice')).body.agent as { actions: { name: string; table?: { op: string; fields: string[] | null } }[] };
+    check(card.actions.find((a) => a.name === 'requests.add')?.table?.fields?.includes('Channel'), 'the app page lists table operations with their columns');
+    db.prepare("UPDATE app_releases SET agent_manifest = NULL WHERE app_slug = 'invoice'").run();
+    db.prepare("DELETE FROM app_agent_calls WHERE app_slug = 'invoice'").run();
+    db.close();
+  }
   // a container app's server: the ticket from the gateway, no cookie
   // same secret and database as the hub under test, so tickets made here are the ones the gateway would pass on
   Object.assign(process.env, { HUB_SECRET: 'smoke', DATA_DIR: dataDir, DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke' });
@@ -1138,6 +1185,88 @@ try {
     && proxied.headers.get('content-length') === String(Buffer.byteLength(proxiedHtml)), "a container app's page comes back with the button and its own headers, uncompressed");
   const api2 = await appFetch('invoice', '/data', aliceInvoice, { 'sec-fetch-dest': 'empty' });
   check((await api2.text()) === '{"ok":true}', 'its API responses pass through untouched');
+
+  {
+    // agents use the app through the actions it declares (hub-agent.json), as the person behind them
+    const seen: { method: string; url: string; user: string; agent: string; ticket: boolean; body: string }[] = [];
+    const actionsApp = http.createServer((req, res) => {
+      let raw = '';
+      req.on('data', (d) => { raw += d; });
+      req.on('end', () => {
+        seen.push({ method: req.method!, url: req.url!, user: String(req.headers['x-hub-user-id']), agent: decodeURIComponent(String(req.headers['x-hub-agent'] ?? '')), ticket: !!req.headers['x-hub-ticket'], body: raw });
+        const u = new URL(req.url!, 'http://x');
+        res.writeHead(u.pathname === '/api/invoices/bad' ? 400 : 200, { 'content-type': 'application/json' });
+        if (u.pathname === '/api/invoices/bad') return res.end('{"error":"no such invoice"}');
+        if (req.method === 'POST') return res.end(JSON.stringify({ id: 'inv-9', ...JSON.parse(raw) }));
+        res.end(JSON.stringify({ path: u.pathname, q: u.searchParams.get('q'), tags: u.searchParams.getAll('tag') }));
+      });
+    }).listen(0);
+    await new Promise((r) => actionsApp.once('listening', r));
+    const manifest = [
+      { name: 'find_invoices', description: 'Find invoices', method: 'GET', path: '/api/invoices', input: { type: 'object', properties: { q: { type: 'string' }, tag: { type: 'array' } }, required: ['q'] }, write: false },
+      { name: 'get_invoice', description: 'One invoice', method: 'GET', path: '/api/invoices/{id}', input: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] }, write: false },
+      { name: 'request_invoice', description: 'Request an invoice', method: 'POST', path: '/api/invoices', input: { type: 'object', properties: { company: { type: 'string' }, amount: { type: 'number' } }, required: ['company'] }, write: true },
+    ];
+    db.prepare("UPDATE apps SET upstream = ? WHERE slug = 'invoice'").run(`http://127.0.0.1:${(actionsApp.address() as { port: number }).port}`);
+    db.prepare("UPDATE app_releases SET agent_manifest = ? WHERE app_slug = 'invoice' AND version = (SELECT current_release FROM apps WHERE slug = 'invoice')").run(JSON.stringify({ actions: manifest }));
+    const listed = await tool(bob.token, 'list_apps', { query: 'invoice' }) as { slug: string; actions: { name: string; write: boolean; input?: unknown }[] }[];
+    const inv = listed.find((a) => a.slug === 'invoice');
+    const names = inv?.actions.map((a) => a.name).join() ?? '';
+    check(names === 'find_invoices,get_invoice,request_invoice' && inv!.actions[2].write && !inv!.actions[1].write && !('input' in inv!.actions[0]), 'list_apps shows the actions an app offers (write marked)');
+    const one = await tool(bob.token, 'list_apps', { app: 'invoice' }) as { actions: { name: string; input?: { required: string[] } }[] }[];
+    check(one[0].actions[0].input?.required[0] === 'q', 'and with app, their arguments');
+    const found = await tool(bob.token, 'call_app', { app: 'invoice', action: 'find_invoices', input: { q: 'Tether', tag: ['a', 'b'] } });
+    check(found.ok && found.result.q === 'Tether' && found.result.tags.join() === 'a,b' && seen.at(-1)?.user && seen.at(-1)?.ticket, 'call_app sends a GET with the arguments as the person, with a ticket');
+    const byId = await tool(bob.token, 'call_app', { app: 'invoice', action: 'get_invoice', input: { id: 'a/b' } });
+    check(byId.result.path === '/api/invoices/a%2Fb', 'path arguments are filled in and escaped');
+    const made = await tool(bob.token, 'call_app', { app: 'invoice', action: 'request_invoice', input: { company: 'Circle', amount: 5 } });
+    check(made.ok && made.write && made.result.id === 'inv-9' && seen.at(-1)?.method === 'POST' && JSON.parse(seen.at(-1)!.body).company === 'Circle', 'a write action posts the arguments as JSON');
+    const bad = await tool(bob.token, 'call_app', { app: 'invoice', action: 'get_invoice', input: { id: 'bad' } });
+    check(!bad.ok && bad.status === 400 && bad.result.error === 'no such invoice', "the app's own error comes back with its status");
+    check(String((await tool(bob.token, 'call_app', { app: 'invoice', action: 'find_invoices', input: {} })).error).includes('q'), 'missing required arguments are refused before the app is called');
+    check(String((await tool(bob.token, 'call_app', { app: 'invoice', action: 'delete_everything' })).error).includes('find_invoices'), 'undeclared actions are refused, naming the ones there are');
+    const calls = seen.length;
+    db.prepare("UPDATE apps SET visibility = 'private' WHERE slug = 'invoice'").run();
+    check((await tool(bob.token, 'call_app', { app: 'invoice', action: 'find_invoices', input: { q: 'x' } })).error && !(await tool(bob.token, 'list_apps', {}) as { slug: string }[]).some((a) => a.slug === 'invoice'), 'someone who may not open the app cannot see or call it');
+    db.prepare("UPDATE apps SET visibility = 'company' WHERE slug = 'invoice'").run();
+    check(String((await tool(bob.token, 'update_app', { slug: 'invoice', agent_access: false })).error).length > 0, 'only who looks after the app turns agent calls off');
+    await api(alex.jar, 'PATCH', '/apps/invoice', { agentAccess: false });
+    check((await tool(bob.token, 'call_app', { app: 'invoice', action: 'find_invoices', input: { q: 'x' } })).error && seen.length === calls, 'turned off, agents cannot call it');
+    const detail = (await api(alex.jar, 'GET', '/apps/invoice')).body.agent as { enabled: boolean; actions: unknown[]; calls30: number };
+    check(!detail.enabled && detail.actions.length === 3 && detail.calls30 === 4, 'the app page shows the actions, the switch and how often agents called');
+    check(((await api(bob.jar, 'GET', '/apps/invoice')).body.agent as { calls30?: number }).calls30 === undefined, 'call counts only for who looks after it');
+    await api(alex.jar, 'PATCH', '/apps/invoice', { agentAccess: true });
+
+    db.prepare("UPDATE app_releases SET agent_manifest = NULL WHERE app_slug = 'invoice'").run();
+    actionsApp.close();
+  }
+
+  // hub-agent.json is checked when a version is published
+  {
+    const { writeFileSync, mkdirSync } = await import('node:fs');
+    const dirs = ['ok', 'bad', 'static', 'none'].map((n) => { const d = path.join(mkdtempSync(path.join(tmpdir(), 'hub-agent-')), n); mkdirSync(d); return d; });
+    writeFileSync(path.join(dirs[0], 'hub-agent.json'), JSON.stringify({ tables: { leads: { find: true, add: { fields: ['Company'], required: ['Company'] } }, later: { find: true } },
+      actions: [{ name: 'add_note', description: 'Add a note', method: 'POST', path: '/api/notes' }, { name: 'list_notes', description: 'Notes', path: '/api/notes' }] }));
+    writeFileSync(path.join(dirs[1], 'hub-agent.json'), JSON.stringify({ tables: { leads: { add: { fields: ['A'], required: ['B'], unique: ['C'] } } }, actions: [{ name: 'peek', description: 'x', path: '/__hub/lark/tables' }, { name: 'get', description: 'x', path: '/api/{id}' }] }));
+    mkdirSync(path.join(dirs[2], 'dist'));
+    writeFileSync(path.join(dirs[2], 'dist', 'hub-agent.json'), JSON.stringify({ tables: { leads: { find: true } }, actions: [{ name: 'x', description: 'x', path: '/x' }] }));
+    const lark = JSON.stringify({ tables: [{ name: 'leads', access: 'write' }], notify: { people: [], chats: [] } });
+    const out = execFileSync(process.execPath, ['--input-type=module', '-e', `
+      const { readManifest } = await import(${JSON.stringify(path.resolve('server/apps/agentActions.ts'))});
+      const dirs = ${JSON.stringify(dirs)};
+      console.log(JSON.stringify([readManifest(dirs[0], 'container', null, ${JSON.stringify(lark)}), readManifest(dirs[1], 'container', null, null), readManifest(dirs[2], 'static', 'dist', null), readManifest(dirs[3], 'static', '.', null)]));`],
+    { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke' }, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    type Read = { manifest: string | null; notes: { key: string; params?: { error?: string; names?: string; tables?: string } }[] };
+    const [ok, badM, stat, none] = JSON.parse(out.trim().split('\n').at(-1)!) as Read[];
+    const m = JSON.parse(ok.manifest ?? '{}') as { actions: { name: string; write: boolean; method: string }[] };
+    check(ok.notes[0]?.key === 'note.agentActions' && ok.notes[0].params?.names === 'leads.find, leads.add, later.find, add_note, list_notes' && m.actions[0].write && !m.actions[1].write && m.actions[1].method === 'GET',
+      'a valid hub-agent.json is taken; POST counts as a write, GET is the default and reads');
+    check(ok.notes[1]?.key === 'note.agentTablesUndeclared' && ok.notes[1].params?.tables === 'later', 'tables the app has not declared in Lark are pointed out');
+    check(!badM.manifest && badM.notes[0]?.key === 'note.agentInvalid' && ['__hub', '{id}', 'add.required', 'add.unique'].every((x) => badM.notes[0].params?.error?.includes(x)), 'an invalid one is refused with the reasons (hub paths, path arguments, required columns not listed)');
+    check(stat.notes.some((n) => n.key === 'note.agentStatic') && JSON.parse(stat.manifest ?? '{}').tables?.leads && !JSON.parse(stat.manifest ?? '{}').actions?.length, "a static app keeps its tables (also from its published folder); actions need a server");
+    check(!none.manifest && none.notes[0]?.key === 'note.agentMissing', 'an app without it is reminded');
+    for (const d of dirs) rmSync(path.dirname(d), { recursive: true, force: true });
+  }
   db.prepare("UPDATE apps SET kind = 'static', upstream = NULL WHERE slug = 'invoice'").run();
   db.close();
   upstream.close();
@@ -1375,12 +1504,17 @@ try {
     { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
   rmSync(pubDir, { recursive: true, force: true });
   check((await tool(alice.token, 'set_app_access', { slug: 'open-demo', visibility: 'public' })).publicStatus === 'pending', 'the owner asks to open it to everyone');
-  await new Promise((r) => setTimeout(r, 300));
-  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alex' && lark.messages[0].text.includes('/admin'), 'a public request messages the admins with a link to approve');
+  // messages go out in the background (and an earlier one may still land): wait for the one meant, up to 3 s
+  const waitFor = async (ok: (m: { id: string; text: string }) => boolean) => {
+    for (let i = 0; i < 30 && !lark.messages.some(ok); i++) await new Promise((r) => setTimeout(r, 100));
+    return lark.messages.filter(ok);
+  };
+  const toAdmin = await waitFor((m) => m.text.includes('open-demo'));
+  check(toAdmin.length === 1 && toAdmin[0].id === 'ou_dev_alex' && toAdmin[0].text.includes('/admin'), 'a public request messages the admins with a link to approve');
   lark.messages = [];
   check((await api(alex.jar, 'POST', '/admin/apps/open-demo/public', { approve: true })).status === 200, 'the admin approves it');
-  await new Promise((r) => setTimeout(r, 300));
-  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice', 'and the owner is told');
+  const toOwner = await waitFor((m) => m.id === 'ou_dev_alice');
+  check(toOwner.length === 1, 'and the owner is told');
 
   // GitHub: link the account once, then agents read commits, pull requests and reviews through the hub
   const notLinked = await tool(alex.token, 'github_activity', {});
@@ -1550,6 +1684,9 @@ try {
     body: JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'tools/call', params: { name, arguments: {} } }) })).json()) as { result: { content: { text: string }[] } }).result.content.map((c) => c.text);
   const reconnect = () => fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
     body: JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'initialize', params: { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'smoke', version: '1' } } }) });
+  const resources = (await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpc, method: 'resources/read', params: { uri: 'hub://data-sources' } }) })).json()) as { result: { contents: { text: string }[] } };
+  check((JSON.parse(resources.result.contents[0].text).sources as { id: string }[]).some((x) => x.id === 'mb-signups'), 'agents that look at resources first find the data sources there too');
   let texts = await rawCall('whoami');
   check(texts.length === 1 && /^[0-9a-f]{12}$/.test(JSON.parse(texts[0]).version), 'an agent that just connected gets plain results, and whoami says the version');
   fsDb.prepare("UPDATE agent_connections SET seen_version = 'older' WHERE user_id = 'ou_dev_alex'").run();
@@ -1581,6 +1718,8 @@ try {
   check(tabA[3].items.length === 2 && tabA[3].width === 'full', 'numbers side by side become one row of tiles');
   check(tabA[4].source.query.groupBy === 'bucket' && tabA[4].source.query.sort === 'label', 'a bar over categories keeps their order');
   check(tabA[4].source.query.also?.[0]?.field === 'registrations' && tabA[4].source.query.also[0].op === 'sum', '"registrations" is a count, not a ratio');
+  check(tabA[4].stacked === true && tabA[4].format?.currency === 'USD' && tabA[4].subtitle?.['zh-CN'] === '订单（未扣退款）' && !tabA[2].stacked,
+    'stacked bars stay stacked, money stays money, and the axis notes come along (rates are never stacked)');
   const tabB = boardsAlex.find((b) => b.id === 'metabase-100-2')!.layout.modules;
   check(tabB.map((m) => m.type === 'chart' ? `chart:${m.kind}` : m.type).join() === 'table,chart:funnel', 'tables become table modules, funnels funnels');
   const lines = (await api(alex.jar, 'POST', '/data/module', { source: tabA[1].source.data, query: tabA[1].source.query, kind: 'line' })).body.value as { series: { name: string; values: number[] }[] };
@@ -1590,7 +1729,16 @@ try {
   check(tableRows.rows.length === 2, 'the table module reads the records');
   const bobBoard = ((await api(bob.jar, 'GET', '/boards')).body.boards as { id: string; layout: { modules: Record<string, any>[] } }[]).find((b) => b.id === 'metabase-100-1')!.layout.modules;
   check(bobBoard.map((m) => m.type).join() === 'note,chart' && bobBoard[1].source.data === 'mb-signups', 'new sources are for admins until opened up: others see the notes and what they may see');
+  // what a source counts comes from the other system, and can be written in the hub instead (kept on sync)
+  const srcDesc = async () => ((await tool(alex.token, 'list_data_sources', {})).sources as { id: string; description?: string }[]).find((x) => x.id === 'mb-signups')?.description;
+  check(await srcDesc() === '每日有效注册，排除 bot 和内部账号；上海时间归日。', "a connected question brings its description: what it counts, for agents choosing between sources");
+  check(!(await tool(alex.token, 'set_data_source_description', { id: 'mb-signups', description: { 'zh-CN': '有效注册（排除机器账号）', en: 'Valid sign-ups (no bots)' } })).error, 'an admin writes it in the hub');
   const resync = (await api(alex.jar, 'POST', '/admin/connections/metabase/import', { board: '100' })).body as { boards: { id: string }[]; sources: { created: string[]; reused: string[] } };
+  check(['有效注册（排除机器账号）', 'Valid sign-ups (no bots)'].includes(String(await srcDesc())), "a description written in the hub survives a sync (in the reader's language)");
+  check(String((await tool(bob.token, 'set_data_source_description', { id: 'mb-signups', description: { 'zh-CN': 'x' } })).error).length > 0, 'only whoever registered it, or an admin, describes a source');
+  await tool(alex.token, 'set_data_source_description', { id: 'mb-signups', description: null });
+  check(await srcDesc() === '每日有效注册，排除 bot 和内部账号；上海时间归日。' && ((await api(bob.jar, 'GET', '/data/sources/mb-signups')).body as { description: string }).description?.startsWith('每日有效注册'),
+    "cleared, it goes back to the other system's; the detail page shows it");
   check(resync.boards.length === 2 && resync.sources.created.length === 0 && resync.sources.reused.length === 8, 'syncing again rebuilds the same boards and keeps the sources');
   check(((await api(alex.jar, 'GET', '/admin/connections')).body.connections as { imported: { id: string }[] }[])[0].imported.length === 2, 'the admin page lists the imported boards to sync');
 

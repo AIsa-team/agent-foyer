@@ -8,6 +8,7 @@ import { canAccessApp, canAdministerApp, canManageApp } from './access.ts';
 import { collaboratorsOf, isCollaborator, transferOwnership } from '../collab.ts';
 import { reshareLater } from './resources.ts';
 import { checkSource, findSecrets, keepSource } from './source.ts';
+import { readManifest } from './agentActions.ts';
 
 const isCollab = (slug: string, user: User) => isCollaborator('app', slug, user.id);
 import { openFeedbackCount } from '../feedback.ts';
@@ -135,6 +136,9 @@ export async function publishApp(user: User, input: PublishInput): Promise<Publi
 
     let root: string | null = null;
     if (input.kind === 'static') root = detectStaticRoot(dir, input.staticDir);
+    // what agents may do in this version (hub-agent.json), taken when it goes live
+    const agent = readManifest(dir, input.kind, root, existing?.lark_manifest ?? null);
+    notes.push(...agent.notes);
 
     const visibility = input.visibility ?? existing?.visibility ?? 'private';
     const icon = input.iconSvg || input.iconPngBase64 ? saveIcon(slug, { svg: input.iconSvg, pngBase64: input.iconPngBase64 }) : undefined;
@@ -162,8 +166,8 @@ export async function publishApp(user: User, input: PublishInput): Promise<Publi
         );
       }
       return Number(run(
-        `INSERT INTO app_releases (app_slug, version, kind, status, root, created_by, created_at) VALUES (?, ?, ?, 'building', ?, ?, ?)`,
-        slug, version, input.kind, root, user.id, now(),
+        `INSERT INTO app_releases (app_slug, version, kind, status, root, agent_manifest, created_by, created_at) VALUES (?, ?, ?, 'building', ?, ?, ?, ?)`,
+        slug, version, input.kind, root, agent.manifest, user.id, now(),
       ).lastInsertRowid);
     });
 
@@ -282,11 +286,12 @@ export function setVisibility(user: User, slug: string, visibility: Visibility, 
 
 export function updateApp(user: User, slug: string, patch: {
   name?: string; description?: string; localized?: LocalizedMap; iconSvg?: string; iconPngBase64?: string; removeIcon?: boolean;
-  relatedSkill?: string | null; feedbackButton?: boolean;
+  relatedSkill?: string | null; feedbackButton?: boolean; agentAccess?: boolean;
 }) {
   const app = requireManageable(slug, user);
   if (patch.relatedSkill !== undefined) linkSkill(user, slug, patch.relatedSkill);
   if (patch.feedbackButton !== undefined) run('UPDATE apps SET feedback_button = ? WHERE slug = ?', Number(patch.feedbackButton), slug);
+  if (patch.agentAccess !== undefined) run('UPDATE apps SET agent_access = ? WHERE slug = ?', Number(patch.agentAccess), slug);
   const icon = patch.iconSvg || patch.iconPngBase64 ? saveIcon(slug, { svg: patch.iconSvg, pngBase64: patch.iconPngBase64 }) : undefined;
   const i18n = mergeLocalized(app.i18n, patch.localized);
   run(

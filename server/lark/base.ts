@@ -59,16 +59,19 @@ export async function pickTable(user: User, app: string, table?: string): Promis
   throw new UserError('err.data.pickTable', { names: tables.map((t) => `${t.name} (?table=${t.id})`).join(', ') });
 }
 
-export interface Field { id: string; name: string; type: number; uiType?: string }
+export interface Field { id: string; name: string; type: number; uiType?: string; /** option names of a select field */ options?: string[] }
 
 /** Lark field type numbers worth knowing when aggregating. */
 export const FIELD = { text: 1, number: 2, select: 3, multi: 4, date: 5, checkbox: 7, person: 11, formula: 20, lookup: 19, created: 1001, modified: 1002, autoNumber: 1005 };
 export const isDateField = (f: Field) => f.type === FIELD.date || f.type === FIELD.created || f.type === FIELD.modified || f.uiType === 'DateTime';
 
 export async function listFields(user: User, app: string, table: string, view?: string): Promise<Field[]> {
-  const r = await call<{ data: { items?: { field_id: string; field_name: string; type: number; ui_type?: string }[] } }>(
+  const r = await call<{ data: { items?: { field_id: string; field_name: string; type: number; ui_type?: string; property?: { options?: { name: string }[] } | null }[] } }>(
     user, `/bitable/v1/apps/${app}/tables/${table}/fields?page_size=100${view ? `&view_id=${view}` : ''}`);
-  return (r.data.items ?? []).map((f) => ({ id: f.field_id, name: f.field_name, type: f.type, uiType: f.ui_type }));
+  return (r.data.items ?? []).map((f) => ({
+    id: f.field_id, name: f.field_name, type: f.type, uiType: f.ui_type,
+    ...(f.property?.options?.length ? { options: f.property.options.map((o) => o.name) } : {}),
+  }));
 }
 
 export interface Condition { field: string; op: 'is' | 'isNot' | 'contains' | 'doesNotContain' | 'isEmpty' | 'isNotEmpty' | 'isGreater' | 'isLess'; value?: string | number }

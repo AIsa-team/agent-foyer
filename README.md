@@ -24,6 +24,9 @@ point.
 - **Resources and org**: policy and SOP links grouped by topic, the Lark directory, and a ⌘K search over all of it.
 - **Apps on top of Lark**: an app declares which Base tables it reads or writes and whom it may message; each person
   consents once, then the app calls Lark as them through a small SDK.
+- **Agents use apps**: an app lists in `hub-agent.json` what a person's agent may do in it: find, add (with required and
+  unique columns) and change records in its Lark tables, which the hub runs and checks itself, and, for container apps,
+  calls to its own server. Agents find them with `list_apps` and act as the person with `call_app`.
 
 **With Lark or without.** Signing in with Lark gives the whole hub. With OpenID Connect you get the core: apps, Skills,
 agents, home pages, resources, and boards, checks and alerts on data apps; Base tables, OKRs, the directory sync, Lark

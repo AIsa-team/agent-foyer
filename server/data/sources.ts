@@ -22,6 +22,7 @@ import { appUrl, config, paths } from '../config.ts';
 import { get, all, now, run, type App, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
+import { localeCodes } from '../localized.ts';
 import { canAccessApp } from '../apps/access.ts';
 import { fetchFromApp } from '../gateway.ts';
 import { FIELD, fetchRecords, isAdvanced, isDateField, listFields, listTables, parseBaseUrl, pickTable, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
@@ -33,8 +34,10 @@ import { z } from 'zod';
 export interface SourceRow {
   id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector'; app_token: string; table_id: string; view_id: string | null;
   app_slug: string | null; app_path: string | null; connection_id: string | null; item: string | null; audience: string | null;
+  description_i18n: string | null; description_manual: number;
   owner_id: string; created_at: number; updated_at: number;
 }
+const descriptionOf = (s: Pick<SourceRow, 'description_i18n'>, locale: string) => (s.description_i18n ? pick(JSON.parse(s.description_i18n), locale) || undefined : undefined);
 /** Who besides admins may read a connector source. Nothing set = admins only. */
 export const audienceSchema = z.object({
   company: z.boolean().optional().describe('everyone in the company'),
@@ -65,6 +68,7 @@ export function listSources(locale: string, viewer?: User) {
     .filter((s) => !viewer || s.kind !== 'connector' || mayReadConnector(viewer, s))
     .map((s) => ({
       id: s.id, title: pick(JSON.parse(s.title_i18n), locale), kind: s.kind, url: s.url, owner: s.owner_name,
+      ...(descriptionOf(s, locale) ? { description: descriptionOf(s, locale) } : {}),
       ...(s.kind === 'app' ? { app: s.app_slug, path: s.app_path }
         : s.kind === 'connector' ? { connection: s.connection_id, item: s.item, audience: describeAudience(audienceOf(s)) }
         : { table: s.table_id, view: s.view_id }),
@@ -220,7 +224,7 @@ export async function inspectApp(user: User, slug: string, path: string) {
   };
 }
 
-export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: Audience }) {
+export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: Audience; description?: Record<string, string> }) {
   if (!SLUG.test(input.id)) throw new UserError('err.data.badId', { id: input.id });
   if (!Object.values(input.title).some((t) => t.trim())) throw new UserError('err.data.titleRequired');
   const existing = get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', input.id);
@@ -259,6 +263,8 @@ export async function saveSource(user: User, input: { id: string; title: Record<
     input.id, JSON.stringify(input.title), row.url, row.kind, row.app_token, row.table_id, row.view_id, row.app_slug, row.app_path,
     row.connection_id ?? null, row.item ?? null, row.audience ?? null, existing?.owner_id ?? user.id, existing?.created_at ?? now(), now());
   clearCache(input.id);
+  if (input.description) await setDescription(user, input.id, input.description);
+  else if (row.kind === 'connector') await refreshDescription(input.id);
   return { id: input.id, saved: true };
 }
 
@@ -278,6 +284,32 @@ export function setAudience(user: User, id: string, audience: Audience) {
   run('UPDATE data_sources SET audience = ?, updated_at = ? WHERE id = ?', JSON.stringify(clean), now(), id);
   clearCache(id);
   return { id, audience: describeAudience(clean) };
+}
+
+/**
+ * What a source counts, from the other system (a Metabase question's description), unless someone wrote it in the
+ * hub: that one is kept. Called when a connector source is saved or its dashboard synced.
+ */
+export async function refreshDescription(id: string) {
+  const s = getSource(id);
+  if (s.kind !== 'connector' || s.description_manual) return;
+  const { connector, cfg } = connectionConfig(s.connection_id ?? '');
+  if (!connector.info) return;
+  const text = (await connector.info(cfg, s.item ?? '').catch(() => undefined))?.description?.slice(0, 2000);
+  run('UPDATE data_sources SET description_i18n = ? WHERE id = ?', text ? JSON.stringify(Object.fromEntries(localeCodes().map((l) => [l, text]))) : null, id);
+}
+
+/** What a source counts, written in the hub (per language); nothing goes back to what the other system says. */
+export async function setDescription(user: User, id: string, description: Record<string, string> | null) {
+  const s = getSource(id);
+  if (!canEdit(user, s)) throw new UserError('err.data.notOwner', { id });
+  const clean = description ? Object.fromEntries(Object.entries(description).map(([k, v]) => [k, String(v).trim().slice(0, 2000)]).filter(([, v]) => v)) : {};
+  if (Object.keys(clean).length) run('UPDATE data_sources SET description_i18n = ?, description_manual = 1, updated_at = ? WHERE id = ?', JSON.stringify(clean), now(), id);
+  else {
+    run('UPDATE data_sources SET description_i18n = NULL, description_manual = 0, updated_at = ? WHERE id = ?', now(), id);
+    await refreshDescription(id);
+  }
+  return { id, description: descriptionOf(getSource(id), user.locale ?? config.defaultLocale) ?? null };
 }
 
 export function deleteSource(user: User, id: string) {
@@ -491,7 +523,7 @@ export async function describeSource(user: User, id: string, locale: string) {
     return Number.isFinite(lo) ? { from: lo, to: hi } : {};
   };
   return {
-    id: s.id, title: pick(JSON.parse(s.title_i18n), locale), kind: s.kind, item: s.item, where, records: t.rows.length,
+    id: s.id, title: pick(JSON.parse(s.title_i18n), locale), description: descriptionOf(s, locale) ?? null, kind: s.kind, item: s.item, where, records: t.rows.length,
     fields: t.fields.map((f) => ({ name: f.name, kind: kindOf(f), ...(kindOf(f) === 'date' ? span(f) : {}) })),
   };
 }

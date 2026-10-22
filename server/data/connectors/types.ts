@@ -30,6 +30,12 @@ export interface BoardCard {
   metrics?: string[];
   /** what the other system calls the columns on this chart, e.g. sum_2 → 用户消费金额 */
   labels?: Record<string, string>;
+  /** series stacked into one bar (or area) per step, so the total shows */
+  stacked?: boolean;
+  /** the values are money in this currency (e.g. USD) */
+  currency?: string;
+  /** what the chart says about itself beyond its name: axis titles, caveats */
+  note?: string;
   text?: string;
   /** share of the row it takes, 0–1 */
   width: number;
@@ -48,6 +54,8 @@ export interface Connector {
   fetch(cfg: ConnectionConfig, item: string): Promise<Fetched>;
   /** where an item lives in its own system, for "open in …" links */
   link(cfg: ConnectionConfig, item: string): string;
+  /** optional: an item's name and what it counts, as written in the other system */
+  info?(cfg: ConnectionConfig, item: string): Promise<{ name: string; description?: string }>;
   /** optional: the system's dashboards, and one of them in the hub's terms (see importBoard) */
   boards?(cfg: ConnectionConfig, q?: string): Promise<Item[]>;
   board?(cfg: ConnectionConfig, id: string): Promise<BoardDef>;

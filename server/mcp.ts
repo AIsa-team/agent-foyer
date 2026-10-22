@@ -32,6 +32,7 @@ import { tr, UserError, type Msg } from './i18n/index.ts';
 import { localeCodes, type LocalizedMap } from './localized.ts';
 import { appGuide } from './appGuide.ts';
 import { sourceDownload } from './apps/source.ts';
+import * as agentActions from './apps/agentActions.ts';
 import * as connectors from './data/connectors/index.ts';
 import { importBoard } from './data/importBoard.ts';
 
@@ -52,6 +53,7 @@ ${LARK ? `- Business data lives in Lark, never only in the app: a table the user
 ` : `- Business records live in the app's own server storage ($DATA_DIR in a container app), never only in the browser. No own login: the hub signs people in.
 `}${config.designSkills.length ? `- The interface uses the company design system: install_skill ${config.designSkills.join(', ')} and build from its kit and templates, no other UI library.
 ` : ''}- Check it works (locally against a fake hub, then get_app_status), without writing test data into real tables or mailboxes, and end with the short report app_guide describes.
+Using apps: colleagues' apps offer operations to agents: finding, adding and changing records in their Lark tables (<table>.find / .add / .update) and their own actions (e.g. create a quote). When the user wants something done in one of the company's apps, or asks for something an app may already do, list_apps (query by topic), then list_apps with app for the arguments, and call_app; never reach an app's URLs or its Lark tables another way. Operations with write: true change data: say what you will do and call after the user agrees, unless they asked beforehand for it to be done without asking; then tell them afterwards what was done. If call_app says the user must first agree to the app's Lark access, give them the link.
 Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app, or through their agent. When the user asks to improve one of their apps or Skills (or what people said), list_feedback, change and republish, then resolve_feedback each item with a short reply. When they hit a problem with someone else's app or Skill, draft it with send_feedback and send only after they agree with the text.
 Working together: an app or Skill can have collaborators (set_collaborators). They publish and change settings like the owner; only the owner (or an admin) deletes it, changes collaborators or hands it over (transfer_ownership). If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator.
 Never put secrets in an upload; use set_app_env for API keys.
@@ -217,6 +219,20 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   server.registerTool('list_my_apps', { description: 'Apps you own or collaborate on (myRole says which).' }, guard(() =>
     apps.listAppsFor(user, locale).filter((a) => a.myRole)));
 
+  server.registerTool('list_apps', {
+    description: 'Apps the user may open, and the operations an agent can take in each (call_app). Pass app for that app\'s operations with their input schemas (table columns, select options); query narrows the list by words in names, descriptions and operations.',
+    inputSchema: { query: z.string().optional(), app: z.string().optional().describe('slug of one app') },
+  }, guard((a: { query?: string; app?: string }) => agentActions.listUsableApps(user, locale, { query: a.query, slug: a.app })));
+
+  server.registerTool('call_app', {
+    description: 'Take one operation an app offers to agents (see list_apps), as the user and with their access: <table>.find / .add / .update on the app\'s Lark tables, or one of its own actions (the app sees who you act for and that an agent made the call). Operations with write: true change data: tell the user what you will do and call after they agree, unless they asked beforehand for it to be done without asking. Returns what the table or the app answered.',
+    inputSchema: {
+      app: z.string().describe('slug'),
+      action: z.string(),
+      input: z.record(z.string(), z.unknown()).optional().describe('arguments, as the action\'s input schema describes'),
+    },
+  }, guard((a: { app: string; action: string; input?: Record<string, unknown> }) => agentActions.callAction(user, a.app, a.action, a.input ?? {}, agentName)));
+
   server.registerTool('set_collaborators', {
     description: 'Colleagues who look after an app or Skill with its owner: they can publish new versions, change the listing, access and env, and handle feedback; deleting, choosing collaborators and handing it over stay with the owner (and admins). Added people get a Lark message. Call with neither add nor remove to see the list. Anyone can remove themselves.',
     inputSchema: {
@@ -242,9 +258,10 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       localized: localizedSchema(), icon_svg: z.string().optional(), icon_png_base64: z.string().optional(),
       related_skill: z.string().optional().describe('link this app to a Skill slug, or "" to remove the link'),
       feedback_button: z.boolean().optional().describe('show the feedback button inside the app (default true); false if the app has its own feedback'),
+      agent_access: z.boolean().optional().describe('let people\'s agents take the operations in its hub-agent.json (default true)'),
     },
-  }, guard((a: { slug: string; name?: string; description?: string; localized?: LocalizedMap; icon_svg?: string; icon_png_base64?: string; related_skill?: string; feedback_button?: boolean }) => {
-    return apps.updateApp(user, a.slug, { name: a.name, description: a.description, localized: a.localized, iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, relatedSkill: a.related_skill, feedbackButton: a.feedback_button });
+  }, guard((a: { slug: string; name?: string; description?: string; localized?: LocalizedMap; icon_svg?: string; icon_png_base64?: string; related_skill?: string; feedback_button?: boolean; agent_access?: boolean }) => {
+    return apps.updateApp(user, a.slug, { name: a.name, description: a.description, localized: a.localized, iconSvg: a.icon_svg, iconPngBase64: a.icon_png_base64, relatedSkill: a.related_skill, feedbackButton: a.feedback_button, agentAccess: a.agent_access });
   }));
 
   server.registerTool('set_app_access', {
@@ -431,8 +448,20 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     }, guard((a: { url: string; table?: string }) => dataSources.inspect(user, a.url, a.table)));
   }
 
+  // the same things as resources: some agents look there first for what a server offers
+  server.registerResource('data-sources', 'hub://data-sources', {
+    title: `${config.companyName} data sources`,
+    description: 'Company numbers the user may see (sign-ups, active users, revenue, usage…), each with what it counts. Query them with query_data / read_data_rows.',
+    mimeType: 'application/json',
+  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ sources: dataSources.listSources(locale, user), howToRead: 'query_data for totals and trends, read_data_rows for the records' }, null, 2) }] }));
+  server.registerResource('instructions', 'hub://instructions', {
+    title: `How to use the ${config.companyName} hub`,
+    description: 'What the hub offers and how to use it: company data, apps, Skills, Lark documents, daily reports.',
+    mimeType: 'text/markdown',
+  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUCTIONS }] }));
+
   server.registerTool('list_data_sources', {
-    description: 'Data sources registered in the hub (id, title, link, owner): Lark Base tables, data apps, and items read through a data connection (e.g. Metabase questions; only those the user may see are listed). Start here when the user asks about company numbers.',
+    description: 'Data sources registered in the hub (id, title, what it counts, link, owner): Lark Base tables, data apps, and items read through a data connection (e.g. Metabase questions; only those the user may see are listed). Start here when the user asks about company numbers; the description says how each one counts (who is left out, time zone, window).',
   }, guard(() => ({ sources: dataSources.listSources(locale, user) })));
 
   server.registerTool('list_connections', {
@@ -472,14 +501,20 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       connection: z.string().optional().describe('admins: id of a data connection (list_connections)'),
       item: z.string().optional().describe('what to read through it, e.g. a Metabase question id'),
       audience: dataSources.audienceSchema.optional().describe('for connection sources: who besides admins may see it'),
+      description: i18nText().optional().describe('what it counts, per hub language (who is included or left out, time zone, window); connection sources take it from the other system unless given'),
     },
-  }, guard((a: { id: string; title: lib.I18nText; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: dataSources.Audience }) =>
+  }, guard((a: { id: string; title: lib.I18nText; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: dataSources.Audience; description?: lib.I18nText }) =>
     dataSources.saveSource(user, { ...a, audience: a.audience && { ...a.audience, people: a.audience.people ? resolveColleagues(a.audience.people) : undefined } })));
 
   server.registerTool('inspect_app_data', {
     description: 'Fetch the rows a hub app serves for a data source, as the user would get them: field names and types the hub inferred, row count, how many rows have _id / _url, and 5 sample rows. Use it to check a data app before save_data_source.',
     inputSchema: { app: z.string(), path: z.string() },
   }, guard((a: { app: string; path: string }) => dataSources.inspectApp(user, a.app, a.path)));
+
+  server.registerTool('set_data_source_description', {
+    description: 'Write what a data source counts, per hub language (whoever registered it, or an admin). Pass null to go back to the description from the other system (e.g. the Metabase question\'s).',
+    inputSchema: { id: z.string(), description: i18nText().nullable() },
+  }, guard((a: { id: string; description: lib.I18nText | null }) => dataSources.setDescription(user, a.id, a.description)));
 
   server.registerTool('delete_data_source', {
     description: 'Remove a data source you registered (home modules and alert rules using it stop working).',

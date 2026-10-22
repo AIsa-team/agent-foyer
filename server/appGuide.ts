@@ -17,6 +17,7 @@ Work through these steps in order. Decide what you can yourself and say what you
 
 ## 0. Look for what exists
 - list_my_apps: if an app already does what is asked, improve that one instead of making a second: list_feedback, then get_app_source for the code of its live version (never an old copy you happen to find on disk).
+- list_apps: if a colleague's app already does it, tell the user and offer to use it (call_app) or ask its owner for what is missing.
 - check_slug for a new subdomain. If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator (set_collaborators).
 
 ## 1. Fill in the defaults
@@ -50,6 +51,10 @@ ${lark ? `- Everything in Lark goes through the hub SDK, as the person using the
   - hub.me() → {id, name, email, avatar, locale}.
   - The first time, the SDK takes the person to the hub to agree and back by itself. Errors throw an Error whose message is meant for people: show it.
 - Container app servers call the same paths at $HUB_APP_URL/__hub/… with the X-Hub-Ticket header from the incoming request.` : '- Read and write your own storage on the server; the person comes from the X-Hub-User-* headers.'}
+- Let agents use it: every app that holds data or does work puts \`hub-agent.json\` at the root of the upload (publish_app reminds you when it is missing), saying what a person's agent may do in the app. Agents find it with list_apps and call_app, always as the person and with their access.
+${lark ? `  - tables (any app, static too): for each table alias from set_app_lark, what agents may do with it. {"tables": {"leads": {"description": "Sales leads", "find": true, "add": {"fields": ["Company", "Contact", "Stage"], "required": ["Company"], "unique": ["Company"], "defaults": {"Stage": "New", "Owner": "$me", "Created": "$now"}}, "update": {"fields": ["Stage", "Next step"]}}}}. The hub runs these itself and checks values against the real columns (a select only takes its options). find: true returns all columns ({"fields": [...]} limits them). List in add / update only columns a person may set; defaults fill in the rest ($me = the person, $now = the time); unique lists columns no two records may share (an email, a profile link, a company), checked by the hub before adding, ignoring case and, for links, https / www / query / trailing slash, so put the checks the app does before saving here. Declare add / update only where writing the record is all the app does: if the app also creates a document, notifies someone or keeps tables in step when it saves, that is a container action instead, or leave writing to the app.
+` : ''}  - actions (container apps): requests to the app's own server for what needs its logic, e.g. {"actions": [{"name": "request_quote", "description": "Create a quote for a lead and its Lark document; returns the link", "method": "POST", "path": "/api/quotes", "input": {"type": "object", "properties": {"lead_id": {"type": "string"}, "amount": {"type": "number"}}, "required": ["lead_id"]}}]}. The hub sends the request as the person, with the same X-Hub-User-* and X-Hub-Ticket headers as a browser, plus X-Hub-Agent (the agent's name, URI-encoded). {name} in a path comes from the arguments; the others go in the query string (GET, DELETE) or as a JSON body. Answer with JSON, and with a 4xx and {"error": "<message for people>"} when the input is wrong. Mark actions that change nothing with method GET (or "write": false); reuse the routes the UI calls.
+  - Cover what people do most. Pure content sites (docs, slides, brand pages) need none.
 - Side effects can time out after they happened (a document made, a draft saved, a row added): do not retry blindly; mark them to check and let the person confirm.
 - Never put secrets in the upload; use set_app_env for API keys.
 
@@ -64,6 +69,7 @@ ${lark ? `- set_app_lark: the tables (alias, link, read or write), docs (optiona
 
 ## 7. Check it online
 - get_app_status: the build succeeded, it runs, and its logs are clean. People who may not open it are sent to sign in.
+- With hub-agent.json: publish_app lists what it offers to agents (or why it took nothing); try a read operation with call_app (e.g. <table>.find).
 
 ## 8. Report to the user
 Keep it short and cover:
@@ -71,7 +77,8 @@ Keep it short and cover:
 2. Where the data is: the Base or table, columns created or added, where documents go and who can see them.
 3. What the person does the first time (e.g. agree to the app's Lark access, connect their mailbox).
 4. What was not checked for real (e.g. writing to Lark, saving a draft).
-5. The defaults you chose and anything left open.
+5. What colleagues' agents can do in it (hub-agent.json).
+6. The defaults you chose and anything left open.
 
 ## Afterwards
 - Feedback: list_feedback, change and republish, then resolve_feedback each item with a short reply (the sender is told). For someone else's app or Skill, send_feedback after the user has seen the text.

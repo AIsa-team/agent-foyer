@@ -80,6 +80,11 @@ export const metabase: Connector = {
     return exported(cfg, item);
   },
   link: (cfg, item) => `${base(cfg)}/question/${item}`,
+  async info(cfg, item) {
+    if (!/^\d+$/.test(item)) throw new UserError('err.conn.itemGone');
+    const card = await mb<Card & { description?: string | null }>(cfg, `/api/card/${item}`);
+    return { name: card.name, description: card.description?.trim() || undefined };
+  },
   async boards(cfg, q) {
     const list = await mb<{ id: number; name: string; archived?: boolean; collection?: { name?: string } | null }[] | { data: { id: number; name: string; archived?: boolean }[] }>(cfg, '/api/dashboard');
     const needle = q?.trim().toLowerCase();
@@ -103,7 +108,16 @@ export const metabase: Connector = {
             const width = Math.min(1, (c.size_x ?? 24) / 24);
             if (!c.card?.id) return typeof vs.text === 'string' && vs.text.trim() ? { kind: 'text', text: vs.text, width } : null;
             const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : undefined);
-            return { kind: 'chart', item: String(c.card.id), name: c.card.name, chart: DISPLAY[c.card.display ?? ''] ?? 'other', dims: strings(vs['graph.dimensions']), metrics: strings(vs['graph.metrics']), labels: labelsOf(c.card, vs), width };
+            const stack = vs['stackable.stack_type'];
+            const money = Object.values((vs.column_settings ?? {}) as Record<string, { number_style?: string; currency?: string }>).find((s) => s?.number_style === 'currency');
+            const note = [vs['graph.y_axis.title_text'], vs['graph.x_axis.title_text']].filter((x): x is string => typeof x === 'string' && !!x.trim()).join(' · ');
+            return {
+              kind: 'chart', item: String(c.card.id), name: c.card.name, chart: DISPLAY[c.card.display ?? ''] ?? 'other',
+              dims: strings(vs['graph.dimensions']), metrics: strings(vs['graph.metrics']), labels: labelsOf(c.card, vs), width,
+              ...(stack === 'stacked' || stack === 'normalized' ? { stacked: true } : {}),
+              ...(money ? { currency: money.currency ?? 'USD' } : {}),
+              ...(note ? { note } : {}),
+            };
           })
           .filter((c): c is BoardCard => c !== null),
       })),

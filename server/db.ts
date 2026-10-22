@@ -483,6 +483,24 @@ const MIGRATIONS: string[] = [
   `,  // which version of the hub's instructions and tools an agent connected with, to tell it when they changed
   `
   ALTER TABLE agent_connections ADD COLUMN seen_version TEXT;
+  `,  // what a data source counts, for people and agents choosing between sources
+  `
+  ALTER TABLE data_sources ADD COLUMN description_i18n TEXT;              -- JSON per language
+  ALTER TABLE data_sources ADD COLUMN description_manual INTEGER NOT NULL DEFAULT 0;  -- 1 = written in the hub, kept on sync
+  `,  // apps that people's agents can use (apps/agentActions.ts)
+  `
+  ALTER TABLE app_releases ADD COLUMN agent_manifest TEXT;               -- the version's hub-agent.json actions, checked
+  ALTER TABLE apps ADD COLUMN agent_access INTEGER NOT NULL DEFAULT 1;   -- 0 = the owner turned agent calls off
+  CREATE TABLE app_agent_calls (
+    id INTEGER PRIMARY KEY,
+    app_slug TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    agent TEXT,
+    action TEXT NOT NULL,
+    status INTEGER,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX app_agent_calls_app ON app_agent_calls (app_slug, at);
   `,
 ];
 
@@ -557,6 +575,7 @@ export interface App {
   skill_slug: string | null;
   lark_manifest: string | null;
   feedback_button: number;
+  agent_access: number;
   created_at: number;
   updated_at: number;
 }

@@ -13,3 +13,5 @@ export const skillInstallPrompt = (me: Me, t: T, slug: string) => t('prompt.skil
 export const skillUpdatePrompt = (me: Me, t: T) => t('prompt.skillUpdate', { hub: hub(me, t) });
 export const iconPrompt = (me: Me, t: T, slug: string) => t('prompt.icon', { hub: hub(me, t), slug });
 export const feedbackPrompt = (me: Me, t: T, kind: 'app' | 'skill', slug: string) => t(`prompt.feedback.${kind}`, { hub: hub(me, t), slug });
+export const agentUsePrompt = (me: Me, t: T, name: string) => t('prompt.agentUse', { hub: hub(me, t), name });
+export const agentAddPrompt = (me: Me, t: T, slug: string) => t('prompt.agentAdd', { hub: hub(me, t), slug });

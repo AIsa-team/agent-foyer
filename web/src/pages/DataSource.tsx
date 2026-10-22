@@ -12,7 +12,7 @@ import { Icon, useApi } from '../ui';
  */
 
 interface Meta {
-  id: string; title: string; kind: 'base' | 'app' | 'connector'; item: string | null; records: number;
+  id: string; title: string; description: string | null; kind: 'base' | 'app' | 'connector'; item: string | null; records: number;
   where: { label: string; url: string }; fields: { name: string; kind: 'date' | 'number' | 'text'; from?: number; to?: number }[];
 }
 type Cond = { field: string; op: string; value?: string | number };
@@ -168,6 +168,7 @@ export function DataSourcePage() {
       <div className="aisa-page-head">
         <div>
           <h1>{d.title}</h1>
+          {d.description && <p className="ds-desc">{d.description}</p>}
           <p>{t('ds.sub', { n: d.records.toLocaleString(locale) })}</p>
         </div>
         <a className="aisa-btn" href={d.where.url} target="_blank" rel="noreferrer">{openLabel} <Icon name="external" size={13} /></a>

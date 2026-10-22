@@ -250,13 +250,17 @@ check(profile.agents.some((a) => a.name === 'Claude Code'), 'connected agent lis
 if (process.argv.includes('--docker')) {
   const proj = mkdtempSync(path.join(tmpdir(), 'svc-'));
   writeFileSync(path.join(proj, 'package.json'), JSON.stringify({ name: 'svc', scripts: { start: 'node server.js' } }));
-  writeFileSync(path.join(proj, 'server.js'), `require('http').createServer((q, r) => r.end(JSON.stringify({ user: decodeURIComponent(q.headers['x-hub-user-name'] || ''), key: process.env.SECRET_KEY || null, spoof: q.headers['x-hub-evil'] || null }))).listen(process.env.PORT, '0.0.0.0')`);
+  writeFileSync(path.join(proj, 'server.js'), `require('http').createServer((q, r) => r.end(JSON.stringify({ user: decodeURIComponent(q.headers['x-hub-user-name'] || ''), key: process.env.SECRET_KEY || null, spoof: q.headers['x-hub-evil'] || null, agent: decodeURIComponent(q.headers['x-hub-agent'] || ''), url: q.url }))).listen(process.env.PORT, '0.0.0.0')`);
+  writeFileSync(path.join(proj, 'hub-agent.json'), JSON.stringify({ actions: [{ name: 'echo', description: 'Echo who asked', path: '/echo/{word}', input: { type: 'object', properties: { word: { type: 'string' } }, required: ['word'] } }] }));
   const c = await tool(token, 'publish_app', { upload_id: await upload(token, 'app', proj), slug: 'svc-test', kind: 'container', name: '容器测试', visibility: 'company' });
   check(c.status === 'online', `publish container app (${c.status}) ${c.notes?.join(' ') ?? c.error ?? ''}`);
   await tool(token, 'set_app_env', { slug: 'svc-test', vars: { SECRET_KEY: 'abc' } });
   const bobApp = await loginToApp('svc-test', bob);
   const out = await (await appFetch('svc-test', '/', bobApp.jar)).json() as { user: string; key: string };
   check(out.user === '周明' && out.key === 'abc', 'container gets user identity headers and env vars');
+  check(c.notes?.join(' ').includes('echo'), 'publish reports the actions it offers to agents');
+  const echoed = await tool(aliceToken, 'call_app', { app: 'svc-test', action: 'echo', input: { word: 'hi' } }) as { ok: boolean; result: { user: string; agent: string; url: string } };
+  check(echoed.ok && echoed.result.url === '/echo/hi' && echoed.result.user.length > 0 && echoed.result.agent.length > 0, 'an agent calls the container app as its person (call_app)');
   const broken = mkdtempSync(path.join(tmpdir(), 'broken-'));
   writeFileSync(path.join(broken, 'package.json'), JSON.stringify({ scripts: { start: 'node -e "process.exit(1)"' } }));
   const b = await tool(token, 'publish_app', { upload_id: await upload(token, 'app', broken), slug: 'svc-test', kind: 'container' });

@@ -33,6 +33,12 @@ separate registrable domain (e.g. `example-apps.net`) avoids this.
 visitor. Apps can trust these headers only because nothing but the hub can reach them; do not publish an app
 container's port elsewhere.
 
+**Agents using apps.** An agent reaches an app only through what the app declares in `hub-agent.json`, and only for
+people who may open it. Table operations run in the hub with the person's own Lark access, after the same consent as
+the app, writing only the columns listed and checking values against the table. Container actions are forwarded with
+the same identity headers as a browser request plus `X-Hub-Agent`; undeclared paths are never forwarded. The owner can
+turn agent calls off for an app.
+
 **Lark data is read as the viewer.** Each person connects their own Lark account; their tokens are encrypted at rest.
 Apps that use Lark declare which tables they read or write and whom they may message, each person consents to that
 list, and changing the list asks again. Shared board snapshots are only served to people who can open the source

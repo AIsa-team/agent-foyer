@@ -9,7 +9,7 @@ interface Imported { id: string; title: string; board: string; url: string; upda
 interface Connection { id: string; type: string; label: string; config: Record<string, string>; secretsSet: string[]; status: string | null; checkedAt: number | null; sources: number; imported: Imported[] }
 interface ImportResult { name: string; url: string; boards: { id: string; title: string }[]; sources: { created: string[]; reused: string[] }; skipped: { name: string; reason: string }[] }
 interface Audience { company: boolean; people: { id: string; name: string }[]; departments: { id: string; name: string }[] }
-interface Source { id: string; title: string; url: string; connection: string; item: string; audience: Audience }
+interface Source { id: string; title: string; description?: string; url: string; connection: string; item: string; audience: Audience }
 interface Data { connectors: ConnectorInfo[]; connections: Connection[]; sources: Source[]; departments: { id: string; name: string }[] }
 interface Item { id: string; name: string; group?: string; url?: string }
 
@@ -104,6 +104,7 @@ function SourcesList({ conn, sources, departments, reload }: { conn: Connection;
   const { busy, run } = useAction();
   const [adding, setAdding] = useState(false);
   const [audienceOf, setAudienceOf] = useState<Source | null>(null);
+  const [describing, setDescribing] = useState<Source | null>(null);
   return (
     <div style={{ marginTop: 16 }}>
       <div className="row" style={{ marginBottom: 8 }}>
@@ -119,7 +120,13 @@ function SourcesList({ conn, sources, departments, reload }: { conn: Connection;
             <tbody>
               {sources.map((s) => (
                 <tr key={s.id}>
-                  <td><div>{s.title}</div><div className="small muted mono">{s.id}</div></td>
+                  <td>
+                    <div>{s.title}</div>
+                    <div className="small muted mono">{s.id}</div>
+                    <button className="conn-desc" onClick={() => setDescribing(s)} type="button" title={t('conn.desc.edit')}>
+                      {s.description ? s.description : <span className="muted">{t('conn.desc.none')}</span>}
+                    </button>
+                  </td>
                   <td className="small hide-sm"><a href={s.url} target="_blank" rel="noreferrer">#{s.item} <Icon name="external" size={12} /></a></td>
                   <td className="small">
                     <button className="btn sm ghost" onClick={() => setAudienceOf(s)} type="button" title={t('conn.aud.edit')}>
@@ -138,6 +145,7 @@ function SourcesList({ conn, sources, departments, reload }: { conn: Connection;
       )}
       {adding && <AddSource conn={conn} taken={sources.map((s) => s.id)} departments={departments} onClose={() => setAdding(false)} onSaved={() => { setAdding(false); reload(); }} />}
       {audienceOf && <AudienceDialog source={audienceOf} departments={departments} onClose={() => setAudienceOf(null)} onSaved={() => { setAudienceOf(null); reload(); }} />}
+      {describing && <DescriptionDialog source={describing} onClose={() => setDescribing(null)} onSaved={() => { setDescribing(null); reload(); }} />}
     </div>
   );
 }
@@ -365,6 +373,31 @@ function ImportBoard({ conn, departments, onClose, onDone }: { conn: Connection;
           </div>
         </div>
       )}
+    </Dialog>
+  );
+}
+
+/** What a source counts, in every language; empty goes back to what the other system says. */
+function DescriptionDialog({ source, onClose, onSaved }: { source: Source; onClose: () => void; onSaved: () => void }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const [text, setText] = useState<Record<string, string>>(() => Object.fromEntries(LOCALES.map((l) => [l.code, source.description ?? ''])));
+  return (
+    <Dialog title={t('conn.desc.title', { name: source.title })} subtitle={t('conn.desc.subtitle')} onClose={onClose} width={600}>
+      <div className="stack" style={{ gap: 12 }}>
+        {LOCALES.map((l) => (
+          <label key={l.code} className="conn-field">
+            <span className="small">{l.name}</span>
+            <textarea className="input" rows={4} value={text[l.code] ?? ''} onChange={(e) => setText({ ...text, [l.code]: e.target.value })} />
+          </label>
+        ))}
+        <div className="row">
+          <button className="btn ghost" disabled={busy} onClick={() => run(() => api.post(`/data/sources/${source.id}/description`, { description: null }), t('conn.desc.reset')).then(onSaved)} type="button">{t('conn.desc.useSource')}</button>
+          <span className="spacer" />
+          <button className="btn ghost" onClick={onClose} type="button">{t('common.cancel')}</button>
+          <button className="btn primary" disabled={busy} onClick={() => run(() => api.post(`/data/sources/${source.id}/description`, { description: text }), t('common.saved')).then(onSaved)} type="button">{t('common.save')}</button>
+        </div>
+      </div>
     </Dialog>
   );
 }

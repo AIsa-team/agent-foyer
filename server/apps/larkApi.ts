@@ -51,7 +51,7 @@ export const manifestSchema = z.object({
 export type ManifestInput = z.infer<typeof manifestSchema>;
 
 /** `app`/`table` are the Base and table, or for a spreadsheet (kind 'sheet') the spreadsheet and sheet ids. */
-interface Table { name: string; url: string; kind?: 'sheet'; app: string; table: string; view: string | null; access: 'read' | 'write' }
+export interface Table { name: string; url: string; kind?: 'sheet'; app: string; table: string; view: string | null; access: 'read' | 'write' }
 export interface Manifest {
   tables: Table[]; notify: { people: { id: string; name: string }[]; chats: { name: string; id: string }[]; appUsers?: boolean }; mailDrafts?: boolean;
   /** documents the app may create as the person: under `parent` (a wiki page or Drive folder link) or in their own space,
@@ -153,6 +153,20 @@ export function needsConnect(user: User, m: Manifest): { write: boolean; mail: b
   if (!c.connected || (write && !has(WRITE_SCOPE)) || (sheets && !has(SHEETS_SCOPE)) || (mail && !MAIL_SCOPES.every(has))
     || (docs && !DOCS_SCOPES.every(has)) || (wiki && !has(WIKI_WRITE_SCOPE))) return { write, mail, sheets, docs, wiki };
   return null;
+}
+
+/**
+ * A table the app declared, for a person's agent (apps/agentActions.ts): the same checks as the SDK's calls, with the
+ * link to follow when the person still has to agree to the app's Lark access.
+ */
+export function agentTable(user: User, app: App, alias: string, write: boolean): Table {
+  const m = manifestOf(app);
+  const table = m?.tables.find((t) => t.name === alias);
+  if (!m || !table) throw new UserError('err.agent.tableNotDeclared', { table: alias, app: app.slug });
+  if (write && table.access !== 'write') throw new UserError('err.appLark.readOnly', { name: alias });
+  if (!hasConsent(user, app)) throw new UserError('err.agent.consent', { app: app.slug, url: consentUrl(app.slug, '/') });
+  if (needsConnect(user, m)) throw new UserError('err.agent.consent', { app: app.slug, url: `${config.hubUrl}${goPath(app.slug, '/')}` });
+  return table;
 }
 
 /** Back to the app after consent, collecting any connection it still needs on the way (see auth/routes.ts). */
