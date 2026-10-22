@@ -33,6 +33,12 @@ separate registrable domain (e.g. `example-apps.net`) avoids this.
 visitor. Apps can trust these headers only because nothing but the hub can reach them; do not publish an app
 container's port elsewhere.
 
+**Other services through the hub.** For each service an admin adds, every person authorises their own account there;
+the hub keeps those tokens encrypted with `HUB_SECRET`, per person, and only ever calls the service with the caller's own
+token, so nobody (admins included) can act through someone else's account. What a person can see or change is what
+the service allows them. Calls are logged (who, which agent, which tool, whether it worked), not their arguments or
+results. Admins can switch off tools they do not want reached this way.
+
 **Agents using apps.** An agent reaches an app only through what the app declares in `hub-agent.json`, and only for
 people who may open it. Table operations run in the hub with the person's own Lark access, after the same consent as
 the app, writing only the columns listed and checking values against the table. Container actions are forwarded with

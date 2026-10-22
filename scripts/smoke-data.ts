@@ -19,6 +19,10 @@ function check(ok: unknown, label: string) {
   console.log(`${ok ? '✓' : '✗'} ${label}`);
   if (!ok) failures++;
 }
+/** Waits (up to 5 s) for something done in the background, e.g. a message on its way, instead of a fixed pause. */
+async function until(ok: () => unknown) {
+  for (let i = 0; i < 50 && !ok(); i++) await new Promise((r) => setTimeout(r, 100));
+}
 
 // ---------------------------------------------------------------- fake Lark
 const DAY = 86_400_000;
@@ -104,6 +108,7 @@ const lark = {
   perms: [] as { token: string; type: string; public?: string; member?: string }[],
 };
 let serial = 0;
+const linear = { tokens: new Set<string>(), refreshes: 0, expiresIn: 86399, revoked: false, scope: '', lastToken: '' };
 
 // the daily report: one docx per day under a wiki page, each section a table whose rows start with @someone
 interface DocBlock { block_id: string; block_type: number; parent_id: string; children?: string[]; [k: string]: unknown }
@@ -179,6 +184,71 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     rows: () => [{ bucket: 'b. 1-7 天', orders: 3, registrations: 5 }, { bucket: 'a. 当天', orders: 9, registrations: 12 }] },
 };
 // a fake Metabase: keys mb_good (an ordinary group) and mb_admin (the admin group); two questions
+  // a fake Linear: OAuth (authorize, code and refresh grants) and the GraphQL queries the 项目 page sends
+  if (p.startsWith('/linear/')) {
+    const lp = p.slice(7);
+    if (lp === '/oauth/authorize') {
+      const back = new URL(url.searchParams.get('redirect_uri')!);
+      back.searchParams.set('code', 'lin-code');
+      back.searchParams.set('state', url.searchParams.get('state')!);
+      linear.scope = url.searchParams.get('scope') ?? '';
+      res.writeHead(302, { location: back.toString() });
+      return res.end();
+    }
+    if (lp === '/oauth/token') {
+      const f = new URLSearchParams(raw);
+      if (f.get('client_secret') !== 'lin-secret') return send({ error: 'invalid_client' }, 401);
+      if (f.get('grant_type') === 'authorization_code' && f.get('code') === 'lin-code') {
+        const a = `lin-a${++serial}`;
+        linear.tokens.add(a);
+        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: linear.expiresIn, token_type: 'Bearer', scope: 'read' });
+      }
+      if (f.get('grant_type') === 'refresh_token' && /^lin-r\d+$/.test(f.get('refresh_token') ?? '') && !linear.revoked) {
+        linear.refreshes++;
+        const a = `lin-a${++serial}`;
+        linear.tokens.add(a);
+        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: 86399, token_type: 'Bearer', scope: 'read' });
+      }
+      return send({ error: 'invalid_grant' }, 400);
+    }
+    if (lp === '/graphql') {
+      const token = String(req.headers.authorization ?? '').replace(/^Bearer /, '');
+      if (!linear.tokens.has(token) || linear.revoked) return send({ errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }] }, 401);
+      linear.lastToken = token;
+      const { query, variables } = JSON.parse(raw) as { query: string; variables?: { after?: string; id?: string } };
+      if (query.includes('assignedIssues')) return send({ data: { viewer: { id: 'lin-u1', assignedIssues: { nodes: [{ project: { id: 'p1' } }, { project: null }] } } } });
+      if (query.includes('viewer')) return send({ data: { viewer: { id: 'lin-u1', name: 'Alex L', organization: { name: 'Acme' } } } });
+      const proj = (id: string, name: string, type: string, statusName: string, extra: Record<string, unknown> = {}) => ({
+        id, name, description: `${name} desc`, url: `https://linear.app/acme/project/${id}`, icon: null, color: '#5e6ad2', progress: 0.5, startDate: '2026-10-01', targetDate: '2026-11-30',
+        updatedAt: '2026-10-21T10:00:00Z', health: null, status: { name: statusName, type }, lead: { id: 'u1', name: 'Alex', displayName: 'alex', avatarUrl: null },
+        teams: { nodes: [{ id: 't1', name: 'Engineering', key: 'ENG' }] }, members: { nodes: [] }, projectUpdates: { nodes: [] }, ...extra,
+      });
+      if (query.includes('projects(')) {
+        // two pages, so paging is exercised
+        return variables?.after === 'c1'
+          ? send({ data: { projects: { nodes: [proj('p3', '官网改版', 'completed', 'Completed', { progress: 1 }), proj('p4', '暂停的', 'canceled', 'Canceled')], pageInfo: { hasNextPage: false, endCursor: null } } } })
+          : send({ data: { projects: { nodes: [
+            proj('p2', '计费系统', 'planned', 'Planned', { targetDate: '2026-12-15', members: { nodes: [{ id: 'lin-u1' }] } }),
+            proj('p1', '中台 v2', 'started', 'In Progress', { health: 'atRisk', projectUpdates: { nodes: [{ body: '接口延期一周', health: 'atRisk', createdAt: '2026-10-20T08:00:00Z', user: { name: 'Alex' } }] } }),
+          ], pageInfo: { hasNextPage: true, endCursor: 'c1' } } } });
+      }
+      if (query.includes('project(id')) {
+        if (!['p1', 'p2'].includes(variables?.id ?? '')) return send({ errors: [{ message: 'Entity not found: Project' }] });
+        const issue = (n: number, type: string, extra: Record<string, unknown> = {}) => ({
+          id: `i${n}`, identifier: `ENG-${n}`, title: `任务 ${n}`, url: `https://linear.app/acme/issue/ENG-${n}`, priority: n % 4, priorityLabel: 'High', dueDate: null, estimate: 1,
+          updatedAt: '2026-10-21T10:00:00Z', completedAt: type === 'completed' ? '2026-10-20T10:00:00Z' : null, state: { name: type, type }, assignee: { name: 'Alex', displayName: 'alex', avatarUrl: null },
+          projectMilestone: null, ...extra,
+        });
+        return send({ data: { project: {
+          ...proj('p1', '中台 v2', 'started', 'In Progress', { health: 'atRisk' }),
+          projectUpdates: { nodes: [{ id: 'u1', body: '接口延期一周\n其余正常', health: 'atRisk', createdAt: '2026-10-20T08:00:00Z', url: 'x', user: { name: 'Alex', displayName: 'alex', avatarUrl: null } }] },
+          projectMilestones: { nodes: [{ id: 'm2', name: 'Beta', targetDate: '2026-11-15' }, { id: 'm1', name: 'Alpha', targetDate: '2026-10-31' }] },
+          issues: { nodes: [issue(1, 'completed', { projectMilestone: { id: 'm1' } }), issue(2, 'started', { projectMilestone: { id: 'm1' } }), issue(3, 'unstarted', { projectMilestone: { id: 'm2' } }), issue(4, 'canceled', { projectMilestone: { id: 'm2' } }), issue(5, 'triage')], pageInfo: { hasNextPage: false } },
+        } } });
+      }
+      return send({ errors: [{ message: 'unexpected query' }] });
+    }
+  }
   if (p.startsWith('/mb/')) {
     const mp = p.slice(3);
     const key = req.headers['x-api-key'];
@@ -691,6 +761,7 @@ const hub = spawn(process.execPath, ['server/index.ts'], {
     ALERT_QUIET_HOURS: 'off', LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`,
     GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `http://localhost:${LARK_PORT}/google/auth`, GOOGLE_TOKEN_URL: `http://localhost:${LARK_PORT}/google/token`,
     GOOGLE_USERINFO_URL: `http://localhost:${LARK_PORT}/google/userinfo`, GOOGLE_GMAIL_BASE: `http://localhost:${LARK_PORT}`,
+    LINEAR_CLIENT_ID: 'lin-client', LINEAR_CLIENT_SECRET: 'lin-secret', LINEAR_AUTH_BASE: `http://localhost:${LARK_PORT}/linear`, LINEAR_API_BASE: `http://localhost:${LARK_PORT}/linear`,
     GITHUB_ORG: 'acme', GITHUB_APP_ID: '123', GITHUB_CLIENT_ID: 'Iv1.gh', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_APP_PRIVATE_KEY: ghKeys.privateKey, GITHUB_WEBHOOK_SECRET: 'hook-secret',
     GITHUB_API_BASE: `http://localhost:${LARK_PORT}/gh`, GITHUB_WEB_BASE: `http://localhost:${LARK_PORT}/gh`,
   },
@@ -1146,8 +1217,9 @@ try {
   lark.messages = [];
   const fb = await api(alice.jar, 'POST', '/apps/invoice/feedback', { body: '开票类型里缺少“专票”' });
   check(fb.status === 200 && fb.body.status === 'open', 'a colleague leaves feedback on an app');
-  await new Promise((r) => setTimeout(r, 300));
-  check(lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alex' && lark.messages[0].text.includes('专票'), 'the owner is messaged');
+  const ownerTold = () => lark.messages.some((m) => m.id === 'ou_dev_alex' && m.text.includes('专票'));
+  await until(ownerTold);
+  check(ownerTold(), 'the owner is messaged');
   check((await api(alice.jar, 'POST', '/apps/invoice/feedback', { body: 'x' })).status === 400, 'feedback that is too short is refused');
   const bobFb = await api(bob.jar, 'GET', '/apps/invoice');
   check((bobFb.body.feedback as unknown[]).length === 0 && bobFb.body.usage === null, "others see neither someone else's feedback nor usage details");
@@ -1159,8 +1231,9 @@ try {
   check(String((await tool(alice.token, 'resolve_feedback', { id: todo.items[0].id, status: 'done' })).error).length > 0, 'only the owner can resolve it');
   lark.messages = [];
   const resolved = await tool(alex.token, 'resolve_feedback', { id: todo.items[0].id, status: 'done', reply: '加上了' });
-  await new Promise((r) => setTimeout(r, 300));
-  check(resolved.status === 'done' && lark.messages.length === 1 && lark.messages[0].id === 'ou_dev_alice' && lark.messages[0].text.includes('加上了'), 'resolving it tells the colleague, with the reply');
+  const toColleague = () => lark.messages.some((m) => m.id === 'ou_dev_alice' && m.text.includes('加上了'));
+  await until(toColleague);
+  check(resolved.status === 'done' && toColleague(), 'resolving it tells the colleague, with the reply');
   check((await tool(alex.token, 'list_feedback', {})).items.length === 0, 'and it leaves the open list');
 
   // the 「feedback」 button inside apps: on by default, posts with the page it was sent from, and the owner can turn it off
@@ -1173,8 +1246,8 @@ try {
   check((await appFetch('invoice', '/__hub/feedback', aliceInvoice, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ body: '跨站' }))).status === 405, 'posting without the hub header is refused');
   lark.messages = [];
   const inApp = await appFetch('invoice', '/__hub/feedback', aliceInvoice, { 'content-type': 'application/json', 'x-hub-feedback': '1' }, 'POST', JSON.stringify({ body: '提交按钮太靠下了', page: '/new?type=vat' }));
-  await new Promise((r) => setTimeout(r, 300));
-  check(inApp.status === 200 && lark.messages[0]?.id === 'ou_dev_alex', 'feedback from inside the app reaches the owner');
+  await until(() => lark.messages.some((m) => m.id === 'ou_dev_alex'));
+  check(inApp.status === 200 && lark.messages.some((m) => m.id === 'ou_dev_alex'), 'feedback from inside the app reaches the owner');
   const fromApp = (await tool(alex.token, 'list_feedback', { slug: 'invoice' })).items[0];
   check(fromApp.via === 'app' && fromApp.context === 'URL: http://invoice.apps.localhost:18930/new?type=vat', 'with the page it was sent from');
   await tool(alex.token, 'resolve_feedback', { id: fromApp.id, status: 'done' });
@@ -1302,8 +1375,10 @@ try {
   lark.messages = [];
   check((await api(bob.jar, 'POST', '/skills/invoice-check/feedback', { body: '日期格式识别错了' })).status === 200, 'a colleague leaves feedback on a Skill');
   const sent = await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'invoice-check', body: '遇到增值税专票会报错', context: 'Step 2, error: unknown field "tax_rate" (v1)' });
-  await new Promise((r) => setTimeout(r, 300));
-  check(typeof sent.id === 'number' && lark.messages.length === 2 && lark.messages[1].text.includes('test') && lark.messages[1].text.includes('/skills/invoice-check#feedback'),
+  // messages go out in the background: wait for the one about this feedback
+  const agentMsg = () => lark.messages.find((m) => m.text.includes('遇到增值税专票会报错'));
+  for (let i = 0; i < 50 && !agentMsg(); i++) await new Promise((r) => setTimeout(r, 100));
+  check(typeof sent.id === 'number' && agentMsg()?.text.includes('test') && agentMsg()?.text.includes('/skills/invoice-check#feedback'),
     "or has their agent send it; the owner is told which agent and where to look");
   const skillView = await api(alex.jar, 'GET', '/skills/invoice-check');
   const viaAgent = (skillView.body.feedback as { via: string; agent: string; context: string }[]).find((f) => f.via === 'agent');
@@ -1314,23 +1389,27 @@ try {
   check(String((await tool(bob.token, 'list_feedback', { slug: 'invoice-check' })).error).length > 0, "and nobody else's agent can");
   lark.messages = [];
   await tool(alex.token, 'resolve_feedback', { id: sent.id, status: 'done', reply: 'v2 支持专票了' });
-  for (let i = 0; i < 50 && !lark.messages.length; i++) await new Promise((r) => setTimeout(r, 100));
-  check(lark.messages[0]?.id === 'ou_dev_alice' && lark.messages[0].text.includes('v2 支持专票了'), 'and resolving tells the sender');
+  // other messages may still be on their way: wait for the one to the sender
+  const toSender = () => lark.messages.find((m) => m.id === 'ou_dev_alice' && m.text.includes('v2 支持专票了'));
+  for (let i = 0; i < 50 && !toSender(); i++) await new Promise((r) => setTimeout(r, 100));
+  check(toSender(), 'and resolving tells the sender');
   check(String((await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'no-such-skill', body: '你好' })).error).length > 0, 'feedback on something that does not exist is refused');
   lark.messages = [];
   const own = await api(alex.jar, 'POST', '/skills/invoice-check/feedback', { body: '自己先试一下' });
-  await new Promise((r) => setTimeout(r, 300));
-  check(own.status === 200 && lark.messages[0]?.id === 'ou_dev_alex', 'owners can send feedback on their own Skill to try it, and get the message');
+  await until(() => lark.messages.some((m) => m.id === 'ou_dev_alex'));
+  check(own.status === 200 && lark.messages.some((m) => m.id === 'ou_dev_alex'), 'owners can send feedback on their own Skill to try it, and get the message');
   lark.messages = [];
   await tool(alex.token, 'resolve_feedback', { id: own.body.id, status: 'done', reply: '收到' });
-  await new Promise((r) => setTimeout(r, 300));
-  check(lark.messages[0]?.id === 'ou_dev_alex' && lark.messages[0].text.includes('收到'), 'and the reply too');
+  const reply = () => lark.messages.some((m) => m.id === 'ou_dev_alex' && m.text.includes('收到'));
+  await until(reply);
+  check(reply(), 'and the reply too');
 
   // several people looking after one Skill or app
   lark.messages = [];
   const team = await tool(alex.token, 'set_collaborators', { kind: 'skill', slug: 'invoice-check', add: ['bob@example.com'] });
-  await new Promise((r) => setTimeout(r, 300));
-  check(team.collaborators?.map((c: { role: string }) => c.role).join() === 'owner,collaborator' && lark.messages[0]?.id === 'ou_dev_bob' && lark.messages[0].text.includes('/skills/invoice-check'),
+  const toBob = () => lark.messages.some((m) => m.id === 'ou_dev_bob' && m.text.includes('/skills/invoice-check'));
+  await until(toBob);
+  check(team.collaborators?.map((c: { role: string }) => c.role).join() === 'owner,collaborator' && toBob(),
     'the owner adds a collaborator, who is told in Lark');
   check(String((await tool(bob.token, 'set_collaborators', { kind: 'skill', slug: 'invoice-check', add: ['alice@example.com'] })).error).length > 0, 'collaborators cannot add others');
   const skillDir2 = mkdtempSync(path.join(tmpdir(), 'hub-skill-'));
@@ -1345,9 +1424,10 @@ try {
   check((await tool(bob.token, 'list_feedback', { kind: 'skill' })).items?.length >= 1, "collaborators handle the Skill's feedback");
   lark.messages = [];
   await api(alice.jar, 'POST', '/skills/invoice-check/feedback', { body: '能不能支持电子发票' });
-  // messages go out in the background: wait for both (up to 5 s) instead of a fixed pause
-  for (let i = 0; i < 50 && lark.messages.length < 2; i++) await new Promise((r) => setTimeout(r, 100));
-  check(lark.messages.map((m) => m.id).sort().join() === 'ou_dev_alex,ou_dev_bob', 'new feedback reaches the owner and the collaborators');
+  // messages go out in the background, others may still be on their way: wait for the two about this feedback
+  const aboutIt = () => lark.messages.filter((m) => m.text.includes('能不能支持电子发票')).map((m) => m.id).sort().join();
+  for (let i = 0; i < 50 && aboutIt() !== 'ou_dev_alex,ou_dev_bob'; i++) await new Promise((r) => setTimeout(r, 100));
+  check(aboutIt() === 'ou_dev_alex,ou_dev_bob', 'new feedback reaches the owner and the collaborators');
   check((await api(bob.jar, 'DELETE', '/skills/invoice-check')).status === 400, 'collaborators cannot delete it');
   check(((await api(bob.jar, 'GET', '/profile')).body.skills as { slug: string }[]).some((x) => x.slug === 'invoice-check'), "it shows among the collaborator's own Skills");
   await api(bob.jar, 'POST', '/skills/invoice-check/collaborators', { remove: ['ou_dev_bob'] });
@@ -1360,9 +1440,9 @@ try {
   check(String((await tool(bob.token, 'delete_app', { slug: 'invoice', confirm_slug: 'invoice' })).error).length > 0, 'but not delete it');
   lark.messages = [];
   const handed = await tool(alex.token, 'transfer_ownership', { kind: 'app', slug: 'invoice', to: 'alice@example.com' });
-  await new Promise((r) => setTimeout(r, 300));
+  await until(() => lark.messages.some((m) => m.id === 'ou_dev_alice'));
   check(handed.collaborators?.[0]?.id === 'ou_dev_alice' && handed.collaborators.some((c: { id: string; role: string }) => c.id === 'ou_dev_alex' && c.role === 'collaborator')
-    && lark.messages[0]?.id === 'ou_dev_alice', 'the owner hands the app over and stays on as a collaborator');
+    && lark.messages.some((m) => m.id === 'ou_dev_alice'), 'the owner hands the app over and stays on as a collaborator');
   check(String((await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', remove: ['bob@example.com'] })).error).length > 0, 'after which they no longer choose collaborators');
   await tool(alice.token, 'transfer_ownership', { kind: 'app', slug: 'invoice', to: 'alex@example.com' });
   await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'invoice', remove: ['alice@example.com', 'bob@example.com'] });
@@ -1413,11 +1493,11 @@ try {
   check(lark.perms.at(-1)?.token === newBase.token && lark.perms.at(-1)?.public === 'closed', 'a private app keeps its Base private');
   lark.perms = [];
   await tool(alex.token, 'set_collaborators', { kind: 'app', slug: 'deals', add: ['bob@example.com'] });
-  await new Promise((r) => setTimeout(r, 300));
+  await until(() => lark.perms.some((x) => x.member === 'ou_dev_bob' && x.token === newBase.token));
   check(lark.perms.some((x) => x.member === 'ou_dev_bob' && x.token === newBase.token), 'a collaborator on the app gets edit access to its Base');
   lark.perms = [];
   await tool(alex.token, 'set_app_access', { slug: 'deals', visibility: 'company' });
-  await new Promise((r) => setTimeout(r, 300));
+  await until(() => lark.perms.some((x) => x.token === newBase.token && x.public === 'tenant_editable'));
   check(lark.perms.some((x) => x.token === newBase.token && x.public === 'tenant_editable'), 'opening the app to the company opens its Base to the company');
   const cols = await tool(alex.token, 'add_lark_columns', { url: newBase.tables[0].url, columns: [{ name: '邮箱', type: 'text' }, { name: '状态', type: 'select' }] });
   check(cols.added?.join() === '邮箱' && cols.skipped?.join() === '状态', 'add_lark_columns adds what is missing and leaves existing columns alone');
@@ -1898,6 +1978,93 @@ try {
     const found = async (jar: Jar, q: string) => ((await api(jar, 'GET', `/search?q=${encodeURIComponent(q)}`)).body.requests as { id: number }[]).map((r) => r.id);
     check((await found(bob.jar, '会议室')).includes(poolOpen.id) && (await found(alice.jar, 'KOL')).includes(pool.id), 'search finds requests');
     check(!(await found(bob.jar, '薪酬')).includes(secret.id) && (await found(alex.jar, '薪酬')).includes(secret.id), 'but not invitations the searcher may not see');
+  }
+
+  // 项目: each person connects their own Linear (read only), and sees projects as Linear shows them to them
+  {
+    const st0 = (await api(bob.jar, 'GET', '/projects')).body as { status: { available: boolean; connected: boolean; connectUrl: string }; projects: unknown[] };
+    check(st0.status.available && !st0.status.connected && st0.projects.length === 0 && st0.status.connectUrl.includes('/auth/linear/connect'), 'before connecting, the projects page offers to connect Linear');
+    const start = await fetch(`${HUB}/auth/linear/connect?return=/projects`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    bob.jar.store(start);
+    const authz = await fetch(start.headers.get('location')!, { redirect: 'manual' });
+    check(linear.scope === 'read', 'it asks Linear for read access only');
+    const back = await fetch(authz.headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    check(back.status === 302 && back.headers.get('location') === '/projects', 'and comes back to the projects page');
+    // one click on the Me page walks through both Linear authorisations: back from the first, on to the next
+    const chain = `/auth/services/linear/connect?return=${encodeURIComponent('/me')}`;
+    const s1 = await fetch(`${HUB}/auth/linear/connect?return=${encodeURIComponent(chain)}`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    bob.jar.store(s1);
+    const b1 = await fetch((await fetch(s1.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    check(b1.headers.get('location') === chain, 'connecting Linear can hand on to the next authorisation');
+    const status = (await api(bob.jar, 'GET', '/linear/status')).body as { connected: boolean; name: string; workspace: string };
+    check(status.connected && status.name === 'Alex L' && status.workspace === 'Acme', 'the Me page knows which Linear account and workspace');
+    const list = (await api(bob.jar, 'GET', '/projects')).body as { projects: { id: string; name: string; status: { type: string }; health: string | null; lastUpdate: { body: string } | null; teams: string[] }[] };
+    check((list.projects as unknown as { id: string; mine: boolean }[]).filter((x) => x.mine).map((x) => x.id).join() === 'p1,p2', "each project says whether it is the person's: issues assigned to them (p1) or they are a member (p2)");
+    check(list.projects.map((x) => x.id).join() === 'p1,p2,p3,p4' && list.projects[0].health === 'atRisk' && list.projects[0].lastUpdate?.body === '接口延期一周' && list.projects[0].teams[0] === 'Engineering',
+      'projects come across pages of results, started first, with health, the latest update and teams');
+    const detail = (await api(bob.jar, 'GET', '/projects/p1')).body as { milestones: { name: string; issues: number; done: number }[]; issueCounts: { total: number; done: number }; issues: { identifier: string }[]; updates: { body: string }[] };
+    check(detail.milestones.map((m) => `${m.name}:${m.done}/${m.issues}`).join() === 'Alpha:1/2,Beta:0/1' && detail.issueCounts.total === 4 && detail.issueCounts.done === 1 && detail.updates[0].body.includes('其余正常'),
+      'a project in detail: milestones by date with their issues done (canceled ones left out), counts and updates');
+    check((await api(bob.jar, 'GET', '/projects/nope')).status === 400, 'a project the person cannot see is refused');
+    check(((await api(alice.jar, 'GET', '/projects')).body as { status: { connected: boolean } }).status.connected === false, "another colleague's page still asks them to connect their own");
+    // an access token about to run out is refreshed first
+    const { DatabaseSync } = await import('node:sqlite');
+    const db = new DatabaseSync(path.join(dataDir, 'hub.db'));
+    db.prepare("UPDATE linear_connections SET expires_at = ? WHERE user_id = 'ou_dev_bob'").run(Date.now() + 60_000);
+    const before = linear.refreshes;
+    // disconnecting forgets what was read; connect again, then let the token run low and read
+    await api(bob.jar, 'POST', '/linear/disconnect');
+    const s2 = await fetch(`${HUB}/auth/linear/connect?return=/projects`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    bob.jar.store(s2);
+    await fetch((await fetch(s2.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    db.prepare("UPDATE linear_connections SET expires_at = ? WHERE user_id = 'ou_dev_bob'").run(Date.now() + 60_000);
+    const fresh = await api(bob.jar, 'GET', '/projects/p1');
+    check(fresh.status === 200 && linear.refreshes === before + 1, 'an access token about to run out is refreshed first');
+    linear.revoked = true;
+    db.prepare("UPDATE linear_connections SET expires_at = ? WHERE user_id = 'ou_dev_bob'").run(Date.now() + 3600_000);
+    // (p2: not read yet, so nothing kept from before answers it)
+    const refused = await api(bob.jar, 'GET', '/projects/p2');
+    const after = (await api(bob.jar, 'GET', '/linear/status')).body as { connected: boolean };
+    check(refused.status === 400 && String(refused.body.error).includes('/auth/linear/connect') && !after.connected, 'when Linear no longer accepts it, the connection is dropped and the person is asked to connect again');
+    linear.revoked = false;
+    db.close();
+  }
+
+  // other services' MCP servers through the hub, each person with their own account; the hub's own /mcp stands in
+  // for the service, so the whole OAuth dance (discovery, registration, PKCE, consent, tokens) runs for real
+  {
+    check((await api(bob.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/mcp` })).status >= 400, 'only admins add services');
+    check(String((await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/auth/services/callback` })).body.error).includes('/mcp'), "the hub's own addresses (e.g. the callback) are refused as an MCP endpoint");
+    const added = (await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/mcp`, create: true })).body as { id: string; connected: boolean };
+    check((await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Other', url: 'https://example.com/mcp', create: true })).status === 400, 'adding a service with an id already used does not replace it');
+    check(added.id === 'selfhub' && !added.connected, 'an admin adds a service by its MCP address (the whole company may use it by default)');
+    const offered = await tool(bob.token, 'list_connected_tools', {}) as { service: string; connected: boolean; connectUrl?: string }[];
+    check(offered.some((x) => x.service === 'selfhub' && !x.connected && x.connectUrl?.includes('/auth/services/selfhub/connect')), "agents see the service and the link to connect the user's account");
+    check(String((await tool(bob.token, 'call_connected_tool', { service: 'selfhub', tool: 'whoami' })).error).includes('/auth/services/selfhub/connect'), 'calling before connecting gives the link');
+    // bob connects: the hub sends him to the service's consent page and takes the tokens on the way back
+    const go = await fetch(`${HUB}/auth/services/selfhub/connect?return=/me`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    bob.jar.store(go);
+    const consentAt = go.headers.get('location') ?? '';
+    const consentHtml = await (await fetch(consentAt, { headers: { cookie: bob.jar.header() } })).text();
+    check(consentAt.includes('/oauth/authorize') && consentAt.includes('code_challenge='), 'connecting registers the hub with the service and asks for consent with PKCE');
+    const allow = await fetch(consentAt, { method: 'POST', redirect: 'manual', headers: { cookie: bob.jar.header() }, body: new URLSearchParams({ decision: 'allow', csrf: /name="csrf" value="([^"]+)"/.exec(consentHtml)![1] }) });
+    const back = await fetch(allow.headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    check(back.status === 302 && back.headers.get('location') === '/me', 'and comes back connected');
+    check(((await api(bob.jar, 'GET', '/services')).body.services as { id: string; connected: boolean }[]).find((x) => x.id === 'selfhub')?.connected === true, 'the Me page shows the service connected');
+    const listed = await tool(bob.token, 'list_connected_tools', { service: 'selfhub' }) as { tools: { name: string; input: unknown }[] };
+    check(listed.tools.some((x) => x.name === 'whoami') && listed.tools.length > 20, "the service's own tools are listed with their input schemas");
+    const who = await tool(bob.token, 'call_connected_tool', { service: 'selfhub', tool: 'whoami' }) as { ok: boolean; content: { text: string }[] };
+    check(who.ok && who.content[0].text.includes('ou_dev_bob'), 'a tool is called as the user, with their own account there');
+    await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/mcp`, disabledTools: ['whoami'] });
+    check(String((await tool(bob.token, 'call_connected_tool', { service: 'selfhub', tool: 'whoami' })).error).includes('whoami')
+      && !(await tool(bob.token, 'list_connected_tools', { service: 'selfhub' }) as { tools: { name: string }[] }).tools.some((x) => x.name === 'whoami'), 'tools an admin switched off are neither listed nor called');
+    await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/mcp`, audience: { people: ['ou_dev_alex'] }, disabledTools: [] });
+    check(!(await tool(bob.token, 'list_connected_tools', {}) as { service: string }[]).some((x) => x.service === 'selfhub')
+      && String((await tool(bob.token, 'call_connected_tool', { service: 'selfhub', tool: 'whoami' })).error).length > 0, 'people outside its audience neither see nor use it');
+    await api(alex.jar, 'POST', '/admin/services', { id: 'selfhub', name: 'Hub', url: `${HUB}/mcp`, audience: { company: true } });
+    await api(bob.jar, 'POST', '/services/selfhub/disconnect');
+    check(!((await api(bob.jar, 'GET', '/services')).body.services as { id: string; connected: boolean }[]).find((x) => x.id === 'selfhub')?.connected, 'and anyone can disconnect their account');
+    await api(alex.jar, 'DELETE', '/admin/services/selfhub');
   }
 
   if (KEEP) {

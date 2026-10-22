@@ -595,3 +595,37 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .req-label { min-width: 4.5em; }
 .req-form .field { margin-bottom: 0; display: flex; flex-direction: column; gap: 6px; }
 .req-form .label { margin-bottom: 0; }
+
+/* 项目 (Linear projects), on the design system's components */
+.proj-kpis { margin-bottom: var(--aisa-space-4); }
+.proj-row { cursor: pointer; }
+.proj-row:hover td { background: var(--aisa-surface-sunken); }
+.proj-name { font-weight: 600; color: var(--aisa-text); text-decoration: none; }
+.proj-progress { display: inline-flex; align-items: center; gap: 8px; min-width: 110px; }
+.proj-progress .aisa-progress { flex: 1; min-width: 60px; }
+.proj-late { color: var(--aisa-danger-text); }
+.proj-top { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr); gap: var(--aisa-space-4); margin-bottom: var(--aisa-space-4); align-items: stretch; }
+.proj-top .aisa-pace__dial .okr-ring { width: 100%; height: 100%; }
+.proj-top .aisa-pace__stats b { display: inline-flex; align-items: center; }
+.proj-section { margin-bottom: var(--aisa-space-4); }
+.proj-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: var(--aisa-space-4); align-items: start; }
+.proj-grid .aisa-card__head { flex-wrap: wrap; }
+.proj-issues { border: 0; }
+.proj-id { white-space: nowrap; font-family: var(--aisa-font-mono); }
+.proj-issue { color: var(--aisa-text); text-decoration: none; }
+.proj-issue:hover { text-decoration: underline; }
+.proj-issue-title { width: 100%; }
+.proj-update-head { display: flex; align-items: center; gap: 8px; margin-top: 4px; }
+.proj-update { margin: 4px 0 0; white-space: pre-wrap; display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; color: var(--aisa-text-secondary); font-size: var(--aisa-text-sm); }
+@media (max-width: 900px) { .proj-grid, .proj-top { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .proj-top .aisa-pace__dial { width: 96px; height: 96px; } }
+
+/* other services' MCP servers (admin) */
+.svc-row { padding: 12px 0; border-top: 1px solid var(--line); }
+.svc-row:first-child { border-top: 0; padding-top: 0; }
+.svc-settings { margin: 12px 0 0 38px; padding: 12px 14px; border-radius: 10px; background: var(--surface-2); }
+.svc-tools { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 6px 16px; max-height: 360px; overflow: auto; }
+.svc-tool { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; }
+.svc-tool input { margin-top: 3px; }
+.svc-tool__desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 640px) { .svc-settings { margin-left: 0; } }

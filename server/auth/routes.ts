@@ -19,6 +19,8 @@ import { mailboxName, mailConnectUrl } from '../mail.ts';
 import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
 import { githubEnabled } from '../github/app.ts';
+import { finishLinearLink, linearAuthorizeUrl, linearEnabled } from '../linear/link.ts';
+import { finishConnect, startConnect } from '../services/index.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
 export const authRoutes = new Hono();
@@ -217,6 +219,74 @@ authRoutes.get('/auth/github/callback', async (c) => {
     return c.redirect(ret);
   } catch (e) {
     console.error('[auth] github link failed', e);
+    return failed((e as Error).message, 500);
+  }
+});
+
+/** Connect the signed-in person's Linear account (read only), for the 项目 page. Returns to `return`. */
+authRoutes.get('/auth/linear/connect', (c) => {
+  const L = localeOf(c);
+  const ret = safeReturnPath(c.req.query('return'));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/linear/connect?return=${encodeURIComponent(ret)}`)}`);
+  if (!linearEnabled()) return c.html(page(tr(L, 'linear.connect.title'), `<h1>${escapeHtml(tr(L, 'linear.connect.title'))}</h1><p>${escapeHtml(tr(L, 'linear.connect.noApp'))}</p>`, L), 400);
+  const state = randomToken(16);
+  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|linear`, { ...cookieOpts, maxAge: 600 });
+  return c.redirect(linearAuthorizeUrl(state));
+});
+
+authRoutes.get('/auth/linear/callback', async (c) => {
+  const L = localeOf(c);
+  const [expected, rawRet, mode] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
+  deleteCookie(c, STATE_COOKIE, { path: '/', secure: config.secure });
+  const ret = safeReturnPath(decodeURIComponent(rawRet ?? ''));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  const failed = (reason: string, status: 400 | 500) => c.html(page(tr(L, 'linear.connect.failed'),
+    `<h1>${escapeHtml(tr(L, 'linear.connect.failed'))}</h1><p>${escapeHtml(reason)}</p><a class="btn primary" href="/auth/linear/connect?return=${encodeURIComponent(ret)}">${escapeHtml(tr(L, 'login.retry'))}</a>`, L), status);
+  const code = c.req.query('code');
+  if (c.req.query('error')) return c.redirect(ret);
+  if (!user || mode !== 'linear' || !expected || c.req.query('state') !== expected || !code) return failed(tr(L, 'login.failed.expired'), 400);
+  try {
+    await finishLinearLink(user, code);
+    return c.redirect(ret);
+  } catch (e) {
+    console.error('[auth] linear link failed', e);
+    return failed((e as Error).message, 500);
+  }
+});
+
+/** Connect the signed-in person's account in another service whose MCP server the hub reaches (services/). */
+authRoutes.get('/auth/services/:id/connect', async (c) => {
+  const L = localeOf(c);
+  const ret = safeReturnPath(c.req.query('return'));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/services/${c.req.param('id')}/connect?return=${encodeURIComponent(ret)}`)}`);
+  try {
+    const go = await startConnect(user, c.req.param('id'));
+    setCookie(c, STATE_COOKIE, `services|${encodeURIComponent(ret)}`, { ...cookieOpts, maxAge: 900 });
+    return c.redirect(go ?? ret);
+  } catch (e) {
+    const msg = e instanceof UserError ? e.localized(L) : (e as Error).message;
+    return c.html(page(tr(L, 'services.connect.failed'), `<h1>${escapeHtml(tr(L, 'services.connect.failed'))}</h1><p>${escapeHtml(msg)}</p>`, L), 400);
+  }
+});
+
+authRoutes.get('/auth/services/callback', async (c) => {
+  const L = localeOf(c);
+  const [mode, rawRet] = (getCookie(c, STATE_COOKIE) ?? '').split('|');
+  deleteCookie(c, STATE_COOKIE, { path: '/', secure: config.secure });
+  const ret = safeReturnPath(decodeURIComponent(rawRet ?? ''));
+  const user = sessionUser(getCookie(c, HUB_COOKIE));
+  const failed = (reason: string, status: 400 | 500) => c.html(page(tr(L, 'services.connect.failed'), `<h1>${escapeHtml(tr(L, 'services.connect.failed'))}</h1><p>${escapeHtml(reason)}</p><a class="btn primary" href="${escapeHtml(ret)}">${escapeHtml(tr(L, 'login.retry'))}</a>`, L), status);
+  if (c.req.query('error')) return c.redirect(ret);
+  const state = c.req.query('state'), code = c.req.query('code');
+  if (!user || mode !== 'services' || !state || !code) return failed(tr(L, 'login.failed.expired'), 400);
+  try {
+    await finishConnect(user, state, code);
+    return c.redirect(ret);
+  } catch (e) {
+    if (e instanceof UserError) return failed(e.localized(L), 400);
+    console.error('[auth] service connect failed', e);
     return failed((e as Error).message, 500);
   }
 });

@@ -24,6 +24,10 @@ point.
   see [docs/DATA_APPS.md](docs/DATA_APPS.md)). Shared boards, metric alerts sent by the Lark bot, and data checks that
   assign problem rows to their owners.
 - **OKRs**: the person's own and the company's, read from Lark OKR.
+- **Other services through the hub**: admins add other tools' MCP servers (e.g. Linear); each person connects their own
+  account once, and their agents use those tools through the hub (`list_connected_tools` / `call_connected_tool`).
+- **Projects**: the company's Linear projects (progress, health, milestones, latest updates, issues), read with each
+  person's own Linear account so they see what they can see there.
 - **Resources and org**: policy and SOP links grouped by topic, the Lark directory, and a ⌘K search over all of it.
 - **Apps on top of Lark**: an app declares which Base tables it reads or writes and whom it may message; each person
   consents once, then the app calls Lark as them through a small SDK.

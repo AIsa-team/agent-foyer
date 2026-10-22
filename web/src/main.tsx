@@ -21,6 +21,8 @@ const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.Dat
 const DataSourcePage = lazy(() => import('./pages/DataSource').then((m) => ({ default: m.DataSourcePage })));
 const OrgPage = lazy(() => import('./pages/Org').then((m) => ({ default: m.OrgPage })));
 const OkrPage = lazy(() => import('./pages/Okr').then((m) => ({ default: m.OkrPage })));
+const ProjectsPage = lazy(() => import('./pages/Projects').then((m) => ({ default: m.ProjectsPage })));
+const ProjectDetailPage = lazy(() => import('./pages/Projects').then((m) => ({ default: m.ProjectDetailPage })));
 const RequestsPage = lazy(() => import('./pages/Requests').then((m) => ({ default: m.RequestsPage })));
 const RequestDetailPage = lazy(() => import('./pages/Requests').then((m) => ({ default: m.RequestDetailPage })));
 
@@ -45,11 +47,12 @@ function Shell() {
   const { pathname } = useLocation();
   // a nav item also lights up on the pages it holds (Apps: the requests page)
   const navClass = (n: { also?: string }) => ({ isActive }: { isActive: boolean }) => (isActive || (n.also && pathname.startsWith(n.also)) ? 'active' : '');
-  const nav: { to: string; label: string; icon: 'home' | 'target' | 'library' | 'chart' | 'issues' | 'org' | 'apps' | 'skill' | 'user' | 'settings'; end?: boolean; also?: string }[] = [
+  const nav: { to: string; label: string; icon: 'home' | 'target' | 'library' | 'chart' | 'project' | 'issues' | 'org' | 'apps' | 'skill' | 'user' | 'settings'; end?: boolean; also?: string }[] = [
     { to: '/', label: t('nav.home'), icon: 'home' as const, end: true },
     ...(me.hub.features.lark ? [{ to: '/okr', label: 'OKR', icon: 'target' as const }] : []),
     { to: '/library', label: t('nav.library'), icon: 'library' as const },
     { to: '/data', label: t('nav.data'), icon: 'chart' as const },
+    ...(me.hub.features.linear ? [{ to: '/projects', label: t('nav.projects'), icon: 'project' as const }] : []),
     { to: '/issues', label: t('nav.issues'), icon: 'issues' as const },
     { to: '/org', label: t('nav.org'), icon: 'org' as const },
     { to: '/apps', label: t('nav.apps'), icon: 'apps' as const, also: '/requests' },
@@ -104,6 +107,8 @@ function Shell() {
           <Route path="/issues" element={<IssuesPage />} />
           <Route path="/data" element={<DataPage />} />
           <Route path="/data/source/:id" element={<DataSourcePage />} />
+          {me.hub.features.linear && <Route path="/projects" element={<ProjectsPage />} />}
+          {me.hub.features.linear && <Route path="/projects/:id" element={<ProjectDetailPage />} />}
           <Route path="/org" element={<OrgPage />} />
           {me.hub.features.lark && <Route path="/okr" element={<OkrPage />} />}
           <Route path="/apps" element={<AppsPage />} />

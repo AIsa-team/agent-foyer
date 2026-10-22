@@ -98,6 +98,17 @@ export const config = {
     apiBase: env('GITHUB_API_BASE', 'https://api.github.com'),
     webBase: env('GITHUB_WEB_BASE', 'https://github.com'),
   },
+  /**
+   * Linear, for the 项目 page: each person connects their own Linear account (read only) through the hub's Linear
+   * OAuth application, so everyone sees only the teams and projects they can see there. Endpoint overrides are for
+   * tests against a fake Linear.
+   */
+  linear: {
+    clientId: process.env.LINEAR_CLIENT_ID ?? '',
+    clientSecret: process.env.LINEAR_CLIENT_SECRET ?? '',
+    authBase: env('LINEAR_AUTH_BASE', 'https://linear.app'),
+    apiBase: env('LINEAR_API_BASE', 'https://api.linear.app'),
+  },
   /** Where apps save email drafts: the person's Gmail (needs GOOGLE_CLIENT_ID) or Lark Mail; "none" turns it off */
   mailDrafts: env('MAIL_DRAFTS', process.env.GOOGLE_CLIENT_ID ? 'google' : authProvider === 'lark' ? 'lark' : 'none') as 'google' | 'lark' | 'none',
   /** With no sign-in provider configured, a local "pick a user" login is used instead (DEV_LOGIN=1 forces it on plain-http test setups). */

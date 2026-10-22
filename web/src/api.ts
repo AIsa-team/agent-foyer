@@ -83,7 +83,7 @@ export interface Me {
     /** the sign-in provider's name: "Lark", "Google"… */
     login: string;
     /** lark: Base data, OKRs, directory and apps acting in Lark; messages: alerts can message people */
-    features: { lark: boolean; messages: boolean; github: boolean };
+    features: { lark: boolean; messages: boolean; github: boolean; linear: boolean };
     /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
     mailbox: string | null;
   };

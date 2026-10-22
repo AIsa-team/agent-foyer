@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router';
 import { api, type Agent, type AppInfo, type SkillInfo } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
 import { connectPrompt, publishPrompt } from '../prompts';
+import { ServiceMark, type Service } from '../services';
 import { AppIcon, Avatar, CopyBox, CopyButton, Dialog, Loading, Step, useAction, useApi, useMe } from '../ui';
 
 interface Profile { apps: AppInfo[]; skills: SkillInfo[]; installedSkills: number; agents: Agent[]; radar: { axes: Axis[]; people: number } }
@@ -93,6 +94,55 @@ function GitHubCard() {
         : <a className="btn sm" href={data.connectUrl}>{t('me.github.connect')}</a>}>
       {t(data.login ? 'me.github.connectedBody' : 'me.github.body', { org: data.org })}
     </ConnectionCard>
+  );
+}
+
+/**
+ * Their Linear account, as one card: the read-only connection the 项目 page uses and, when an admin added Linear's
+ * MCP server, the connection their agents use. They are two authorisations on Linear's side; one click walks through
+ * whichever are still missing, and disconnecting drops both.
+ */
+function LinearCard({ services, reload: reloadServices }: { services: Service[] | null; reload: () => void }) {
+  const { t } = useI18n();
+  const { data, reload } = useApi<{ available: boolean; connected: boolean; name: string | null; workspace: string | null; connectUrl: string }>('/linear/status');
+  const { busy, run } = useAction();
+  if (!data?.available || !services) return null;
+  const agents = services.find((s) => s.id === 'linear');
+  const done = data.connected && (!agents || agents.connected);
+  const partly = !done && (data.connected || !!agents?.connected);
+  // the missing steps, each returning to the next, the last to the Me page
+  const steps = [!data.connected && '/auth/linear/connect', agents && !agents.connected && `/auth/services/${agents.id}/connect`].filter(Boolean) as string[];
+  const go = steps.reduceRight((ret, path) => `${path}?return=${encodeURIComponent(ret)}`, '/me');
+  const disconnect = () => run(async () => {
+    await api.post('/linear/disconnect');
+    if (agents) await api.post(`/services/${agents.id}/disconnect`);
+  }, t('me.linear.disconnected')).then(() => { reload(); reloadServices(); });
+  return (
+    <ConnectionCard logo={<ServiceLogo src="/services/linear.svg" />} title="Linear" connected={done}
+      detail={data.connected && <span>{data.name}{data.workspace ? ` · ${data.workspace}` : ''}</span>}
+      action={done
+        ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.linear.disconnect')}</button>
+        : <a className="btn sm" href={go}>{t(partly ? 'me.linear.finish' : 'me.linear.connect')}</a>}>
+      {t(done ? (agents ? 'me.linear.connectedBoth' : 'me.linear.connectedBody') : partly ? 'me.linear.partly' : agents ? 'me.linear.bodyBoth' : 'me.linear.body')}
+    </ConnectionCard>
+  );
+}
+
+/** Their own accounts in the other services the hub reaches for their agents (admins add the services). */
+function ServiceCards({ services, reload, skip }: { services: Service[] | null; reload: () => void; skip: string[] }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  return (
+    <>
+      {(services ?? []).filter((s) => !skip.includes(s.id)).map((s) => (
+        <ConnectionCard key={s.id} logo={<ServiceMark s={s} />} title={t('me.service.title', { name: s.name })} connected={s.connected}
+          action={s.connected
+            ? <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => api.post(`/services/${s.id}/disconnect`), t('me.service.disconnected', { name: s.name })).then(reload)} type="button">{t('me.github.disconnect')}</button>
+            : <a className="btn sm" href={s.connectUrl}>{t('me.service.connect', { name: s.name })}</a>}>
+          {t(s.connected ? 'me.service.connectedBody' : 'me.service.body', { name: s.name })}
+        </ConnectionCard>
+      ))}
+    </>
   );
 }
 
@@ -192,6 +242,7 @@ export function MePage() {
   const { t, ago, fmtDate } = useI18n();
   const nav = useNavigate();
   const { data, error, reload } = useApi<Profile>('/profile');
+  const services = useApi<{ services: Service[] }>('/services');
   const [tokenOpen, setTokenOpen] = useState(false);
   const { run } = useAction();
   if (!data) return <Loading error={error} />;
@@ -230,6 +281,9 @@ export function MePage() {
         {me.hub.features.lark && <LarkDataCard />}
         {me.hub.mailbox === 'Gmail' && <GoogleCard />}
         <GitHubCard />
+        <LinearCard services={services.data?.services ?? null} reload={services.reload} />
+        {/* Linear's MCP server shares the Linear card when the 项目 page is on */}
+        <ServiceCards services={services.data?.services ?? null} reload={services.reload} skip={me.hub.features.linear ? ['linear'] : []} />
         {data.agents.map((a) => (
           <ConnectionCard key={a.id} logo={<AgentLogo name={a.name} />} title={a.name} connected
             detail={<>{t('common.usedAgo', { ago: ago(a.lastUsedAt) })} · {t('me.connectedOn', { date: fmtDate(a.connectedAt) })}</>}

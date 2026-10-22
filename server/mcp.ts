@@ -33,6 +33,7 @@ import { appGuide } from './appGuide.ts';
 import { sourceDownload } from './apps/source.ts';
 import * as agentActions from './apps/agentActions.ts';
 import * as appRequests from './requests.ts';
+import * as services from './services/index.ts';
 import * as connectors from './data/connectors/index.ts';
 import { importBoard } from './data/importBoard.ts';
 
@@ -55,6 +56,7 @@ ${LARK ? `- Business data lives in Lark, never only in the app: a table the user
 ` : ''}- Check it works (locally against a fake hub, then get_app_status), without writing test data into real tables or mailboxes, and end with the short report app_guide describes.
 Using apps: colleagues' apps offer operations to agents: finding, adding and changing records in their Lark tables (<table>.find / .add / .update) and their own actions (e.g. create a quote). When the user wants something done in one of the company's apps, or asks for something an app may already do, list_apps (query by topic), then list_apps with app for the arguments, and call_app; never reach an app's URLs or its Lark tables another way. Operations with write: true change data: say what you will do and call after the user agrees, unless they asked beforehand for it to be done without asking; then tell them afterwards what was done. If call_app says the user must first agree to the app's Lark access, give them the link.
 App requests (需求): colleagues post apps they need, invite someone to build one, or leave it in the pool for whoever has time. When the user needs an app built by someone else ("帮我提个需求", "ask someone to make…"), create_app_request (after checking list_app_requests and list_apps for one that exists, and after the user agrees to the text). When they want to help or build a request ("做需求 #12"), get_app_request, take it, follow app_guide, and publish_app with request_id.
+Other services: the company can reach other tools it uses through the hub (e.g. Linear, to read and change issues), each person with their own account there. When the user wants something done in one of them, list_connected_tools, then call_connected_tool; if they have not connected their account, give them the link it returns.
 Feedback on apps and Skills: colleagues leave it on the hub page, with the 「feedback」 button inside every app, or through their agent. When the user asks to improve one of their apps or Skills (or what people said), list_feedback, change and republish, then resolve_feedback each item with a short reply. When they hit a problem with someone else's app or Skill, draft it with send_feedback and send only after they agree with the text.
 Working together: an app or Skill can have collaborators (set_collaborators). They publish and change settings like the owner; only the owner (or an admin) deletes it, changes collaborators or hands it over (transfer_ownership). If a slug or Skill name belongs to someone else, suggest asking them to add the user as a collaborator.
 Never put secrets in an upload; use set_app_env for API keys.
@@ -245,6 +247,20 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       input: z.record(z.string(), z.unknown()).optional().describe('arguments, as the action\'s input schema describes'),
     },
   }, guard((a: { app: string; action: string; input?: Record<string, unknown> }) => agentActions.callAction(user, a.app, a.action, a.input ?? {}, agentName)));
+
+  server.registerTool('list_connected_tools', {
+    description: 'Other services the company reaches through the hub (e.g. Linear), each with the user\'s own account there. Without service: which services the user may use and whether they connected their account (if not, give them connectUrl). With service: its tools with descriptions and input schemas; readOnly says the service marked a tool as only reading.',
+    inputSchema: { service: z.string().optional().describe('service id, e.g. linear') },
+  }, guard((a: { service?: string }) => services.listTools(user, a.service)));
+
+  server.registerTool('call_connected_tool', {
+    description: 'Call one tool of a connected service (see list_connected_tools) as the user, with their own account and access there. Tools not marked readOnly can change things (create, update, comment, delete): tell the user what you will do and call after they agree, unless they asked beforehand for it to be done without asking. Returns what the service answered.',
+    inputSchema: {
+      service: z.string(),
+      tool: z.string(),
+      arguments: z.record(z.string(), z.unknown()).optional().describe('as the tool\'s input schema describes'),
+    },
+  }, guard((a: { service: string; tool: string; arguments?: Record<string, unknown> }) => services.callTool(user, a.service, a.tool, a.arguments ?? {}, agentName)));
 
   server.registerTool('list_app_requests', {
     description: 'App requests (需求): apps colleagues need and want someone to build. Pool requests are open to everyone; invitations only to the people involved. status: open (waiting for someone), taken, done, closed, all; mine: the ones the user asked for, was invited to, builds or also needs; query: words in title or text.',

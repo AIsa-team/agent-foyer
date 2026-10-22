@@ -531,6 +531,51 @@ const MIGRATIONS: string[] = [
     at INTEGER NOT NULL,
     PRIMARY KEY (request_id, user_id)
   );
+  `,  // each person's Linear connection (linear/link.ts)
+  `
+  CREATE TABLE linear_connections (
+    user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    access_enc TEXT NOT NULL,         -- encrypted access token (valid about a day)
+    refresh_enc TEXT,                 -- encrypted refresh token
+    expires_at INTEGER NOT NULL,
+    linear_id TEXT,
+    linear_name TEXT,
+    workspace TEXT,
+    connected_at INTEGER NOT NULL
+  );
+  `,  // other services' MCP servers, reached through the hub as each person (services/)
+  `
+  CREATE TABLE mcp_services (
+    id TEXT PRIMARY KEY,              -- short name agents use, e.g. linear
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,                -- the service's MCP endpoint (streamable HTTP)
+    audience TEXT NOT NULL,           -- JSON {company, people, departments}
+    disabled_tools TEXT NOT NULL DEFAULT '[]',
+    client_enc TEXT,                  -- encrypted OAuth client registration with the service (one for the hub)
+    created_by TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE TABLE mcp_connections (
+    service_id TEXT NOT NULL REFERENCES mcp_services(id) ON DELETE CASCADE,
+    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    tokens_enc TEXT,                  -- encrypted OAuth tokens, once connected
+    verifier_enc TEXT,                -- PKCE verifier while an authorisation is under way
+    state TEXT,
+    state_at INTEGER,
+    connected_at INTEGER,
+    PRIMARY KEY (service_id, user_id)
+  );
+  CREATE INDEX mcp_connections_state ON mcp_connections (state);
+  CREATE TABLE mcp_calls (
+    id INTEGER PRIMARY KEY,
+    service_id TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    agent TEXT,
+    tool TEXT NOT NULL,
+    ok INTEGER NOT NULL,
+    at INTEGER NOT NULL
+  );
   `,
 ];
 

@@ -11,6 +11,9 @@ import { forgetGoogle, googleConnection, googleConnectUrl } from './google/auth.
 import { githubEnabled } from './github/app.ts';
 import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
 import { contributions } from './github/contributions.ts';
+import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
+import { forgetProjects, getProject, listProjects } from './linear/projects.ts';
+import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
@@ -89,7 +92,7 @@ api.get('/me', (c) => {
       url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName,
       accent: config.accent || null, devLogin: config.devLogin, login: loginName,
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
-      features: { lark: config.lark.enabled, messages: !!messenger, github: githubEnabled() },
+      features: { lark: config.lark.enabled, messages: !!messenger, github: githubEnabled(), linear: linearEnabled() },
       /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
       mailbox: mailboxName() || null,
     },
@@ -167,6 +170,41 @@ api.get('/home/source', async (c) => {
 // ---- Lark data: each person's own connection, Base data for home modules, alerts ----
 api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: true }));
 // ---- GitHub: who each person is on GitHub ----
+// ---- other services' MCP servers, reached through the hub as each person
+api.get('/services', (c) => c.json({ services: services.servicesFor(c.get('user')) }));
+api.post('/services/:id/disconnect', (c) => {
+  services.disconnect(c.get('user'), c.req.param('id'));
+  return c.json({ ok: true });
+});
+api.get('/admin/services', (c) => {
+  requireAdmin(c.get('user'));
+  return c.json({ services: services.servicesFor(c.get('user')), departments: all<{ id: string; name: string }>('SELECT id, name FROM departments ORDER BY name') });
+});
+api.post('/admin/services', async (c) => {
+  const b = await body<{ id: string; name: string; url: string; audience?: services.Audience; disabledTools?: string[]; create?: boolean }>(c);
+  return c.json(services.saveService(c.get('user'), { id: String(b.id ?? ''), name: String(b.name ?? ''), url: String(b.url ?? ''), audience: b.audience, disabledTools: b.disabledTools, create: !!b.create }));
+});
+api.delete('/admin/services/:id', (c) => {
+  services.deleteService(c.get('user'), c.req.param('id'));
+  return c.json({ ok: true });
+});
+api.get('/admin/services/:id/tools', async (c) => c.json({ tools: await services.adminTools(c.get('user'), c.req.param('id')) }));
+
+// ---- Linear and the 项目 page
+api.get('/linear/status', (c) => c.json(linearStatus(c.get('user'))));
+api.post('/linear/disconnect', (c) => {
+  unlinkLinear(c.get('user'));
+  forgetProjects(c.get('user'));
+  return c.json({ ok: true });
+});
+api.get('/projects', async (c) => {
+  const u = c.get('user');
+  const status = linearStatus(u);
+  if (!status.available || !status.connected) return c.json({ status, projects: [] });
+  return c.json({ status, projects: await listProjects(u) });
+});
+api.get('/projects/:id', async (c) => c.json(await getProject(c.get('user'), c.req.param('id'))));
+
 api.get('/github/status', (c) => {
   const u = c.get('user');
   return c.json({ available: githubEnabled(), org: config.github.org, login: u.github_login ?? null, connectUrl: githubConnectUrl('/me') });
