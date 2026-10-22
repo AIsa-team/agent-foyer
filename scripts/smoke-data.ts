@@ -219,19 +219,29 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       if (!linear.tokens.has(token) || linear.revoked) return send({ errors: [{ message: 'Authentication required', extensions: { code: 'AUTHENTICATION_ERROR' } }] }, 401);
       linear.lastToken = token;
       const { query, variables } = JSON.parse(raw) as { query: string; variables?: { after?: string; id?: string } };
+      const TEAM = { id: 't1', name: 'Engineering', key: 'ENG',
+        states: { nodes: [{ id: 's-done', name: 'Done', type: 'completed', position: 3 }, { id: 's-todo', name: 'Todo', type: 'unstarted', position: 1 }, { id: 's-doing', name: 'In Progress', type: 'started', position: 2 }, { id: 's-back', name: 'Backlog', type: 'backlog', position: 0 }] },
+        members: { nodes: [{ id: 'lin-u2', name: 'Bo' }, { id: 'lin-u1', name: 'Alex L' }] } };
+      if (query.includes('assignedIssues') && query.includes('identifier')) {
+        return send({ data: { viewer: { assignedIssues: { nodes: [
+          { id: 'i3', identifier: 'ENG-3', title: '没日期的', url: 'u', priority: 3, dueDate: null, state: { id: 's-todo', name: 'Todo', type: 'unstarted' }, project: { id: 'p1', name: '中台 v2' }, team: TEAM },
+          { id: 'i2', identifier: 'ENG-2', title: '任务 2', url: 'u', priority: 2, dueDate: '2026-01-05', state: { id: 's-doing', name: 'In Progress', type: 'started' }, project: { id: 'p1', name: '中台 v2' }, team: TEAM },
+        ] } } } });
+      }
       if (query.includes('assignedIssues')) return send({ data: { viewer: { id: 'lin-u1', assignedIssues: { nodes: [{ project: { id: 'p1' } }, { project: null }] } } } });
       if (query.includes('viewer')) return send({ data: { viewer: { id: 'lin-u1', name: 'Alex L', organization: { name: 'Acme' } } } });
       const proj = (id: string, name: string, type: string, statusName: string, extra: Record<string, unknown> = {}) => ({
         id, name, description: `${name} desc`, url: `https://linear.app/acme/project/${id}`, icon: null, color: '#5e6ad2', progress: 0.5, startDate: '2026-10-01', targetDate: '2026-11-30',
         updatedAt: '2026-10-21T10:00:00Z', health: null, status: { name: statusName, type }, lead: { id: 'u1', name: 'Alex', displayName: 'alex', avatarUrl: null },
-        teams: { nodes: [{ id: 't1', name: 'Engineering', key: 'ENG' }] }, members: { nodes: [] }, projectUpdates: { nodes: [] }, ...extra,
+        teams: { nodes: [{ id: 't1', name: 'Engineering', key: 'ENG' }] }, members: { nodes: [{ id: 'lin-u9', name: 'Cai' }] },
+        projectMilestones: { nodes: [{ id: 'mx', name: '内测', targetDate: '2026-11-10' }, { id: 'my', name: '未定', targetDate: null }] }, projectUpdates: { nodes: [] }, ...extra,
       });
       if (query.includes('projects(')) {
         // two pages, so paging is exercised
         return variables?.after === 'c1'
           ? send({ data: { projects: { nodes: [proj('p3', '官网改版', 'completed', 'Completed', { progress: 1 }), proj('p4', '暂停的', 'canceled', 'Canceled')], pageInfo: { hasNextPage: false, endCursor: null } } } })
           : send({ data: { projects: { nodes: [
-            proj('p2', '计费系统', 'planned', 'Planned', { targetDate: '2026-12-15', members: { nodes: [{ id: 'lin-u1' }] } }),
+            proj('p2', '计费系统', 'planned', 'Planned', { targetDate: '2026-12-15', members: { nodes: [{ id: 'lin-u1', name: 'Alex L', displayName: 'alex' }, { id: 'lin-u2', name: 'Bo' }] } }),
             proj('p1', '中台 v2', 'started', 'In Progress', { health: 'atRisk', projectUpdates: { nodes: [{ body: '接口延期一周', health: 'atRisk', createdAt: '2026-10-20T08:00:00Z', user: { name: 'Alex' } }] } }),
           ], pageInfo: { hasNextPage: true, endCursor: 'c1' } } } });
       }
@@ -247,7 +257,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
         return send({ data: { issue: {
           id: 'i2', identifier: 'ENG-2', title: '任务 2', description: '要做的事\n第二行', url: 'https://linear.app/acme/issue/ENG-2', priority: 2, priorityLabel: 'High', dueDate: '2026-11-01',
           createdAt: '2026-10-10T10:00:00Z', completedAt: null, state: { id: 's-doing', name: 'In Progress', type: 'started' }, assignee: { id: 'lin-u1', name: 'Alex L' },
-          creator: { name: 'Bo' }, team: { id: 't1' }, projectMilestone: { id: 'm1' },
+          creator: { name: 'Bo' }, team: TEAM, projectMilestone: { id: 'm1' }, project: { id: 'p1', name: '中台 v2' },
           comments: { nodes: [{ id: 'c2', body: '第二条', createdAt: '2026-10-12T10:00:00Z', user: { name: 'Bo' } }, { id: 'c1', body: '第一条', createdAt: '2026-10-11T10:00:00Z', user: { name: 'Alex L' } }] },
         } } });
       }
@@ -2041,8 +2051,19 @@ try {
     await api(bob.jar, 'PATCH', '/linear/issues/i2', { assigneeId: null, dueDate: null });
     check(JSON.stringify(linear.changes[1]?.variables) === JSON.stringify({ id: 'i2', input: { assigneeId: null, dueDate: null } }), 'its assignee and due date can be cleared');
     check((await api(bob.jar, 'PATCH', '/linear/issues/i2', { priority: 7 })).status === 400 && (await api(bob.jar, 'PATCH', '/linear/issues/i2', { dueDate: 'soon' })).status === 400 && linear.changes.length === 2, 'values Linear would not take are refused before asking it');
-    const iss = (await api(bob.jar, 'GET', '/linear/issues/i2')).body as { description: string; comments: { body: string }[]; assigneeId: string; team: string };
+    const iss = (await api(bob.jar, 'GET', '/linear/issues/i2')).body as { description: string; comments: { body: string }[]; assigneeId: string; team: string; teamOptions: { states: { id: string }[] }[]; project: { name: string } };
     check(iss.description.includes('第二行') && iss.comments.map((c) => c.body).join() === '第一条,第二条' && iss.assigneeId === 'lin-u1' && iss.team === 't1', 'an issue opens with its description and comments, oldest first');
+    check(iss.teamOptions[0]?.states[0]?.id === 's-back' && iss.project.name === '中台 v2', "with its own team's states and members and its project, so it can be edited from anywhere");
+    const mine = (await api(bob.jar, 'GET', '/projects/my-issues')).body as { canWrite: boolean; issues: { identifier: string; doneStateId: string; project: { name: string } }[] };
+    check(mine.canWrite && mine.issues.map((i) => i.identifier).join() === 'ENG-2,ENG-3' && mine.issues[0].doneStateId === 's-done' && mine.issues[0].project.name === '中台 v2',
+      "the person's open issues come nearest due first, each with its team's done state to tick it off");
+    const before2 = linear.changes.length;
+    await api(bob.jar, 'PATCH', `/linear/issues/i2`, { stateId: mine.issues[0].doneStateId });
+    check(JSON.stringify(linear.changes[before2]?.variables) === JSON.stringify({ id: 'i2', input: { stateId: 's-done' } }), 'ticking one moves it to done');
+    linear.changes.splice(before2, 1);
+    const withPeople = (await api(bob.jar, 'GET', '/projects')).body as { projects: { id: string; members: { name: string }[]; milestoneDates: { name: string }[] }[] };
+    const p2m = withPeople.projects.find((x) => x.id === 'p2');
+    check(p2m?.members.map((m) => m.name).join() === 'alex,Bo' && p2m.milestoneDates.map((m) => m.name).join() === '内测', 'projects come with their members and dated milestones');
     await api(bob.jar, 'POST', '/linear/issues/i2/comments', { body: '  看过了  ' });
     check(JSON.stringify(linear.changes[2]) === JSON.stringify({ op: 'commentCreate', variables: { input: { issueId: 'i2', body: '看过了' } } }), 'a comment is posted as the person');
     const made = (await api(bob.jar, 'POST', '/projects/p1/issues', { teamId: 't1', title: ' 补文档 ', priority: 2, milestoneId: 'm1', assigneeId: 'lin-u2' })).body as { identifier: string };

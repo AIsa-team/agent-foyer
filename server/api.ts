@@ -12,7 +12,7 @@ import { githubEnabled } from './github/app.ts';
 import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
 import { contributions } from './github/contributions.ts';
 import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
-import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, postProjectUpdate, updateIssue } from './linear/projects.ts';
+import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, myIssues, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
@@ -203,6 +203,7 @@ api.get('/projects', async (c) => {
   if (!status.available || !status.connected) return c.json({ status, projects: [] });
   return c.json({ status, projects: await listProjects(u) });
 });
+api.get('/projects/my-issues', async (c) => c.json(await myIssues(c.get('user'))));
 api.get('/projects/:id', async (c) => c.json(await getProject(c.get('user'), c.req.param('id'))));
 api.post('/projects/:id/issues', async (c) => {
   const b = await body<{ teamId: string; title: string; description?: string; assigneeId?: string | null; priority?: number; milestoneId?: string | null; dueDate?: string | null }>(c);

@@ -638,7 +638,6 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .proj-controls--compact { margin-top: 6px; }
 .proj-controls--compact .aisa-select, .proj-controls--compact .aisa-input { height: 28px; font-size: var(--aisa-text-xs); }
 .proj-alert { display: flex; align-items: center; gap: 12px; margin-bottom: var(--aisa-space-4); }
-.dialog .aisa { background: transparent; }
 .proj-panel__meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 .proj-desc { white-space: pre-wrap; font-size: var(--aisa-text-sm); color: var(--aisa-text); line-height: 1.65; max-height: 280px; overflow: auto; padding: 12px; border-radius: 10px; background: var(--aisa-surface-sunken); }
 .proj-h4 { font-size: var(--aisa-text-sm); font-weight: 600; margin: 16px 0 6px; }
@@ -647,3 +646,22 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .proj-form { display: grid; gap: 12px; }
 .proj-form .aisa-field { display: grid; gap: 6px; margin: 0; }
 .proj-form__row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+
+/* 项目: the design system's dialog and drawer, my issues and what is coming up */
+dialog.kit-dialog { color: var(--aisa-text-body); }
+dialog.kit-dialog.kit-dialog--wide { width: min(640px, calc(100vw - 32px)); }
+dialog.aisa-drawer.kit-dialog[open] { display: flex; flex-direction: column; width: min(560px, 100vw); }
+dialog.aisa-drawer.kit-dialog .aisa-dialog__body { flex: 1; }
+dialog.aisa-drawer.kit-dialog .aisa-dialog__foot { border-top: 1px solid var(--aisa-line); padding-top: var(--aisa-space-4); }
+dialog.kit-dialog .aisa-dialog__head h2 { font-size: var(--aisa-text-lg); }
+.proj-reply { width: 100%; }
+.proj-two { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: var(--aisa-space-4); margin-bottom: var(--aisa-space-4); align-items: start; }
+.proj-card-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; margin-bottom: var(--aisa-space-3); }
+.proj-card-title h3 { font-size: var(--aisa-text-md); font-weight: 600; margin: 0; }
+.aisa-todo .aisa-todo__title.proj-issue { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aisa-todo__tag { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--aisa-text-muted); text-decoration: none; }
+.proj-link { color: var(--aisa-text); text-decoration: none; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.proj-link:hover { text-decoration: underline; }
+.proj-more { font-size: 9px; }
+@media (max-width: 900px) { .proj-two { grid-template-columns: 1fr; } }
+@media (max-width: 640px) { .aisa-todo__tag { display: none; } }

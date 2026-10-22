@@ -15,7 +15,8 @@ interface ProjectNode {
   id: string; name: string; description?: string | null; url: string; icon?: string | null; color?: string | null;
   progress?: number | null; startDate?: string | null; targetDate?: string | null; updatedAt?: string;
   health?: Health | null; status?: { name: string; type: string } | null;
-  lead?: Person | null; teams?: { nodes: { id: string; name: string; key: string }[] }; members?: { nodes: { id: string }[] };
+  lead?: Person | null; teams?: { nodes: { id: string; name: string; key: string }[] }; members?: { nodes: Person[] };
+  projectMilestones?: { nodes: { id: string; name: string; targetDate?: string | null }[] };
   projectUpdates?: { nodes: Update[] };
 }
 interface IssueNode {
@@ -30,7 +31,8 @@ const PROJECT_FIELDS = `
   status { name type }
   lead { id name displayName avatarUrl }
   teams { nodes { id name key } }
-  members { nodes { id } }`;
+  members { nodes { id name displayName avatarUrl } }
+  projectMilestones { nodes { id name targetDate } }`;
 
 const person = (p?: Person | null) => (p ? { name: p.displayName || p.name || '', avatar: p.avatarUrl ?? null } : null);
 const update = (u?: Update) => (u ? { body: (u.body ?? '').trim(), health: u.health ?? null, at: u.createdAt ?? null, by: person(u.user), url: u.url ?? null } : null);
@@ -50,6 +52,9 @@ function shapeProject(p: ProjectNode, me?: Viewer) {
     health: p.health ?? p.projectUpdates?.nodes[0]?.health ?? null,
     lead: person(p.lead),
     teams: (p.teams?.nodes ?? []).map((t) => t.name),
+    members: (p.members?.nodes ?? []).map((m) => person(m)!),
+    // dated milestones, for what is coming up
+    milestoneDates: (p.projectMilestones?.nodes ?? []).filter((m) => m.targetDate).map((m) => ({ name: m.name, date: m.targetDate! })),
     lastUpdate: update(p.projectUpdates?.nodes[0]),
   };
 }
@@ -100,7 +105,6 @@ export function getProject(user: User, id: string) {
   if (!/^[\w-]{1,64}$/.test(id)) throw new UserError('err.linear.noProject');
   return cached(`${user.id}|p|${id}`, 60_000, async () => {
     const r = await linearQuery<{ project: (ProjectNode & {
-      projectMilestones?: { nodes: { id: string; name: string; targetDate?: string | null }[] };
       editTeams?: { nodes: TeamNode[] };
       issues?: { nodes: IssueNode[]; pageInfo?: { hasNextPage: boolean } };
     }) | null }>(user, `
@@ -109,7 +113,7 @@ export function getProject(user: User, id: string) {
           ${PROJECT_FIELDS}
           projectUpdates(first: 5) { nodes { id body health createdAt url user { name displayName avatarUrl } } }
           projectMilestones { nodes { id name targetDate } }
-          editTeams: teams { nodes { id name key states { nodes { id name type position } } members { nodes { id name displayName avatarUrl } } } }
+          editTeams: teams { nodes { ${TEAM_OPTIONS} } }
           issues(first: 250) {
             nodes {
               id identifier title url priority priorityLabel dueDate estimate updatedAt completedAt
@@ -144,17 +148,50 @@ export function getProject(user: User, id: string) {
       issueCounts: { total: issues.filter(counted).length, done: issues.filter(done).length },
       moreIssues: !!p.issues?.pageInfo?.hasNextPage,
       // what the edit controls offer: each team's workflow states (in Linear's order) and members
-      teamOptions: (p.editTeams?.nodes ?? []).map((t) => ({
-        id: t.id, name: t.name, key: t.key,
-        states: [...(t.states?.nodes ?? [])].sort((a, b) => STATE_ORDER.indexOf(a.type) - STATE_ORDER.indexOf(b.type) || a.position - b.position)
-          .map((x) => ({ id: x.id, name: x.name, type: x.type })),
-        members: (t.members?.nodes ?? []).map((m) => ({ id: m.id ?? '', ...person(m)! })).sort((a, b) => a.name.localeCompare(b.name)),
-      })),
+      teamOptions: (p.editTeams?.nodes ?? []).map(teamOption),
       canWrite: canWriteLinear(user),
     };
   });
 }
 const STATE_ORDER = ['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled'];
+const TEAM_OPTIONS = 'id name key states { nodes { id name type position } } members { nodes { id name displayName avatarUrl } }';
+/** A team's workflow states in Linear's order and its members, for the edit controls. */
+function teamOption(t: TeamNode) {
+  return {
+    id: t.id, name: t.name, key: t.key,
+    states: [...(t.states?.nodes ?? [])].sort((a, b) => STATE_ORDER.indexOf(a.type) - STATE_ORDER.indexOf(b.type) || a.position - b.position)
+      .map((x) => ({ id: x.id, name: x.name, type: x.type })),
+    members: (t.members?.nodes ?? []).map((m) => ({ id: m.id ?? '', ...person(m)! })).sort((a, b) => a.name.localeCompare(b.name)),
+  };
+}
+
+/** The person's own open issues across projects, nearest due first, with what is needed to tick one off. */
+export function myIssues(user: User) {
+  return cached(`${user.id}|mine`, 60_000, async () => {
+    const r = await linearQuery<{ viewer: { assignedIssues: { nodes: (IssueNode & { project?: { id: string; name: string } | null; team?: TeamNode | null })[] } } }>(user, `
+      {
+        viewer {
+          assignedIssues(first: 100, filter: { state: { type: { nin: ["completed", "canceled"] } } }) {
+            nodes {
+              id identifier title url priority dueDate
+              state { id name type } project { id name }
+              team { id states { nodes { id name type position } } }
+            }
+          }
+        }
+      }`);
+    return {
+      canWrite: canWriteLinear(user),
+      issues: r.viewer.assignedIssues.nodes.map((i) => {
+        const done = [...(i.team?.states?.nodes ?? [])].filter((x) => x.type === 'completed').sort((a, b) => a.position - b.position)[0];
+        return {
+          id: i.id, identifier: i.identifier, title: i.title, url: i.url, priority: i.priority ?? 0, dueDate: i.dueDate ?? null,
+          state: i.state ? { name: i.state.name, type: i.state.type } : null, project: i.project ?? null, doneStateId: done?.id ?? null,
+        };
+      }).sort((a, b) => (a.dueDate ?? '9999').localeCompare(b.dueDate ?? '9999') || (a.priority || 9) - (b.priority || 9)),
+    };
+  });
+}
 
 // ---------------------------------------------------------------- one issue, and changing things
 const ISSUE_ID = /^[\w-]{1,64}$/;
@@ -162,11 +199,11 @@ const ISSUE_ID = /^[\w-]{1,64}$/;
 /** An issue with its description and comments, for the side panel. */
 export async function getIssue(user: User, id: string) {
   if (!ISSUE_ID.test(id)) throw new UserError('err.linear.noIssue');
-  const r = await linearQuery<{ issue: (IssueNode & { description?: string | null; createdAt?: string; creator?: Person | null; comments?: { nodes: { id: string; body: string; createdAt: string; user?: Person | null }[] } }) | null }>(user, `
+  const r = await linearQuery<{ issue: (Omit<IssueNode, 'team'> & { team?: TeamNode | null; project?: { id: string; name: string } | null; description?: string | null; createdAt?: string; creator?: Person | null; comments?: { nodes: { id: string; body: string; createdAt: string; user?: Person | null }[] } }) | null }>(user, `
     query Issue($id: String!) {
       issue(id: $id) {
         id identifier title description url priority priorityLabel dueDate createdAt completedAt
-        state { id name type } assignee { id name displayName avatarUrl } creator { name displayName avatarUrl } team { id } projectMilestone { id }
+        state { id name type } assignee { id name displayName avatarUrl } creator { name displayName avatarUrl } team { ${TEAM_OPTIONS} } projectMilestone { id } project { id name }
         comments(first: 50) { nodes { id body createdAt user { name displayName avatarUrl } } }
       }
     }`, { id }).catch((e: Error) => {
@@ -179,7 +216,8 @@ export async function getIssue(user: User, id: string) {
     id: i.id, identifier: i.identifier, title: i.title, description: i.description ?? '', url: i.url,
     priority: i.priority ?? 0, dueDate: i.dueDate ?? null, createdAt: i.createdAt ?? null, creator: person(i.creator),
     state: i.state ? { id: i.state.id ?? null, name: i.state.name, type: i.state.type } : null,
-    assignee: person(i.assignee), assigneeId: i.assignee?.id ?? null, team: i.team?.id ?? null,
+    assignee: person(i.assignee), assigneeId: i.assignee?.id ?? null, team: i.team?.id ?? null, project: i.project ?? null,
+    teamOptions: i.team ? [teamOption(i.team)] : [],
     comments: [...(i.comments?.nodes ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((c) => ({ id: c.id, body: c.body, at: c.createdAt, by: person(c.user) })),
     canWrite: canWriteLinear(user),
   };
