@@ -47,7 +47,7 @@ const action = z.object({
   write: z.boolean().optional(),
 });
 const columns = z.array(z.string().min(1).max(100)).min(1).max(100);
-/** a fixed value, or "$me" (the person) / "$now" (the time of the call) */
+/** a fixed value, or "$me" (the person; their name in a text column), "$me.id" (their hub id) or "$now" (the time of the call) */
 const defaults = z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).default({});
 const tableRule = z.object({
   description: z.string().max(1000).optional(),
@@ -340,6 +340,7 @@ async function refuseDuplicate(user: User, table: Table, cols: Field[], t: NonNu
 function coerce(user: User, col: Field, v: unknown, sheet: boolean): unknown {
   const bad = (expected: string) => new UserError('err.agent.badValue', { field: col.name, expected });
   if (v === '$me') v = sheet || col.type !== FIELD.person ? user.name : [user.id];
+  if (v === '$me.id') v = !sheet && col.type === FIELD.person ? [user.id] : user.id;
   if (v === '$now') v = sheet || col.type !== FIELD.date ? new Date().toISOString() : Date.now();
   if (v === null || v === '') return null;
   if (sheet) return typeof v === 'object' ? JSON.stringify(v) : v;

@@ -956,7 +956,8 @@ try {
     const dup = await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: ' order 5 ' } } });
     check(String(dup.error).includes('Order 5') === false && String(dup.error).includes('order 5') && String(dup.error).includes('rec') && lark.created.length === before + 1, 'a record that already exists in a unique column is refused, naming it (case and spaces ignored)');
     check((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'Order 5b' } } })).ok && lark.created.length === before + 2, 'a value that only contains an existing one is not a duplicate');
-    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Channel: 'Fax' } } })).error).includes('API') && lark.created.length === before + 2, 'a value the select does not have is refused, naming the options');
+    check((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: '$me.id' } } })).ok && lark.created.at(-1)?.fields.Name === 'ou_dev_alex' && lark.created.length === before + 3, '$me.id writes the person\'s id into a text column');
+    check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Channel: 'Fax' } } })).error).includes('API') && lark.created.length === before + 3, 'a value the select does not have is refused, naming the options');
     check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Score: 1 } } })).error).includes('Score'), 'columns not listed cannot be written');
     check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Amount: 1 } } })).error).includes('Name'), 'required columns must be given');
     check(String((await tool(alex.token, 'call_app', { app: 'invoice', action: 'requests.add', input: { fields: { Name: 'x', Amount: 'lots' } } })).error).includes('Amount'), 'and values must fit the column');
@@ -1327,7 +1328,8 @@ try {
   check((await tool(bob.token, 'list_feedback', { kind: 'skill' })).items?.length >= 1, "collaborators handle the Skill's feedback");
   lark.messages = [];
   await api(alice.jar, 'POST', '/skills/invoice-check/feedback', { body: '能不能支持电子发票' });
-  await new Promise((r) => setTimeout(r, 300));
+  // messages go out in the background: wait for both (up to 5 s) instead of a fixed pause
+  for (let i = 0; i < 50 && lark.messages.length < 2; i++) await new Promise((r) => setTimeout(r, 100));
   check(lark.messages.map((m) => m.id).sort().join() === 'ou_dev_alex,ou_dev_bob', 'new feedback reaches the owner and the collaborators');
   check((await api(bob.jar, 'DELETE', '/skills/invoice-check')).status === 400, 'collaborators cannot delete it');
   check(((await api(bob.jar, 'GET', '/profile')).body.skills as { slug: string }[]).some((x) => x.slug === 'invoice-check'), "it shows among the collaborator's own Skills");
