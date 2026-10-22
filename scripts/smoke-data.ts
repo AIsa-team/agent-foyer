@@ -108,7 +108,7 @@ const lark = {
   perms: [] as { token: string; type: string; public?: string; member?: string }[],
 };
 let serial = 0;
-const linear = { tokens: new Set<string>(), refreshes: 0, expiresIn: 86399, revoked: false, scope: '', lastToken: '' };
+const linear = { tokens: new Set<string>(), writeTokens: new Set<string>(), refreshes: 0, expiresIn: 86399, revoked: false, scope: '', lastToken: '', changes: [] as { op: string; variables: Record<string, unknown> }[] };
 
 // the daily report: one docx per day under a wiki page, each section a table whose rows start with @someone
 interface DocBlock { block_id: string; block_type: number; parent_id: string; children?: string[]; [k: string]: unknown }
@@ -201,13 +201,16 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       if (f.get('grant_type') === 'authorization_code' && f.get('code') === 'lin-code') {
         const a = `lin-a${++serial}`;
         linear.tokens.add(a);
-        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: linear.expiresIn, token_type: 'Bearer', scope: 'read' });
+        const write = linear.scope.split(',').includes('write');
+        if (write) linear.writeTokens.add(a);
+        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: linear.expiresIn, token_type: 'Bearer', scope: write ? 'read write' : 'read' });
       }
       if (f.get('grant_type') === 'refresh_token' && /^lin-r\d+$/.test(f.get('refresh_token') ?? '') && !linear.revoked) {
         linear.refreshes++;
         const a = `lin-a${++serial}`;
         linear.tokens.add(a);
-        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: 86399, token_type: 'Bearer', scope: 'read' });
+        linear.writeTokens.add(a);
+        return send({ access_token: a, refresh_token: `lin-r${serial}`, expires_in: 86399, token_type: 'Bearer', scope: 'read write' });
       }
       return send({ error: 'invalid_grant' }, 400);
     }
@@ -232,11 +235,29 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
             proj('p1', '中台 v2', 'started', 'In Progress', { health: 'atRisk', projectUpdates: { nodes: [{ body: '接口延期一周', health: 'atRisk', createdAt: '2026-10-20T08:00:00Z', user: { name: 'Alex' } }] } }),
           ], pageInfo: { hasNextPage: true, endCursor: 'c1' } } } });
       }
+      // changes: only with write access, recorded for the checks
+      const op = ['issueUpdate', 'commentCreate', 'issueCreate', 'projectUpdateCreate'].find((m) => query.includes(`${m}(`));
+      if (op) {
+        if (!linear.writeTokens.has(token)) return send({ errors: [{ message: 'Invalid scope: `write` required', extensions: { code: 'FORBIDDEN' } }] });
+        linear.changes.push({ op, variables: variables as Record<string, unknown> });
+        return send({ data: { [op]: { success: true, ...(op === 'issueCreate' ? { issue: { id: 'i9', identifier: 'ENG-9', url: 'https://linear.app/acme/issue/ENG-9' } } : {}) } } });
+      }
+      if (query.includes('issue(id')) {
+        if (variables?.id !== 'i2') return send({ errors: [{ message: 'Entity not found: Issue' }] });
+        return send({ data: { issue: {
+          id: 'i2', identifier: 'ENG-2', title: '任务 2', description: '要做的事\n第二行', url: 'https://linear.app/acme/issue/ENG-2', priority: 2, priorityLabel: 'High', dueDate: '2026-11-01',
+          createdAt: '2026-10-10T10:00:00Z', completedAt: null, state: { id: 's-doing', name: 'In Progress', type: 'started' }, assignee: { id: 'lin-u1', name: 'Alex L' },
+          creator: { name: 'Bo' }, team: { id: 't1' }, projectMilestone: { id: 'm1' },
+          comments: { nodes: [{ id: 'c2', body: '第二条', createdAt: '2026-10-12T10:00:00Z', user: { name: 'Bo' } }, { id: 'c1', body: '第一条', createdAt: '2026-10-11T10:00:00Z', user: { name: 'Alex L' } }] },
+        } } });
+      }
       if (query.includes('project(id')) {
         if (!['p1', 'p2'].includes(variables?.id ?? '')) return send({ errors: [{ message: 'Entity not found: Project' }] });
         const issue = (n: number, type: string, extra: Record<string, unknown> = {}) => ({
           id: `i${n}`, identifier: `ENG-${n}`, title: `任务 ${n}`, url: `https://linear.app/acme/issue/ENG-${n}`, priority: n % 4, priorityLabel: 'High', dueDate: null, estimate: 1,
-          updatedAt: '2026-10-21T10:00:00Z', completedAt: type === 'completed' ? '2026-10-20T10:00:00Z' : null, state: { name: type, type }, assignee: { name: 'Alex', displayName: 'alex', avatarUrl: null },
+          updatedAt: '2026-10-21T10:00:00Z', completedAt: type === 'completed' ? '2026-10-20T10:00:00Z' : null,
+          state: { id: ({ completed: 's-done', started: 's-doing', unstarted: 's-todo', triage: 's-back', backlog: 's-back', canceled: 's-done' } as Record<string, string>)[type], name: type, type },
+          assignee: { id: 'lin-u1', name: 'Alex', displayName: 'alex', avatarUrl: null }, team: { id: 't1' },
           projectMilestone: null, ...extra,
         });
         return send({ data: { project: {
@@ -244,6 +265,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
           projectUpdates: { nodes: [{ id: 'u1', body: '接口延期一周\n其余正常', health: 'atRisk', createdAt: '2026-10-20T08:00:00Z', url: 'x', user: { name: 'Alex', displayName: 'alex', avatarUrl: null } }] },
           projectMilestones: { nodes: [{ id: 'm2', name: 'Beta', targetDate: '2026-11-15' }, { id: 'm1', name: 'Alpha', targetDate: '2026-10-31' }] },
           issues: { nodes: [issue(1, 'completed', { projectMilestone: { id: 'm1' } }), issue(2, 'started', { projectMilestone: { id: 'm1' } }), issue(3, 'unstarted', { projectMilestone: { id: 'm2' } }), issue(4, 'canceled', { projectMilestone: { id: 'm2' } }), issue(5, 'triage')], pageInfo: { hasNextPage: false } },
+          editTeams: { nodes: [{ id: 't1', name: 'Engineering', key: 'ENG',
+            states: { nodes: [{ id: 's-done', name: 'Done', type: 'completed', position: 3 }, { id: 's-todo', name: 'Todo', type: 'unstarted', position: 1 }, { id: 's-doing', name: 'In Progress', type: 'started', position: 2 }, { id: 's-back', name: 'Backlog', type: 'backlog', position: 0 }] },
+            members: { nodes: [{ id: 'lin-u2', name: 'Bo' }, { id: 'lin-u1', name: 'Alex L' }] } }] },
         } } });
       }
       return send({ errors: [{ message: 'unexpected query' }] });
@@ -1987,7 +2011,7 @@ try {
     const start = await fetch(`${HUB}/auth/linear/connect?return=/projects`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
     bob.jar.store(start);
     const authz = await fetch(start.headers.get('location')!, { redirect: 'manual' });
-    check(linear.scope === 'read', 'it asks Linear for read access only');
+    check(linear.scope === 'read,write', 'it asks Linear for read and write access (the 项目 page edits as the person)');
     const back = await fetch(authz.headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
     check(back.status === 302 && back.headers.get('location') === '/projects', 'and comes back to the projects page');
     // one click on the Me page walks through both Linear authorisations: back from the first, on to the next
@@ -2007,6 +2031,39 @@ try {
       'a project in detail: milestones by date with their issues done (canceled ones left out), counts and updates');
     check((await api(bob.jar, 'GET', '/projects/nope')).status === 400, 'a project the person cannot see is refused');
     check(((await api(alice.jar, 'GET', '/projects')).body as { status: { connected: boolean } }).status.connected === false, "another colleague's page still asks them to connect their own");
+    // editing from the 项目 page, as the person
+    const ed = (await api(bob.jar, 'GET', '/projects/p1')).body as { canWrite: boolean; teams: string[]; teamOptions: { states: { id: string }[]; members: { name: string }[] }[] };
+    check(ed.canWrite && ed.teams[0] === 'Engineering' && ed.teamOptions[0].states.map((x) => x.id).join() === 's-back,s-todo,s-doing,s-done' && ed.teamOptions[0].members.map((m) => m.name).join() === 'Alex L,Bo',
+      "a project offers its teams' workflow states (in Linear's order) and members to edit with");
+    linear.changes = [];
+    check((await api(bob.jar, 'PATCH', '/linear/issues/i2', { stateId: 's-done', priority: 1 })).status === 200 && JSON.stringify(linear.changes[0]) === JSON.stringify({ op: 'issueUpdate', variables: { id: 'i2', input: { stateId: 's-done', priority: 1 } } }),
+      "an issue's state and priority are changed in Linear");
+    await api(bob.jar, 'PATCH', '/linear/issues/i2', { assigneeId: null, dueDate: null });
+    check(JSON.stringify(linear.changes[1]?.variables) === JSON.stringify({ id: 'i2', input: { assigneeId: null, dueDate: null } }), 'its assignee and due date can be cleared');
+    check((await api(bob.jar, 'PATCH', '/linear/issues/i2', { priority: 7 })).status === 400 && (await api(bob.jar, 'PATCH', '/linear/issues/i2', { dueDate: 'soon' })).status === 400 && linear.changes.length === 2, 'values Linear would not take are refused before asking it');
+    const iss = (await api(bob.jar, 'GET', '/linear/issues/i2')).body as { description: string; comments: { body: string }[]; assigneeId: string; team: string };
+    check(iss.description.includes('第二行') && iss.comments.map((c) => c.body).join() === '第一条,第二条' && iss.assigneeId === 'lin-u1' && iss.team === 't1', 'an issue opens with its description and comments, oldest first');
+    await api(bob.jar, 'POST', '/linear/issues/i2/comments', { body: '  看过了  ' });
+    check(JSON.stringify(linear.changes[2]) === JSON.stringify({ op: 'commentCreate', variables: { input: { issueId: 'i2', body: '看过了' } } }), 'a comment is posted as the person');
+    const made = (await api(bob.jar, 'POST', '/projects/p1/issues', { teamId: 't1', title: ' 补文档 ', priority: 2, milestoneId: 'm1', assigneeId: 'lin-u2' })).body as { identifier: string };
+    check(made.identifier === 'ENG-9' && JSON.stringify(linear.changes[3]?.variables) === JSON.stringify({ input: { teamId: 't1', projectId: 'p1', title: '补文档', assigneeId: 'lin-u2', priority: 2, projectMilestoneId: 'm1' } }), 'a new issue goes into the project and milestone');
+    check((await api(bob.jar, 'POST', '/projects/p1/updates', { health: 'sideways', body: 'x' })).status === 400, 'a project update needs a health Linear knows');
+    await api(bob.jar, 'POST', '/projects/p1/updates', { health: 'atRisk', body: '接口还差一周' });
+    check(JSON.stringify(linear.changes[4]) === JSON.stringify({ op: 'projectUpdateCreate', variables: { input: { projectId: 'p1', body: '接口还差一周', health: 'atRisk' } } }), 'and a project update is posted with its health');
+    // a connection made when the page was read only: reading still works, changing asks to agree once more
+    const { DatabaseSync: DS } = await import('node:sqlite');
+    const db0 = new DS(path.join(dataDir, 'hub.db'));
+    db0.prepare("UPDATE linear_connections SET scope = 'read' WHERE user_id = 'ou_dev_bob'").run();
+    const ro = (await api(bob.jar, 'GET', '/projects/p1')).body as { canWrite: boolean };
+    const roChange = await api(bob.jar, 'PATCH', '/linear/issues/i2', { priority: 3 });
+    check(!ro.canWrite && roChange.status === 400 && String(roChange.body.error).includes('/auth/linear/connect') && linear.changes.length === 5, 'a read-only connection reads, and is asked to agree again before changing anything');
+    db0.close();
+    // agreeing again: the page can edit at once, nothing read with the old connection lingers
+    const again = await fetch(`${HUB}/auth/linear/connect?return=/projects/p1`, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    bob.jar.store(again);
+    await fetch((await fetch(again.headers.get('location')!, { redirect: 'manual' })).headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
+    check(((await api(bob.jar, 'GET', '/projects/p1')).body as { canWrite: boolean }).canWrite, 'after agreeing again the project page can edit at once');
+
     // an access token about to run out is refreshed first
     const { DatabaseSync } = await import('node:sqlite');
     const db = new DatabaseSync(path.join(dataDir, 'hub.db'));

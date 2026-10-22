@@ -629,3 +629,21 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 .svc-tool input { margin-top: 3px; }
 .svc-tool__desc { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 @media (max-width: 640px) { .svc-settings { margin-left: 0; } }
+
+/* 项目: editing issues in place */
+.proj-issue { all: unset; cursor: pointer; color: var(--aisa-text); }
+.proj-issue:hover { text-decoration: underline; }
+.proj-controls { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.proj-controls .aisa-select, .proj-controls .aisa-input { width: auto; max-width: 160px; }
+.proj-controls--compact { margin-top: 6px; }
+.proj-controls--compact .aisa-select, .proj-controls--compact .aisa-input { height: 28px; font-size: var(--aisa-text-xs); }
+.proj-alert { display: flex; align-items: center; gap: 12px; margin-bottom: var(--aisa-space-4); }
+.dialog .aisa { background: transparent; }
+.proj-panel__meta { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.proj-desc { white-space: pre-wrap; font-size: var(--aisa-text-sm); color: var(--aisa-text); line-height: 1.65; max-height: 280px; overflow: auto; padding: 12px; border-radius: 10px; background: var(--aisa-surface-sunken); }
+.proj-h4 { font-size: var(--aisa-text-sm); font-weight: 600; margin: 16px 0 6px; }
+.proj-comment { margin: 2px 0 0; white-space: pre-wrap; color: var(--aisa-text-secondary); }
+.proj-reply { display: grid; gap: 8px; margin-top: 10px; }
+.proj-form { display: grid; gap: 12px; }
+.proj-form .aisa-field { display: grid; gap: 6px; margin: 0; }
+.proj-form__row { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }

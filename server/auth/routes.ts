@@ -20,6 +20,7 @@ import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
 import { githubEnabled } from '../github/app.ts';
 import { finishLinearLink, linearAuthorizeUrl, linearEnabled } from '../linear/link.ts';
+import { forgetProjects } from '../linear/projects.ts';
 import { finishConnect, startConnect } from '../services/index.ts';
 import { HUB_COOKIE, STATE_COOKIE, createSession, deleteSession, safeReturnPath, sessionUser } from './session.ts';
 
@@ -231,7 +232,8 @@ authRoutes.get('/auth/linear/connect', (c) => {
   if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/linear/connect?return=${encodeURIComponent(ret)}`)}`);
   if (!linearEnabled()) return c.html(page(tr(L, 'linear.connect.title'), `<h1>${escapeHtml(tr(L, 'linear.connect.title'))}</h1><p>${escapeHtml(tr(L, 'linear.connect.noApp'))}</p>`, L), 400);
   const state = randomToken(16);
-  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|linear`, { ...cookieOpts, maxAge: 600 });
+  // half an hour: signing in to Linear and reading what is asked can take a while
+  setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|linear`, { ...cookieOpts, maxAge: 1800 });
   return c.redirect(linearAuthorizeUrl(state));
 });
 
@@ -248,6 +250,8 @@ authRoutes.get('/auth/linear/callback', async (c) => {
   if (!user || mode !== 'linear' || !expected || c.req.query('state') !== expected || !code) return failed(tr(L, 'login.failed.expired'), 400);
   try {
     await finishLinearLink(user, code);
+    // what was read with the earlier connection (e.g. read only) goes
+    forgetProjects(user);
     return c.redirect(ret);
   } catch (e) {
     console.error('[auth] linear link failed', e);
@@ -263,7 +267,7 @@ authRoutes.get('/auth/services/:id/connect', async (c) => {
   if (!user) return c.redirect(`/auth/login?return=${encodeURIComponent(`/auth/services/${c.req.param('id')}/connect?return=${encodeURIComponent(ret)}`)}`);
   try {
     const go = await startConnect(user, c.req.param('id'));
-    setCookie(c, STATE_COOKIE, `services|${encodeURIComponent(ret)}`, { ...cookieOpts, maxAge: 900 });
+    setCookie(c, STATE_COOKIE, `services|${encodeURIComponent(ret)}`, { ...cookieOpts, maxAge: 1800 });
     return c.redirect(go ?? ret);
   } catch (e) {
     const msg = e instanceof UserError ? e.localized(L) : (e as Error).message;

@@ -168,7 +168,7 @@ export async function startConnect(user: User, id: string): Promise<string | nul
 /** Back from the service's consent page: exchange the code for the person's tokens. Returns the service. */
 export async function finishConnect(user: User, state: string, code: string): Promise<string> {
   const c = get<ConnRow>('SELECT * FROM mcp_connections WHERE state = ? AND user_id = ?', state, user.id);
-  if (!c || !c.state_at || now() - c.state_at > 15 * 60_000) throw new UserError('err.services.expired');
+  if (!c || !c.state_at || now() - c.state_at > 30 * 60_000) throw new UserError('err.services.expired');
   const s = usable(user, c.service_id);
   const r = await auth(new Provider(s, user.id, state), { serverUrl: s.url, authorizationCode: code });
   if (r !== 'AUTHORIZED') throw new UserError('err.services.expired');

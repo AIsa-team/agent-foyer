@@ -1,11 +1,12 @@
 /**
  * The 项目 page: Linear projects as the person sees them in Linear, and one project in detail (milestones, recent
- * updates, issues by state). Read only; results are kept for a minute or two per person so moving around the page
- * stays quick.
+ * updates, issues by state). People who agreed to write access also change issues (state, assignee, priority, due
+ * date), comment, add issues and post project updates from it, as themselves; Linear decides what they may do.
+ * Reads are kept for a minute or two per person so moving around the page stays quick; a change forgets them.
  */
 import { type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
-import { linearQuery } from './link.ts';
+import { canWriteLinear, linearConnectUrl, linearQuery } from './link.ts';
 
 type Health = 'onTrack' | 'atRisk' | 'offTrack';
 interface Person { id?: string; name?: string; displayName?: string; avatarUrl?: string | null }
@@ -20,8 +21,9 @@ interface ProjectNode {
 interface IssueNode {
   id: string; identifier: string; title: string; url: string; priority?: number; priorityLabel?: string; dueDate?: string | null;
   estimate?: number | null; updatedAt?: string; completedAt?: string | null;
-  state?: { name: string; type: string } | null; assignee?: Person | null; projectMilestone?: { id: string } | null;
+  state?: { id?: string; name: string; type: string } | null; assignee?: Person | null; projectMilestone?: { id: string } | null; team?: { id: string } | null;
 }
+interface TeamNode { id: string; name: string; key: string; states?: { nodes: { id: string; name: string; type: string; position: number }[] }; members?: { nodes: Person[] } }
 
 const PROJECT_FIELDS = `
   id name description url icon color progress startDate targetDate updatedAt health
@@ -99,6 +101,7 @@ export function getProject(user: User, id: string) {
   return cached(`${user.id}|p|${id}`, 60_000, async () => {
     const r = await linearQuery<{ project: (ProjectNode & {
       projectMilestones?: { nodes: { id: string; name: string; targetDate?: string | null }[] };
+      editTeams?: { nodes: TeamNode[] };
       issues?: { nodes: IssueNode[]; pageInfo?: { hasNextPage: boolean } };
     }) | null }>(user, `
       query Project($id: String!) {
@@ -106,10 +109,11 @@ export function getProject(user: User, id: string) {
           ${PROJECT_FIELDS}
           projectUpdates(first: 5) { nodes { id body health createdAt url user { name displayName avatarUrl } } }
           projectMilestones { nodes { id name targetDate } }
+          editTeams: teams { nodes { id name key states { nodes { id name type position } } members { nodes { id name displayName avatarUrl } } } }
           issues(first: 250) {
             nodes {
               id identifier title url priority priorityLabel dueDate estimate updatedAt completedAt
-              state { name type } assignee { name displayName avatarUrl } projectMilestone { id }
+              state { id name type } assignee { id name displayName avatarUrl } projectMilestone { id } team { id }
             }
             pageInfo { hasNextPage }
           }
@@ -124,7 +128,8 @@ export function getProject(user: User, id: string) {
       id: i.id, identifier: i.identifier, title: i.title, url: i.url,
       priority: i.priority ?? 0, priorityLabel: i.priorityLabel ?? '', dueDate: i.dueDate ?? null, estimate: i.estimate ?? null,
       updatedAt: i.updatedAt ?? null, completedAt: i.completedAt ?? null,
-      state: i.state ? { name: i.state.name, type: i.state.type } : null, assignee: person(i.assignee), milestone: i.projectMilestone?.id ?? null,
+      state: i.state ? { id: i.state.id ?? null, name: i.state.name, type: i.state.type } : null, assignee: person(i.assignee),
+      assigneeId: i.assignee?.id ?? null, milestone: i.projectMilestone?.id ?? null, team: i.team?.id ?? null,
     }));
     const done = (i: (typeof issues)[number]) => i.state?.type === 'completed';
     const counted = (i: (typeof issues)[number]) => i.state?.type !== 'canceled';
@@ -138,6 +143,117 @@ export function getProject(user: User, id: string) {
       issues,
       issueCounts: { total: issues.filter(counted).length, done: issues.filter(done).length },
       moreIssues: !!p.issues?.pageInfo?.hasNextPage,
+      // what the edit controls offer: each team's workflow states (in Linear's order) and members
+      teamOptions: (p.editTeams?.nodes ?? []).map((t) => ({
+        id: t.id, name: t.name, key: t.key,
+        states: [...(t.states?.nodes ?? [])].sort((a, b) => STATE_ORDER.indexOf(a.type) - STATE_ORDER.indexOf(b.type) || a.position - b.position)
+          .map((x) => ({ id: x.id, name: x.name, type: x.type })),
+        members: (t.members?.nodes ?? []).map((m) => ({ id: m.id ?? '', ...person(m)! })).sort((a, b) => a.name.localeCompare(b.name)),
+      })),
+      canWrite: canWriteLinear(user),
     };
   });
+}
+const STATE_ORDER = ['triage', 'backlog', 'unstarted', 'started', 'completed', 'canceled'];
+
+// ---------------------------------------------------------------- one issue, and changing things
+const ISSUE_ID = /^[\w-]{1,64}$/;
+
+/** An issue with its description and comments, for the side panel. */
+export async function getIssue(user: User, id: string) {
+  if (!ISSUE_ID.test(id)) throw new UserError('err.linear.noIssue');
+  const r = await linearQuery<{ issue: (IssueNode & { description?: string | null; createdAt?: string; creator?: Person | null; comments?: { nodes: { id: string; body: string; createdAt: string; user?: Person | null }[] } }) | null }>(user, `
+    query Issue($id: String!) {
+      issue(id: $id) {
+        id identifier title description url priority priorityLabel dueDate createdAt completedAt
+        state { id name type } assignee { id name displayName avatarUrl } creator { name displayName avatarUrl } team { id } projectMilestone { id }
+        comments(first: 50) { nodes { id body createdAt user { name displayName avatarUrl } } }
+      }
+    }`, { id }).catch((e: Error) => {
+    if (/not found|Entity not found/i.test(e.message)) throw new UserError('err.linear.noIssue');
+    throw e;
+  });
+  const i = r.issue;
+  if (!i) throw new UserError('err.linear.noIssue');
+  return {
+    id: i.id, identifier: i.identifier, title: i.title, description: i.description ?? '', url: i.url,
+    priority: i.priority ?? 0, dueDate: i.dueDate ?? null, createdAt: i.createdAt ?? null, creator: person(i.creator),
+    state: i.state ? { id: i.state.id ?? null, name: i.state.name, type: i.state.type } : null,
+    assignee: person(i.assignee), assigneeId: i.assignee?.id ?? null, team: i.team?.id ?? null,
+    comments: [...(i.comments?.nodes ?? [])].sort((a, b) => a.createdAt.localeCompare(b.createdAt)).map((c) => ({ id: c.id, body: c.body, at: c.createdAt, by: person(c.user) })),
+    canWrite: canWriteLinear(user),
+  };
+}
+
+/** A change as the person; without write access they are sent to agree to it once. */
+async function change<T>(user: User, query: string, variables: Record<string, unknown>): Promise<T> {
+  if (!canWriteLinear(user)) throw new UserError('err.linear.needsWrite', { url: linearConnectUrl('/projects') });
+  try {
+    return await linearQuery<T>(user, query, variables);
+  } finally {
+    forgetProjects(user);
+  }
+}
+const ok = (r: { success?: boolean } | undefined) => {
+  if (!r?.success) throw new UserError('err.linear.notChanged');
+};
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+export async function updateIssue(user: User, id: string, patch: { stateId?: string; assigneeId?: string | null; priority?: number; dueDate?: string | null }) {
+  if (!ISSUE_ID.test(id)) throw new UserError('err.linear.noIssue');
+  const input: Record<string, unknown> = {};
+  if (patch.stateId !== undefined) input.stateId = patch.stateId;
+  if (patch.assigneeId !== undefined) input.assigneeId = patch.assigneeId;
+  if (patch.priority !== undefined) {
+    if (![0, 1, 2, 3, 4].includes(patch.priority)) throw new UserError('err.linear.badValue');
+    input.priority = patch.priority;
+  }
+  if (patch.dueDate !== undefined) {
+    if (patch.dueDate !== null && !DAY.test(patch.dueDate)) throw new UserError('err.linear.badValue');
+    input.dueDate = patch.dueDate;
+  }
+  if (!Object.keys(input).length) throw new UserError('err.linear.badValue');
+  const r = await change<{ issueUpdate: { success: boolean } }>(user, 'mutation Update($id: String!, $input: IssueUpdateInput!) { issueUpdate(id: $id, input: $input) { success } }', { id, input });
+  ok(r.issueUpdate);
+  return { ok: true };
+}
+
+export async function commentOnIssue(user: User, id: string, body: string) {
+  if (!ISSUE_ID.test(id)) throw new UserError('err.linear.noIssue');
+  const text = body.trim();
+  if (!text || text.length > 10_000) throw new UserError('err.linear.badValue');
+  const r = await change<{ commentCreate: { success: boolean } }>(user, 'mutation Comment($input: CommentCreateInput!) { commentCreate(input: $input) { success } }', { input: { issueId: id, body: text } });
+  ok(r.commentCreate);
+  return { ok: true };
+}
+
+export async function createIssue(user: User, projectId: string, input: { teamId: string; title: string; description?: string; assigneeId?: string | null; priority?: number; milestoneId?: string | null; dueDate?: string | null }) {
+  if (!ISSUE_ID.test(projectId) || !ISSUE_ID.test(input.teamId)) throw new UserError('err.linear.badValue');
+  const title = input.title.trim();
+  if (!title || title.length > 255) throw new UserError('err.linear.badValue');
+  if (input.dueDate && !DAY.test(input.dueDate)) throw new UserError('err.linear.badValue');
+  const r = await change<{ issueCreate: { success: boolean; issue?: { id: string; identifier: string; url: string } } }>(user,
+    'mutation Create($input: IssueCreateInput!) { issueCreate(input: $input) { success issue { id identifier url } } }', {
+      input: {
+        teamId: input.teamId, projectId, title,
+        ...(input.description?.trim() ? { description: input.description.trim() } : {}),
+        ...(input.assigneeId ? { assigneeId: input.assigneeId } : {}),
+        ...(input.priority !== undefined && [0, 1, 2, 3, 4].includes(input.priority) ? { priority: input.priority } : {}),
+        ...(input.milestoneId ? { projectMilestoneId: input.milestoneId } : {}),
+        ...(input.dueDate ? { dueDate: input.dueDate } : {}),
+      },
+    });
+  ok(r.issueCreate);
+  return r.issueCreate.issue ?? null;
+}
+
+const HEALTH = ['onTrack', 'atRisk', 'offTrack'];
+export async function postProjectUpdate(user: User, projectId: string, input: { body: string; health: string }) {
+  if (!ISSUE_ID.test(projectId) || !HEALTH.includes(input.health)) throw new UserError('err.linear.badValue');
+  const body = input.body.trim();
+  if (!body || body.length > 20_000) throw new UserError('err.linear.badValue');
+  const r = await change<{ projectUpdateCreate: { success: boolean } }>(user,
+    'mutation Post($input: ProjectUpdateCreateInput!) { projectUpdateCreate(input: $input) { success } }', { input: { projectId, body, health: input.health } });
+  ok(r.projectUpdateCreate);
+  return { ok: true };
 }

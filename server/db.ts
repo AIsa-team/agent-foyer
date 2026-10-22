@@ -576,6 +576,9 @@ const MIGRATIONS: string[] = [
     ok INTEGER NOT NULL,
     at INTEGER NOT NULL
   );
+  `,  // what each person's Linear connection allows (read, or read and write for editing on the 项目 page)
+  `
+  ALTER TABLE linear_connections ADD COLUMN scope TEXT;
   `,
 ];
 

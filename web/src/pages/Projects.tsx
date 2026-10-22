@@ -6,8 +6,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router';
 import { ganttChart, statTile } from '../brand/aisa-charts.js';
+import { api } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
-import { Icon, Loading, useApi } from '../ui';
+import { Dialog, Icon, Loading, useAction, useApi } from '../ui';
 import { moodOf, PaceRing } from './Home';
 
 type Health = 'onTrack' | 'atRisk' | 'offTrack';
@@ -22,11 +23,17 @@ export interface Project {
 }
 interface Issue {
   id: string; identifier: string; title: string; url: string; priority: number; priorityLabel: string; dueDate: string | null;
-  state: { name: string; type: string } | null; assignee: Person | null; milestone: string | null; completedAt: string | null;
+  state: { id: string | null; name: string; type: string } | null; assignee: Person | null; assigneeId: string | null;
+  milestone: string | null; team: string | null; completedAt: string | null;
 }
+interface Team { id: string; name: string; key: string; states: { id: string; name: string; type: string }[]; members: (Person & { id: string })[] }
 interface ProjectDetail extends Project {
   updates: Update[]; milestones: { id: string; name: string; targetDate: string | null; issues: number; done: number }[];
   issues: Issue[]; issueCounts: { total: number; done: number }; moreIssues: boolean;
+  teamOptions: Team[]; canWrite: boolean;
+}
+interface IssueDetail extends Omit<Issue, 'priorityLabel' | 'milestone' | 'completedAt'> {
+  description: string; createdAt: string | null; creator: Person | null; comments: { id: string; body: string; at: string; by: Person | null }[]; canWrite: boolean;
 }
 interface LinearStatus { available: boolean; connected: boolean; name: string | null; workspace: string | null; connectUrl: string }
 
@@ -260,11 +267,174 @@ function PaceCard({ p }: { p: ProjectDetail }) {
   );
 }
 
+const PRIORITIES = [1, 2, 3, 4, 0] as const;
+
+/** State, assignee, priority and due date of an issue, as controls when the person may change them. */
+function IssueControls({ issue, teams, canWrite, onChanged, compact }: { issue: Pick<Issue, 'id' | 'state' | 'assigneeId' | 'priority' | 'dueDate' | 'team'>; teams: Team[]; canWrite: boolean; onChanged: () => void; compact?: boolean }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const team = teams.find((x) => x.id === issue.team) ?? teams[0];
+  const save = (patch: Record<string, unknown>) => run(() => api.patch(`/linear/issues/${issue.id}`, patch), t('projects.saved')).then((ok) => ok && onChanged());
+  if (!canWrite || !team) return null;
+  const cls = 'aisa-select aisa-select--sm';
+  return (
+    <div className={compact ? 'proj-controls proj-controls--compact' : 'proj-controls'}>
+      <select className={cls} disabled={busy} value={issue.state?.id ?? ''} aria-label={t('projects.f.state')} onChange={(e) => save({ stateId: e.target.value })}>
+        {team.states.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}
+      </select>
+      <select className={cls} disabled={busy} value={issue.assigneeId ?? ''} aria-label={t('projects.f.assignee')} onChange={(e) => save({ assigneeId: e.target.value || null })}>
+        <option value="">{t('projects.unassigned')}</option>
+        {team.members.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+      </select>
+      <select className={cls} disabled={busy} value={issue.priority} aria-label={t('projects.f.priority')} onChange={(e) => save({ priority: Number(e.target.value) })}>
+        {PRIORITIES.map((n) => <option key={n} value={n}>{t(`projects.priority.${n}` as MessageKey)}</option>)}
+      </select>
+      <input className="aisa-input aisa-input--sm" type="date" disabled={busy} value={issue.dueDate ?? ''} aria-label={t('projects.f.due')} onChange={(e) => save({ dueDate: e.target.value || null })} />
+    </div>
+  );
+}
+
+/** One issue: its controls, description and comments, with a box to reply. */
+function IssuePanel({ id, teams, onClose, onChanged }: { id: string; teams: Team[]; onClose: () => void; onChanged: () => void }) {
+  const { t, ago } = useI18n();
+  const { data: i, error, reload } = useApi<IssueDetail>(`/linear/issues/${id}`);
+  const { busy, run } = useAction();
+  const [comment, setComment] = useState('');
+  const changed = () => { reload(); onChanged(); };
+  const send = () => run(() => api.post(`/linear/issues/${id}/comments`, { body: comment }), t('projects.commented')).then((ok) => ok && (setComment(''), reload()));
+  return (
+    <Dialog title={i ? `${i.identifier} ${i.title}` : t('common.loading')} onClose={onClose} width={720}>
+      {!i ? <Loading error={error} /> : (
+        <div className="aisa proj-panel">
+          <div className="proj-panel__meta">
+            {i.canWrite ? <IssueControls issue={i} teams={teams} canWrite onChanged={changed} /> : (
+              <span className="aisa-small aisa-muted">{i.state?.name} · {i.assignee?.name ?? t('projects.unassigned')} · {t(`projects.priority.${i.priority}` as MessageKey)}</span>
+            )}
+            <a className="aisa-btn aisa-btn--sm aisa-btn--ghost" href={i.url} target="_blank" rel="noreferrer">{t('projects.openInLinear')} <Icon name="external" size={12} /></a>
+          </div>
+          {i.description ? <div className="proj-desc">{i.description}</div> : <p className="aisa-small aisa-muted">{t('projects.noDescription')}</p>}
+          <h4 className="proj-h4">{t('projects.comments', { n: i.comments.length })}</h4>
+          {i.comments.length > 0 && (
+            <ul className="aisa-feed">
+              {i.comments.map((c) => (
+                <li key={c.id}>
+                  <PersonDot p={c.by} />
+                  <div style={{ minWidth: 0 }}><b>{c.by?.name ?? '—'}</b><p className="proj-comment">{c.body}</p></div>
+                  <time>{ago(Date.parse(c.at))}</time>
+                </li>
+              ))}
+            </ul>
+          )}
+          {i.canWrite && (
+            <div className="proj-reply">
+              <textarea className="aisa-textarea" rows={3} value={comment} maxLength={10000} placeholder={t('projects.commentPh')} onChange={(e) => setComment(e.target.value)} />
+              <div className="aisa-row" style={{ justifyContent: 'flex-end' }}>
+                <button className="aisa-btn aisa-btn--primary aisa-btn--sm" type="button" disabled={busy || !comment.trim()} onClick={send}>{t('projects.comment')}</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </Dialog>
+  );
+}
+
+function PersonDot({ p }: { p: Person | null }) {
+  if (p?.avatar) return <img className="aisa-avatar aisa-avatar--md" src={p.avatar} alt="" />;
+  return <span className="aisa-avatar aisa-avatar--md">{(p?.name ?? '?').slice(0, 1).toUpperCase()}</span>;
+}
+
+/** A new issue in this project. */
+function NewIssueDialog({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => void }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const [f, setF] = useState({ teamId: p.teamOptions[0]?.id ?? '', title: '', description: '', assigneeId: '', priority: 0, milestoneId: '', dueDate: '' });
+  const team = p.teamOptions.find((x) => x.id === f.teamId);
+  const submit = () => run(() => api.post(`/projects/${p.id}/issues`, { ...f, assigneeId: f.assigneeId || null, milestoneId: f.milestoneId || null, dueDate: f.dueDate || null }), t('projects.created'))
+    .then((ok) => ok && (onDone(), onClose()));
+  return (
+    <Dialog title={t('projects.newIssue')} subtitle={p.name} onClose={onClose} width={620}>
+      <div className="aisa proj-form">
+        {p.teamOptions.length > 1 && (
+          <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.team')}</span>
+            <select className="aisa-select" value={f.teamId} onChange={(e) => setF({ ...f, teamId: e.target.value, assigneeId: '' })}>{p.teamOptions.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select>
+          </label>
+        )}
+        <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.title')}</span>
+          <input className="aisa-input" value={f.title} maxLength={255} onChange={(e) => setF({ ...f, title: e.target.value })} />
+        </label>
+        <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.description')} <span className="aisa-muted">{t('requests.f.optional')}</span></span>
+          <textarea className="aisa-textarea" rows={4} value={f.description} onChange={(e) => setF({ ...f, description: e.target.value })} />
+        </label>
+        <div className="proj-form__row">
+          <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.assignee')}</span>
+            <select className="aisa-select" value={f.assigneeId} onChange={(e) => setF({ ...f, assigneeId: e.target.value })}>
+              <option value="">{t('projects.unassigned')}</option>
+              {(team?.members ?? []).map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </label>
+          <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.priority')}</span>
+            <select className="aisa-select" value={f.priority} onChange={(e) => setF({ ...f, priority: Number(e.target.value) })}>
+              {PRIORITIES.map((n) => <option key={n} value={n}>{t(`projects.priority.${n}` as MessageKey)}</option>)}
+            </select>
+          </label>
+        </div>
+        <div className="proj-form__row">
+          {p.milestones.length > 0 && (
+            <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.milestone')}</span>
+              <select className="aisa-select" value={f.milestoneId} onChange={(e) => setF({ ...f, milestoneId: e.target.value })}>
+                <option value="">{t('projects.noMilestone')}</option>
+                {p.milestones.map((m) => <option key={m.id} value={m.id}>{m.name}</option>)}
+              </select>
+            </label>
+          )}
+          <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.due')}</span>
+            <input className="aisa-input" type="date" value={f.dueDate} onChange={(e) => setF({ ...f, dueDate: e.target.value })} />
+          </label>
+        </div>
+        <div className="aisa-row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button className="aisa-btn" type="button" onClick={onClose}>{t('common.cancel')}</button>
+          <button className="aisa-btn aisa-btn--primary" type="button" disabled={busy || !f.title.trim() || !f.teamId} onClick={submit}>{t('projects.create')}</button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
+/** A project update: how it is going (health) and what happened. */
+function UpdateDialog({ p, onClose, onDone }: { p: ProjectDetail; onClose: () => void; onDone: () => void }) {
+  const { t } = useI18n();
+  const { busy, run } = useAction();
+  const [health, setHealth] = useState<Health>(p.health ?? 'onTrack');
+  const [body, setBody] = useState('');
+  const submit = () => run(() => api.post(`/projects/${p.id}/updates`, { health, body }), t('projects.posted')).then((ok) => ok && (onDone(), onClose()));
+  return (
+    <Dialog title={t('projects.writeUpdate')} subtitle={p.name} onClose={onClose} width={620}>
+      <div className="aisa proj-form">
+        <div className="aisa-field"><span className="aisa-field__label">{t('projects.col.health')}</span>
+          <div className="aisa-segmented" role="group" aria-label={t('projects.col.health')}>
+            {(['onTrack', 'atRisk', 'offTrack'] as Health[]).map((h) => <button key={h} type="button" aria-pressed={health === h} onClick={() => setHealth(h)}>{t(`projects.health.${h}` as MessageKey)}</button>)}
+          </div>
+        </div>
+        <label className="aisa-field"><span className="aisa-field__label">{t('projects.f.update')}</span>
+          <textarea className="aisa-textarea" rows={7} value={body} placeholder={t('projects.updatePh')} onChange={(e) => setBody(e.target.value)} />
+        </label>
+        <div className="aisa-row" style={{ justifyContent: 'flex-end', gap: 8 }}>
+          <button className="aisa-btn" type="button" onClick={onClose}>{t('common.cancel')}</button>
+          <button className="aisa-btn aisa-btn--primary" type="button" disabled={busy || !body.trim()} onClick={submit}>{t('projects.post')}</button>
+        </div>
+      </div>
+    </Dialog>
+  );
+}
+
 export function ProjectDetailPage() {
   const { t, locale } = useI18n();
   const { id } = useParams();
-  const { data: p, error } = useApi<ProjectDetail>(`/projects/${id}`);
+  const { data: p, error, reload } = useApi<ProjectDetail>(`/projects/${id}`);
   const [group, setGroup] = useState<(typeof ISSUE_GROUPS)[number]>('started');
+  const [panel, setPanel] = useState<string | null>(null);
+  const [dialog, setDialog] = useState<'issue' | 'update' | null>(null);
   const fmt = (d: string | null) => (d ? new Date(`${d}T00:00:00`).toLocaleDateString(locale, { year: 'numeric', month: 'short', day: 'numeric' }) : '—');
   const when = (iso: string | null) => (iso ? new Date(iso).toLocaleString(locale, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '');
   const crumb = (
@@ -285,8 +455,18 @@ export function ProjectDetailPage() {
           <h1>{p.name}</h1>
           {p.description && <p>{p.description}</p>}
         </div>
-        <a className="aisa-btn" href={p.url} target="_blank" rel="noreferrer">{t('projects.openInLinear')} <Icon name="external" size={13} /></a>
+        <div className="aisa-row" style={{ gap: 8, flexWrap: 'wrap' }}>
+          {p.canWrite && <button className="aisa-btn" type="button" onClick={() => setDialog('update')}>{t('projects.writeUpdate')}</button>}
+          {p.canWrite && p.teamOptions.length > 0 && <button className="aisa-btn aisa-btn--primary" type="button" onClick={() => setDialog('issue')}><Icon name="plus" size={13} /> {t('projects.newIssue')}</button>}
+          <a className="aisa-btn" href={p.url} target="_blank" rel="noreferrer">{t('projects.openInLinear')} <Icon name="external" size={13} /></a>
+        </div>
       </div>
+      {!p.canWrite && (
+        <div className="aisa-alert proj-alert">
+          <div className="grow">{t('projects.readOnlyHint')}</div>
+          <a className="aisa-btn aisa-btn--sm" href={`/auth/linear/connect?return=${encodeURIComponent(`/projects/${p.id}`)}`}>{t('projects.allowEdit')}</a>
+        </div>
+      )}
 
       <div className="proj-top">
         <PaceCard p={p} />
@@ -335,9 +515,14 @@ export function ProjectDetailPage() {
                     {issues.map((i) => (
                       <tr key={i.id}>
                         <td className="aisa-small aisa-muted proj-id">{i.identifier}</td>
-                        <td className="proj-issue-title"><a href={i.url} target="_blank" rel="noreferrer" className="proj-issue">{i.title}</a>{i.state && <div className="aisa-small aisa-muted">{i.state.name}{i.priorityLabel && i.priority ? ` · ${i.priorityLabel}` : ''}</div>}</td>
-                        <td className="aisa-hide-sm"><PersonChip p={i.assignee} /></td>
-                        <td className="aisa-hide-sm aisa-small">{i.dueDate ? <span className={daysTo(i.dueDate) < 0 && group !== 'completed' ? 'proj-late' : ''}>{fmt(i.dueDate)}</span> : ''}</td>
+                        <td className="proj-issue-title">
+                          <button type="button" className="proj-issue" onClick={() => setPanel(i.id)}>{i.title}</button>
+                          {p.canWrite
+                            ? <IssueControls issue={i} teams={p.teamOptions} canWrite onChanged={reload} compact />
+                            : i.state && <div className="aisa-small aisa-muted">{i.state.name}{i.priorityLabel && i.priority ? ` · ${i.priorityLabel}` : ''}</div>}
+                        </td>
+                        {!p.canWrite && <td className="aisa-hide-sm"><PersonChip p={i.assignee} /></td>}
+                        {!p.canWrite && <td className="aisa-hide-sm aisa-small">{i.dueDate ? <span className={daysTo(i.dueDate) < 0 && group !== 'completed' ? 'proj-late' : ''}>{fmt(i.dueDate)}</span> : ''}</td>}
                       </tr>
                     ))}
                   </tbody>
@@ -367,6 +552,9 @@ export function ProjectDetailPage() {
           </div>
         </section>
       </div>
+      {panel && <IssuePanel id={panel} teams={p.teamOptions} onClose={() => setPanel(null)} onChanged={reload} />}
+      {dialog === 'issue' && <NewIssueDialog p={p} onClose={() => setDialog(null)} onDone={reload} />}
+      {dialog === 'update' && <UpdateDialog p={p} onClose={() => setDialog(null)} onDone={reload} />}
     </div>
   );
 }

@@ -1,5 +1,7 @@
 /**
- * Each person's Linear connection: they agree once on Linear (read only), the hub keeps their tokens encrypted and
+ * Each person's Linear connection: they agree once on Linear (read and write, so the 项目 page can also change
+ * issues and post updates as them; connections made before that are read only until they agree again), the hub
+ * keeps their tokens encrypted and
  * refreshes them (Linear access tokens last about a day). Everything is then read as that person, so the 项目 page
  * shows only the teams and projects they can see in Linear.
  */
@@ -12,15 +14,15 @@ export const linearEnabled = () => !!config.linear.clientId && !!config.linear.c
 export const CALLBACK = () => `${config.hubUrl}/auth/linear/callback`;
 export const linearConnectUrl = (returnPath: string) => `${config.hubUrl}/auth/linear/connect?return=${encodeURIComponent(returnPath)}`;
 
-interface Row { user_id: string; access_enc: string; refresh_enc: string | null; expires_at: number; linear_id: string | null; linear_name: string | null; workspace: string | null; connected_at: number }
-interface Tokens { access_token?: string; refresh_token?: string; expires_in?: number; error?: string; error_description?: string }
+interface Row { user_id: string; access_enc: string; refresh_enc: string | null; expires_at: number; linear_id: string | null; linear_name: string | null; workspace: string | null; connected_at: number; scope: string | null }
+interface Tokens { access_token?: string; refresh_token?: string; expires_in?: number; scope?: string | string[]; error?: string; error_description?: string }
 
 export function linearAuthorizeUrl(state: string): string {
   const u = new URL(`${config.linear.authBase}/oauth/authorize`);
   u.searchParams.set('client_id', config.linear.clientId);
   u.searchParams.set('redirect_uri', CALLBACK());
   u.searchParams.set('response_type', 'code');
-  u.searchParams.set('scope', 'read');
+  u.searchParams.set('scope', 'read,write');
   u.searchParams.set('state', state);
   u.searchParams.set('prompt', 'consent');
   return u.toString();
@@ -39,13 +41,18 @@ async function tokenRequest(params: Record<string, string>): Promise<Tokens & { 
 
 function keep(userId: string, t: Tokens & { access_token: string }, who?: { id: string; name: string; workspace: string }) {
   const expires = now() + (t.expires_in ?? 86_400) * 1000;
-  run(`INSERT INTO linear_connections (user_id, access_enc, refresh_enc, expires_at, linear_id, linear_name, workspace, connected_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  // Linear answers "read write" (newer apps) or ["read", "write"]
+  const scope = t.scope ? (Array.isArray(t.scope) ? t.scope : t.scope.split(/[\s,]+/)).filter(Boolean).join(' ') : null;
+  run(`INSERT INTO linear_connections (user_id, access_enc, refresh_enc, expires_at, linear_id, linear_name, workspace, connected_at, scope)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(user_id) DO UPDATE SET access_enc = excluded.access_enc, refresh_enc = COALESCE(excluded.refresh_enc, refresh_enc),
          expires_at = excluded.expires_at, linear_id = COALESCE(excluded.linear_id, linear_id), linear_name = COALESCE(excluded.linear_name, linear_name),
-         workspace = COALESCE(excluded.workspace, workspace)`,
-  userId, encrypt(t.access_token), t.refresh_token ? encrypt(t.refresh_token) : null, expires, who?.id ?? null, who?.name ?? null, who?.workspace ?? null, now());
+         workspace = COALESCE(excluded.workspace, workspace), scope = COALESCE(excluded.scope, scope)`,
+  userId, encrypt(t.access_token), t.refresh_token ? encrypt(t.refresh_token) : null, expires, who?.id ?? null, who?.name ?? null, who?.workspace ?? null, now(), scope);
 }
+
+/** Whether the person's connection may change things in Linear (agreed to write access). */
+export const canWriteLinear = (user: User) => /\bwrite\b/.test(get<{ scope: string | null }>('SELECT scope FROM linear_connections WHERE user_id = ?', user.id)?.scope ?? '');
 
 /** After the person agreed on Linear: keep their tokens and who they are there. */
 export async function finishLinearLink(user: User, code: string) {
@@ -60,7 +67,7 @@ export function unlinkLinear(user: User) {
 
 export function linearStatus(user: User) {
   const r = get<Row>('SELECT * FROM linear_connections WHERE user_id = ?', user.id);
-  return { available: linearEnabled(), connected: !!r, name: r?.linear_name ?? null, workspace: r?.workspace ?? null, connectUrl: linearConnectUrl('/projects') };
+  return { available: linearEnabled(), connected: !!r, canWrite: !!r && /\bwrite\b/.test(r.scope ?? ''), name: r?.linear_name ?? null, workspace: r?.workspace ?? null, connectUrl: linearConnectUrl('/projects') };
 }
 
 // ---------------------------------------------------------------- reading as the person

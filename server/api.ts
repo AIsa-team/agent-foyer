@@ -12,7 +12,7 @@ import { githubEnabled } from './github/app.ts';
 import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
 import { contributions } from './github/contributions.ts';
 import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
-import { forgetProjects, getProject, listProjects } from './linear/projects.ts';
+import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
@@ -204,6 +204,20 @@ api.get('/projects', async (c) => {
   return c.json({ status, projects: await listProjects(u) });
 });
 api.get('/projects/:id', async (c) => c.json(await getProject(c.get('user'), c.req.param('id'))));
+api.post('/projects/:id/issues', async (c) => {
+  const b = await body<{ teamId: string; title: string; description?: string; assigneeId?: string | null; priority?: number; milestoneId?: string | null; dueDate?: string | null }>(c);
+  return c.json(await createIssue(c.get('user'), c.req.param('id'), { ...b, teamId: String(b.teamId ?? ''), title: String(b.title ?? '') }));
+});
+api.post('/projects/:id/updates', async (c) => {
+  const b = await body<{ body: string; health: string }>(c);
+  return c.json(await postProjectUpdate(c.get('user'), c.req.param('id'), { body: String(b.body ?? ''), health: String(b.health ?? '') }));
+});
+api.get('/linear/issues/:id', async (c) => c.json(await getIssue(c.get('user'), c.req.param('id'))));
+api.patch('/linear/issues/:id', async (c) => c.json(await updateIssue(c.get('user'), c.req.param('id'), await body<{ stateId?: string; assigneeId?: string | null; priority?: number; dueDate?: string | null }>(c))));
+api.post('/linear/issues/:id/comments', async (c) => {
+  const b = await body<{ body: string }>(c);
+  return c.json(await commentOnIssue(c.get('user'), c.req.param('id'), String(b.body ?? '')));
+});
 
 api.get('/github/status', (c) => {
   const u = c.get('user');
