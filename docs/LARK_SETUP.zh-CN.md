@@ -60,7 +60,7 @@
 | `bitable:app`（查看、评论、编辑和管理多维表格）**可选** | 只有同事做的应用要**写**多维表格时才需要（例如开票助手写一条申请）。只在用到写入的应用里、由使用者本人在授权页同意时才会请求 |
 | `okr:okr:readonly`（获取 OKR 信息） | 首页「我的 OKR」和 Agent 读 OKR：读的是当前这个人在 Lark OKR 里能看到的 |
 | `docx:document:readonly`（查看云文档） | Agent 读这个人能打开的 Lark 文档（制度、SOP、日报等） |
-| `docx:document`（编辑云文档）、`docx:document:create`（创建云文档）**可选** | Agent 替这个人新建 Lark 文档（Markdown 转成文档），或填日报里他自己的那几行。第一次用到时才会请求 |
+| `docx:document`（编辑云文档）、`docx:document:create`（创建云文档）**可选** | Agent 替这个人新建 Lark 文档（Markdown 转成文档），或修改他有权编辑的文档（比如日报里他自己的单元格）。第一次用到时才会请求 |
 | `wiki:wiki`（编辑知识库）**可选** | Agent 把新文档直接建在某个知识库页面下面。只在第一次这样做时请求 |
 
 指标提醒要由中台机器人在 Lark 里发消息：

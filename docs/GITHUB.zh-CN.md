@@ -55,8 +55,4 @@ GitHub 的 commit 搜索只覆盖默认分支。开了 PR 的分支没问题（�
 
 ## 4. 日报
 
-日报是 Lark 知识库里某个页面下、每天一篇的文档（例如「团队工作日报 1020」）。每个项目一张表，第一列 @ 到负责人，后面是「昨天完成 / 今天计划 / 卡点」之类的列。
-
-- 管理员让 Agent 调一次 `set_daily_report`：给日报所在的知识库页面链接，以及标题格式，例如 `团队工作日报 {MM}{DD}`（可用 `{YYYY} {MM} {DD} {M} {D}`，按 `HUB_TIMEZONE` 取日期）。
-- `get_daily_report` 读某天的日报：每张表、你自己的那几行、还有谁没填。
-- `fill_daily_report` 以你本人的身份写你自己那几行。第一次写时会请你授权中台编辑 Lark 文档，对应 Lark 权限 `docx:document`（见 [LARK_SETUP](LARK_SETUP.zh-CN.md)）。
+中台本身没有日报功能，起草日报是一个大家自己选择装不装的 Skill。示例在 [`skills/daily-report`](../skills/daily-report/SKILL.md)：用 `list_lark_wiki` 找到知识库页面下当天的 Lark 文档，用 `read_lark_doc`（带 `tables`）读出表格，收集这个人做了什么（`github_activity`、Agent 接了 Linear MCP 时的 Linear、本人补充的内容），本人同意后用 `edit_lark_doc` 写入他自己的单元格。在 Skill 开头填好知识库页面和标题格式，再发布到 Skill 市场。第一次写入时会请每个人授权中台编辑 Lark 文档，对应 Lark 权限 `docx:document`（见 [LARK_SETUP](LARK_SETUP.zh-CN.md)）。

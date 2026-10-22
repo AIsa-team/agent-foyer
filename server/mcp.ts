@@ -24,8 +24,7 @@ import * as resources from './apps/resources.ts';
 import { githubEnabled } from './github/app.ts';
 import { githubActivity } from './github/activity.ts';
 import { githubConnectUrl } from './github/link.ts';
-import { fillDailyReport, readDailyReport, setDailyConfig } from './lark/daily.ts';
-import { createDoc, readDoc } from './lark/docs.ts';
+import { createDoc, editDoc, listWiki, readDoc } from './lark/docs.ts';
 import * as boards from './boards.ts';
 import { createUpload, type UploadPurpose } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -68,7 +67,7 @@ Data apps: ${LARK ? 'data that is not in Lark Base' : 'company data'} (Metabase,
 Data connections: systems the hub reads itself, set up by admins on the admin page with their key (today: Metabase). When one exists, register its items with save_data_source (connection + item; admins, see browse_connection) instead of building a data app; each such source has an audience that admins set (set_data_source_audience). For a system with no connection, build a data app.
 Shared dashboards: the Data page holds boards for the whole company or a department (save_board), built from the same modules as home pages; use them for numbers a team looks at together, and home pages for what one person wants to see.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Lark documents: read_lark_doc reads one as Markdown; create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). The first time, the user is asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Daily report: get_daily_report reads the team's report for a day; fill_daily_report writes the user's own rows as the user. To draft it, gather what they did (github_activity when GitHub is connected, plus what they tell you), match the work to the report's sections and columns, show the draft and write after they agree, unless they asked beforehand for it to be written without asking: then write it, mark it as written by an agent and tell them afterwards what was written. Never invent work; leave tomorrow's plan and blockers empty unless they gave them.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Lark documents: read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -511,7 +510,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'application/json', text: JSON.stringify({ sources: dataSources.listSources(locale, user), howToRead: 'query_data for totals and trends, read_data_rows for the records' }, null, 2) }] }));
   server.registerResource('instructions', 'hub://instructions', {
     title: `How to use the ${config.companyName} hub`,
-    description: 'What the hub offers and how to use it: company data, apps, Skills, Lark documents, daily reports.',
+    description: 'What the hub offers and how to use it: company data, apps, Skills, Lark documents.',
     mimeType: 'text/markdown',
   }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUCTIONS }] }));
 
@@ -764,9 +763,26 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     }, guard(async () => ({ periods: await listPeriods(user, locale) })));
 
     server.registerTool('read_lark_doc', {
-      description: 'Reads a Lark document (or the document behind a wiki page) as Markdown, with the user\'s own Lark access: policies, SOPs, meeting notes, specs. Give its link.',
-      inputSchema: { url: z.string().describe('link to a Lark document (/docx/...) or wiki page (/wiki/...)') },
-    }, guard((a: { url: string }) => readDoc(user, a.url)));
+      description: 'Reads a Lark document (or the document behind a wiki page) as Markdown, with the user\'s own Lark access: policies, SOPs, meeting notes, specs, reports. Give its link. tables: true also returns each table under the heading it sits under, row by row, each cell with its id, text and the people @mentioned in it, for edit_lark_doc.',
+      inputSchema: {
+        url: z.string().describe('link to a Lark document (/docx/...) or wiki page (/wiki/...)'),
+        tables: z.boolean().optional(),
+      },
+    }, guard((a: { url: string; tables?: boolean }) => readDoc(user, a.url, { tables: a.tables })));
+
+    server.registerTool('list_lark_wiki', {
+      description: 'The pages under a Lark wiki page (title, link, type, when created), with the user\'s own Lark access, e.g. to find a page by its title among many. title keeps the pages whose title contains it.',
+      inputSchema: { url: z.string().describe('link to the wiki page (/wiki/...)'), title: z.string().optional() },
+    }, guard((a: { url: string; title?: string }) => listWiki(user, a.url, a.title)));
+
+    server.registerTool('edit_lark_doc', {
+      description: 'Changes a Lark document as the user: edits replace the whole text of table cells or paragraphs by their id (from read_lark_doc with tables: true; a line break starts a new paragraph in a cell), append adds Markdown at the end. The user can only change documents they may edit in Lark, and Lark shows them as the editor. Read the document first, change only what the user meant, and keep everything else.',
+      inputSchema: {
+        url: z.string().describe('link to the document or wiki page'),
+        edits: z.array(z.object({ id: z.string(), text: z.string() })).max(200).optional(),
+        append: z.string().optional().describe('Markdown to add at the end'),
+      },
+    }, guard((a: { url: string; edits?: { id: string; text: string }[]; append?: string }) => editDoc(user, a.url, a)));
 
     server.registerTool('create_lark_doc', {
       description: 'Creates a Lark document from Markdown as the user (they own it) and returns its link. Headings, lists, tables, quotes, code and links carry over; images are left out. Without parent it goes to the user\'s own space; parent can be a wiki page (the document becomes a page under it) or a Drive folder. Show the user the outline first if they have not seen the content, and send them the link afterwards.',
@@ -777,23 +793,6 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
       },
     }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
-    server.registerTool('get_daily_report', {
-      description: 'The team\'s daily report for a day (default: today, company time zone), read with the user\'s Lark access: each section\'s table (columns, and each person\'s row), the user\'s own rows, and who has not filled theirs in yet. Read it before fill_daily_report to see the sections and columns.',
-      inputSchema: { date: z.string().optional().describe('YYYY-MM-DD; default: today') },
-    }, guard((a: { date?: string }) => readDailyReport(user, a.date)));
-
-    server.registerTool('fill_daily_report', {
-      description: 'Writes the user\'s own rows in the daily report, as the user. Write only what has a source (github_activity, what the user told you); leave plan and blockers empty unless the user gave them. By default show the draft and write after the user agrees; when the user asked beforehand for it to be written without asking, write it directly, mark it as written by an agent, and tell them afterwards what was written. Each row names a section as returned by get_daily_report and gives the columns after the person, in order (e.g. [done yesterday, plan today, blockers]); null or "" leaves a column as it is. Use one line per item.',
-      inputSchema: {
-        date: z.string().optional().describe('YYYY-MM-DD; default: today'),
-        rows: z.array(z.object({ section: z.string(), cells: z.array(z.string().nullable()) })).min(1),
-      },
-    }, guard((a: { date?: string; rows: { section: string; cells: (string | null)[] }[] }) => fillDailyReport(user, a)));
-
-    server.registerTool('set_daily_report', {
-      description: 'Admin: where the daily reports are. folder_url is the Lark wiki page whose child pages are the reports; title is their title with a date placeholder, e.g. "团队工作日报 {MM}{DD}" ({YYYY} {MM} {DD} {M} {D}, in the company time zone).',
-      inputSchema: { folder_url: z.string(), title: z.string() },
-    }, guard((a: { folder_url: string; title: string }) => setDailyConfig(user, a.folder_url, a.title)));
   }
 
   if (githubEnabled()) {

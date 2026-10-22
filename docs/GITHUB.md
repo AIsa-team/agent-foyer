@@ -55,8 +55,10 @@ The hub checks the signature and keeps pushed commits for 90 days, starting from
 
 ## 4. The daily report
 
-The daily report is one Lark document per day under a wiki page (e.g. "Daily report 1020"). Each project is a table whose first column @mentions the person, followed by columns like "done yesterday / plan today / blockers".
-
-- An admin has an agent call `set_daily_report` once: the wiki page the reports live under and the title pattern, e.g. `Daily report {MM}{DD}` (`{YYYY} {MM} {DD} {M} {D}`, dated in `HUB_TIMEZONE`).
-- `get_daily_report` reads a day's report: every table, your own rows and who hasn't filled theirs in.
-- `fill_daily_report` writes your own rows as you. The first time, it asks you to let the hub edit Lark documents, the Lark scope `docx:document` (see [LARK_SETUP](LARK_SETUP.md)).
+The hub has no daily-report feature of its own: drafting one is a Skill people choose to install. The example in
+[`skills/daily-report`](../skills/daily-report/SKILL.md) finds the day's Lark document under a wiki page
+(`list_lark_wiki`), reads its tables (`read_lark_doc` with `tables`), gathers the person's work (`github_activity`,
+Linear if their agent has the Linear MCP, what they say) and, after they agree, writes their own cells
+(`edit_lark_doc`). Set the wiki page and title pattern at the top of the Skill, then publish it to the Skill market.
+Writing asks each person once to let the hub edit Lark documents, the Lark scope `docx:document` (see
+[LARK_SETUP](LARK_SETUP.md)).

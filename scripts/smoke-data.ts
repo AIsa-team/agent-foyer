@@ -447,6 +447,13 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     lark.made.set(id, { title: body.title, folder: `wiki:${body.parent_node_token}`, blocks: [], calls: 0 });
     return send({ code: 0, data: { node: { node_token: `wikMade${lark.made.size}`, obj_token: id, obj_type: 'docx', title: body.title, space_id: 'sp1' } } });
   }
+  // a created document read back: its title and (for edit_lark_doc) a root block
+  const madeDoc = p.match(/^\/docx\/v1\/documents\/(doxMade\d+)(\/blocks)?$/);
+  if (madeDoc && lark.made.has(madeDoc[1]) && req.method === 'GET') {
+    return madeDoc[2]
+      ? send({ code: 0, data: { items: [{ block_id: madeDoc[1], block_type: 1, children: [] }], has_more: false } })
+      : send({ code: 0, data: { document: { document_id: madeDoc[1], title: lark.made.get(madeDoc[1])!.title } } });
+  }
   const descendant = p.match(/^\/docx\/v1\/documents\/(\w+)\/blocks\/(\w+)\/descendant$/);
   if (descendant) {
     const d = lark.made.get(descendant[1]);
@@ -479,6 +486,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     ] } });
   }
   if (p === '/docx/v1/documents/doxFolder') return send({ code: 0, data: { document: { document_id: 'doxFolder', title: '团队日会' } } });
+  if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wik1020') {
+    return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wik1020', title: '团队工作日报 1020', obj_type: 'docx', obj_token: 'doxDaily' } } });
+  }
   if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikDaily') {
     return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wikDaily', title: '团队日会', obj_type: 'docx', obj_token: 'doxFolder' } } });
   }
@@ -501,6 +511,12 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     }
     const block = lark.doc.get(id);
     if (!block) return send({ code: 1770002, msg: 'not found' });
+    if (!sub && req.method === 'PATCH') {
+      if (!lark.docsTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [docx:document]' });
+      const key = Object.keys(block).find((k) => (block[k] as { elements?: unknown })?.elements)!;
+      block[key] = { elements: body.update_text_elements.elements };
+      return send({ code: 0, data: { block } });
+    }
     if (!sub) return send({ code: 0, data: { block } });
     if (!lark.docsTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [docx:document]' });
     if (sub === '/children' && req.method === 'POST') {
@@ -1572,30 +1588,37 @@ try {
   check(act2.commits?.map((c: { sha: string }) => c.sha).join() === 'aaaaaaa,bbbbbbb,eeeeeee', 'pushed branch commits join the search results, without duplicates');
   check(act2.commits.find((c: { sha: string }) => c.sha === 'eeeeeee')?.branch === 'feature/report' && act2.commits[2].message === 'wip: daily report writer', 'with their branch and first line');
 
-  // the daily report: find the day's doc under a wiki page, read the tables, fill in one's own rows as oneself
+  // Lark documents an agent works through, e.g. for the daily report Skill: find a page under a wiki page by its
+  // title, read its tables cell by cell, change one's own cells as oneself
   await connect(alex.jar);
   await connect(alice.jar);
-  check(String((await tool(alex.token, 'get_daily_report', {})).error).includes('set_daily_report'), 'before an admin sets it up, the daily report says how');
-  check(String((await tool(bob.token, 'set_daily_report', { folder_url: 'https://x.larksuite.com/wiki/wikDaily', title: '团队工作日报 {MM}{DD}' })).error).length > 0, 'only admins say where the daily report is');
-  const daily = await tool(alex.token, 'set_daily_report', { folder_url: 'https://x.larksuite.com/wiki/wikDaily', title: '团队工作日报 {MM}{DD}' });
-  check(daily.folderTitle === '团队日会' && daily.space === 'sp1', 'an admin points the hub at the wiki page the reports live under');
-  const report = await tool(alex.token, 'get_daily_report', { date: '2026-10-20' });
-  check(report.title === '团队工作日报 1020' && report.url === 'https://x.larksuite.com/wiki/wik1020' && report.sections?.map((x: { name: string }) => x.name).join() === '社媒资源层,日常工作', "the day's report is found (on the second page) and its tables named by their headings");
-  check(report.sections[0].columns.join() === '昨天完成,今天计划,卡点和需要谁' && report.sections[0].rows[1].person === '林小雨' && report.sections[0].rows[1].cells[0] === '招募 47 位创作者\n完善 SOP', 'each row is a person, with the text of each cell (read across pages of blocks)');
-  check(report.mine?.length === 2 && report.mine[0].cells[0] === '旧的内容', "the asking person's own rows");
-  check(JSON.stringify(report.notFilledYet) === '["周明"]', 'and who has not filled theirs in yet');
-  check(String((await tool(alex.token, 'get_daily_report', { date: '2026-10-21' })).error).includes('团队工作日报 1021'), 'a day without a report says which title it looked for');
-  const fillArgs = { date: '2026-10-20', rows: [{ section: '社媒', cells: ['写完日报工具\n修好网关', '接 GitHub webhook', null] }, { section: '日常工作', cells: ['', '评审 PR', ''] }] };
-  check(String((await tool(alex.token, 'fill_daily_report', fillArgs)).error).includes('docs=1'), 'writing first asks the person to let the hub edit Lark documents');
+  const listedWiki = await tool(alex.token, 'list_lark_wiki', { url: 'https://x.larksuite.com/wiki/wikDaily', title: '1020' });
+  check(listedWiki.title === '团队日会' && listedWiki.pages.length === 1 && listedWiki.pages[0].url === 'https://x.larksuite.com/wiki/wik1020' && listedWiki.pages[0].type === 'docx',
+    'list_lark_wiki finds a page by its title (on the second page of results), linked on the company\'s Lark address');
+  check((await tool(alex.token, 'list_lark_wiki', { url: 'https://x.larksuite.com/wiki/wikDaily' })).total === 2, 'and lists them all without a title');
+  check(String((await tool(alex.token, 'list_lark_wiki', { url: 'https://x.larksuite.com/docx/doxDaily' })).error).includes('/wiki/'), 'only for wiki pages');
+  const report = await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url, tables: true }) as { title: string; tables: { id: string; heading: string; rows: { id: string; text: string; people?: { id: string; name: string }[] }[][] }[] };
+  check(report.title === '团队工作日报 1020' && report.tables.map((x) => x.heading).join('|') === '社媒资源层 @林小雨|三、日常工作', 'read_lark_doc with tables gives each table under its heading');
+  const social = report.tables[0];
+  check(social.rows[0].map((c) => c.text).join() === '负责人,昨天完成,今天计划,卡点和需要谁' && social.rows[1][0].people?.[0].id === 'ou_dev_alex' && social.rows[2][1].text === '招募 47 位创作者\n完善 SOP',
+    'row by row, each cell with its text and the people mentioned (read across pages of blocks)');
+  const mineRow = social.rows.find((r) => r[0].people?.some((x) => x.id === 'ou_dev_alex'))!;
+  const edits = [{ id: mineRow[1].id, text: '写完日报工具\n修好网关' }, { id: mineRow[2].id, text: '接 GitHub webhook' }];
+  check(String((await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits })).error).includes('docs=1'), 'editing first asks the person to let the hub edit Lark documents');
   await connect(alex.jar, '&docs=1');
   check(lark.scopesAsked.split(' ').includes('docx:document') && lark.scopesAsked.split(' ').includes('docx:document:readonly'), 'that connection asks for document editing on top of reading');
-  const filled = await tool(alex.token, 'fill_daily_report', fillArgs);
-  check(filled.written?.map((w: { section: string; columns: string[] }) => `${w.section}:${w.columns.join('/')}`).join() === '社媒资源层:昨天完成/今天计划,日常工作:今天计划', 'only the columns given are written, in the sections named');
-  const after = await tool(alex.token, 'get_daily_report', { date: '2026-10-20' });
-  check(after.mine[0].cells.join('|') === '写完日报工具\n修好网关|接 GitHub webhook|' && after.mine[1].cells.join('|') === '|评审 PR|', 'the cells now hold the new text, one line per paragraph');
-  check(after.sections[0].rows[1].cells[0] === '招募 47 位创作者\n完善 SOP', "colleagues' rows are untouched");
-  check(String((await tool(alex.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '财务', cells: ['x'] }] })).error).includes('社媒资源层'), 'an unknown section lists the ones there are');
-  check(String((await tool(alice.token, 'fill_daily_report', { date: '2026-10-20', rows: [{ section: '日常工作', cells: ['x'] }] })).error).length > 0, 'nobody writes into a table without a row of their own');
+  check(String((await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits: [...edits, { id: 'nope', text: 'x' }] })).error).includes('nope'), 'an unknown id is refused before anything is written');
+  const edited = await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits });
+  const after = await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url, tables: true }) as typeof report;
+  check(edited.edited?.length === 2 && after.tables[0].rows[1].slice(1).map((c) => c.text).join('|') === '写完日报工具\n修好网关|接 GitHub webhook|', 'edit_lark_doc replaces the cells given, one paragraph per line');
+  check(after.tables[0].rows[2][1].text === '招募 47 位创作者\n完善 SOP' && after.tables[0].rows[1][0].people?.[0].id === 'ou_dev_alex', "and leaves the rest as it was");
+  const headingId = [...lark.doc.values()].find((x) => x.block_type === 3)!.block_id;
+  await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits: [{ id: headingId, text: '二、本周项目' }] });
+  check(((await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url })).markdown as string).startsWith('# 二、本周项目'), 'and the text of a paragraph or heading');
+  check(String((await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits: [{ id: social.id, text: 'x' }] })).error).includes(social.id), 'but not of a table as a whole');
+  check(String((await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url })).error).length > 0, 'asking for no change is refused');
+  const toolList = JSON.stringify(await (await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify({ jsonrpc: '2.0', id: 99, method: 'tools/list' }) })).json());
+  check(toolList.includes('edit_lark_doc') && !toolList.includes('daily_report'), 'the hub has no daily-report tools of its own (that is a Skill)');
 
   // Lark documents: read one as Markdown, create one from Markdown as the person
   const wikiPage = await tool(alex.token, 'read_lark_doc', { url: 'https://x.larksuite.com/wiki/wikDaily' });
@@ -1616,6 +1639,8 @@ try {
   check(made.imagesLeftOut === 1 && !madeDoc!.blocks.some((b) => b.block_type === 27), 'images are left out, and the result says so');
   const inFolder = await tool(alex.token, 'create_lark_doc', { title: '放进文件夹', markdown: '一行', parent: 'https://x.larksuite.com/drive/folder/fldAbc123' });
   check(lark.made.get(String(inFolder.url).split('/').pop()!)?.folder === 'fldAbc123', 'or in a Drive folder');
+  const appendedDoc = await tool(alex.token, 'edit_lark_doc', { url: inFolder.url, append: '## 补充\n\n- 第二行' });
+  check(appendedDoc.appendedBlocks === 2 && lark.made.get(String(inFolder.url).split('/').pop()!)!.blocks.length === 3, 'edit_lark_doc adds Markdown at the end of a document');
   check(String((await tool(alex.token, 'create_lark_doc', { title: '放进知识库', markdown: '一行', parent: 'https://x.larksuite.com/wiki/wikDaily' })).error).includes('wiki=1'), 'placing it under a wiki page first asks for wiki editing');
   await connect(alex.jar, '&wiki=1');
   check(lark.scopesAsked.split(' ').includes('wiki:wiki') && lark.scopesAsked.split(' ').includes('docx:document:create'), 'which is added on top of document access');

@@ -1,7 +1,9 @@
 /**
- * Lark documents for agents: read one as Markdown, or create one from Markdown, always as the person (so a created
- * document is theirs, in their own space, a folder or under a wiki page they can edit). Writing asks for document
- * scopes the first time; placing under a wiki page also asks for wiki editing.
+ * Lark documents for agents, always as the person: list the pages under a wiki page, read a document as Markdown
+ * (and its tables cell by cell), change the text of its cells and paragraphs or add to its end, and create one from
+ * Markdown (so it is theirs, in their own space, a folder or under a wiki page they can edit). Writing asks for
+ * document scopes the first time; placing under a wiki page also asks for wiki editing. Lark decides what the person
+ * may read and change.
  */
 import { config } from '../config.ts';
 import { get, type User } from '../db.ts';
@@ -48,9 +50,43 @@ interface WikiNode { node_token: string; obj_token: string; obj_type: string; ti
 const wikiNode = async (user: User, token: string) =>
   (await docCall<{ data: { node: WikiNode } }>(user, `/wiki/v2/spaces/get_node?token=${encodeURIComponent(token)}`)).data.node;
 
+/** A link on the company's own Lark address when the person gave one, else the generic address. */
+function linkLike(given: string, kind: 'docx' | 'wiki', token: string) {
+  try {
+    const u = new URL(given.trim());
+    if (/^https?:$/.test(u.protocol) && /(larksuite\.com|feishu\.cn|larkoffice\.com)$/.test(u.hostname)) return `https://${u.host}/${kind}/${token}`;
+  } catch { /* a bare token */ }
+  return larkLink(kind, token);
+}
+
+// ---------------------------------------------------------------- wiki pages
+interface WikiChild extends WikiNode { obj_create_time?: string; has_child?: boolean }
+
+/** The pages under a wiki page, in Lark's order; `title` keeps those whose title contains it. */
+export async function listWiki(user: User, url: string, title?: string) {
+  const ref = parseDocRef(url);
+  if (ref.kind !== 'wiki') throw new UserError('err.docs.notWiki');
+  const node = await wikiNode(user, ref.token);
+  const items: WikiChild[] = [];
+  let page = '';
+  for (let i = 0; i < 20; i++) {
+    const r = await docCall<{ data: { items?: WikiChild[]; page_token?: string; has_more?: boolean } }>(user,
+      `/wiki/v2/spaces/${node.space_id}/nodes?parent_node_token=${node.node_token}&page_size=50${page ? `&page_token=${encodeURIComponent(page)}` : ''}`);
+    items.push(...(r.data.items ?? []));
+    if (!r.data.has_more || !r.data.page_token) break;
+    page = r.data.page_token;
+  }
+  const needle = title?.trim().toLowerCase();
+  const pages = items.filter((n) => !needle || n.title.toLowerCase().includes(needle)).map((n) => ({
+    title: n.title, url: linkLike(url, 'wiki', n.node_token), type: n.obj_type,
+    created: n.obj_create_time ? new Date(Number(n.obj_create_time) * 1000).toISOString() : null, hasChildren: !!n.has_child,
+  }));
+  return { title: node.title, url: linkLike(url, 'wiki', node.node_token), pages: pages.slice(0, 200), total: pages.length };
+}
+
 // ---------------------------------------------------------------- reading
-/** A document (or the document behind a wiki page) as Markdown. */
-export async function readDoc(user: User, url: string) {
+/** The document behind a link: a document, or the document of a wiki page. */
+async function openDoc(user: User, url: string) {
   const ref = parseDocRef(url);
   if (ref.kind === 'folder') throw new UserError('err.docs.notDoc', { type: 'folder' });
   let doc = ref.token, title = '', link = larkLink(ref.kind, ref.token);
@@ -61,9 +97,67 @@ export async function readDoc(user: User, url: string) {
     title = node.title;
   }
   if (!title) title = (await docCall<{ data: { document: { title?: string } } }>(user, `/docx/v1/documents/${doc}`)).data.document.title ?? '';
+  return { doc, title, link };
+}
+
+/**
+ * A document (or the document behind a wiki page) as Markdown; with `tables`, also each table cell by cell (id, text,
+ * people mentioned) under the heading it sits under, so particular cells can be changed with editDoc.
+ */
+export async function readDoc(user: User, url: string, opts: { tables?: boolean } = {}) {
+  const { doc, title, link } = await openDoc(user, url);
   // built from the blocks, which reading a document already allows (Lark's own Markdown export needs another scope)
-  const markdown = toMarkdown(await allBlocks(user, doc), doc);
-  return { title, url: link, markdown: markdown.length > 200_000 ? markdown.slice(0, 200_000) + '\n\n…' : markdown, truncated: markdown.length > 200_000 };
+  const blocks = await allBlocks(user, doc);
+  const markdown = toMarkdown(blocks, doc);
+  return {
+    title, url: link, markdown: markdown.length > 200_000 ? markdown.slice(0, 200_000) + '\n\n…' : markdown, truncated: markdown.length > 200_000,
+    ...(opts.tables ? { tables: tablesOf(blocks, doc) } : {}),
+  };
+}
+
+// ---------------------------------------------------------------- changing
+/** Replaces a table cell's content with text, one paragraph per line: the new text goes in first (a cell is never empty). */
+async function replaceCell(user: User, doc: string, cell: DocBlock, text: string) {
+  const old = cell.children?.length ?? 0;
+  const lines = text.split('\n').map((l) => l.trimEnd());
+  const children = (lines.length ? lines : ['']).map((content) => ({ block_type: 2, text: { elements: [{ text_run: { content } }] } }));
+  await docCall(user, `/docx/v1/documents/${doc}/blocks/${cell.block_id}/children?document_revision_id=-1`, { method: 'POST', body: JSON.stringify({ index: 0, children }) });
+  if (old) {
+    await docCall(user, `/docx/v1/documents/${doc}/blocks/${cell.block_id}/children/batch_delete?document_revision_id=-1`, {
+      method: 'DELETE', body: JSON.stringify({ start_index: children.length, end_index: children.length + old }),
+    });
+  }
+}
+
+/**
+ * Changes a document as the person: `edits` replace the text of table cells or paragraphs (headings, list items,
+ * quotes…) by their id from readDoc's tables or blocks; `append` adds Markdown at the end. Everything is checked
+ * before anything is written.
+ */
+export async function editDoc(user: User, url: string, input: { edits?: { id: string; text: string }[]; append?: string }) {
+  const edits = input.edits ?? [];
+  if (!edits.length && !input.append?.trim()) throw new UserError('err.docs.nothingToDo');
+  const { doc, title, link } = await openDoc(user, url);
+  const blocks = await allBlocks(user, doc);
+  const targets = edits.map((e) => {
+    const b = blocks.get(e.id);
+    if (!b || b.block_id === doc) throw new UserError('err.docs.noBlock', { id: e.id });
+    if (b.block_type !== 32 && !KEYS[b.block_type]) throw new UserError('err.docs.notText', { id: e.id });
+    return { b, text: String(e.text ?? '').slice(0, 20_000) };
+  });
+  const appended = input.append?.trim() ? markdownToBlocks(input.append.trim()) : null;
+  const groups = appended ? appended.top.map((id) => subtree(id, new Map(appended.blocks.map((b) => [b.block_id, b])))) : [];
+  if (groups.some((g) => g.length > MAX_PER_CALL)) throw new UserError('err.docs.tooBig');
+  for (const { b, text } of targets) {
+    if (b.block_type === 32) await replaceCell(user, doc, b, text);
+    else {
+      await docCall(user, `/docx/v1/documents/${doc}/blocks/${b.block_id}?document_revision_id=-1`, {
+        method: 'PATCH', body: JSON.stringify({ update_text_elements: { elements: [{ text_run: { content: text } }] } }),
+      });
+    }
+  }
+  const added = groups.length ? await insertGroups(user, doc, groups) : 0;
+  return { title, url: link, edited: targets.map((t) => t.b.block_id), appendedBlocks: added, ...(appended?.images ? { imagesLeftOut: appended.images } : {}) };
 }
 
 // ---------------------------------------------------------------- creating
@@ -109,7 +203,12 @@ export async function createDoc(user: User, input: { title: string; markdown: st
     link = larkLink('docx', doc);
   }
 
-  // insert in order, as many whole top-level blocks per call as fit in Lark's limit of 1000
+  const written = await insertGroups(user, doc, groups);
+  return { title, url: link, token: doc, inWiki: parent?.kind === 'wiki', blocks: written, ...(images ? { imagesLeftOut: images } : {}) };
+}
+
+/** Adds blocks at the end of a document in order, as many whole top-level blocks per call as fit in Lark's limit of 1000. */
+async function insertGroups(user: User, doc: string, groups: NewBlock[][]): Promise<number> {
   let written = 0;
   let batch: { ids: string[]; blocks: NewBlock[] } = { ids: [], blocks: [] };
   const flush = async () => {
@@ -126,7 +225,7 @@ export async function createDoc(user: User, input: { title: string; markdown: st
     batch.blocks.push(...g);
   }
   await flush();
-  return { title, url: link, token: doc, inWiki: parent?.kind === 'wiki', blocks: written, ...(images ? { imagesLeftOut: images } : {}) };
+  return written;
 }
 
 // ---------------------------------------------------------------- blocks to Markdown
@@ -173,6 +272,37 @@ function inline(b: DocBlock, raw = false): string {
     if (st.link?.url) t = `[${t}](${decodeURIComponent(st.link.url)})`;
     return t;
   }).join('');
+}
+
+/** Every table in document order, under the last heading before it, as rows of cells: id, text, people mentioned. */
+export function tablesOf(blocks: Map<string, DocBlock>, root: string) {
+  const kids = (id: string) => (blocks.get(id)?.children ?? []).map((k) => blocks.get(k)).filter((x): x is DocBlock => !!x);
+  const cellOf = (id: string) => {
+    const inside = kids(id);
+    const people = new Map<string, string>();
+    for (const b of inside) {
+      for (const e of (b[KEYS[b.block_type]] as { elements?: Element[] } | undefined)?.elements ?? []) {
+        if (e.mention_user?.user_id) people.set(e.mention_user.user_id, personName(e.mention_user.user_id));
+      }
+    }
+    return { id, text: inside.map((b) => inline(b, true)).join('\n').trim(), ...(people.size ? { people: [...people].map(([pid, name]) => ({ id: pid, name })) } : {}) };
+  };
+  const out: { id: string; heading: string; rows: ReturnType<typeof cellOf>[][] }[] = [];
+  let heading = '';
+  const walk = (b: DocBlock) => {
+    if (b.block_type >= 3 && b.block_type <= 11) heading = inline(b, true).trim();
+    if (b.block_type === 31 && b.table) {
+      const cells = b.table.cells ?? b.children ?? [];
+      const cols = b.table.property.column_size;
+      const rows = [];
+      for (let r = 0; r < b.table.property.row_size; r++) rows.push(cells.slice(r * cols, r * cols + cols).map(cellOf));
+      out.push({ id: b.block_id, heading, rows });
+      return;
+    }
+    for (const c of kids(b.block_id)) walk(c);
+  };
+  for (const b of kids(root)) walk(b);
+  return out;
 }
 
 /** Markdown for a document's blocks: headings, paragraphs, nested lists, to-dos, quotes, code, dividers and tables. */

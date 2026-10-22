@@ -134,6 +134,7 @@ server/
   i18n/               server-side message catalogues
 web/src/              React UI; i18n/locales/ holds the UI catalogues
 scripts/              admin CLI and end-to-end tests
+skills/               Skills that go with the hub (e.g. daily-report), to publish to its Skill market
 deploy/               docker-compose.yml, nginx.conf, Caddyfile
 docs/                 deployment, Lark or OIDC setup, data apps
 ```
