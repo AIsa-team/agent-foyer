@@ -750,6 +750,8 @@ const zhCN = {
   'admin.requestsChat': '需求池通知群',
   'admin.requestsChatHint': '新放进需求池的需求会由中台机器人发到这个群（比如开发群），有空的同事可以直接接。邀请某人的需求不会发到群里。',
   'admin.requestsChatNone': '不发到群里',
+  'admin.requestsChatLocale': '群消息的语言',
+  'admin.requestsChatLocaleIs': '用{name}发',
   'admin.requestsChatName': '群名（选填）',
   'admin.requestsChatUse': '使用这个群',
   'admin.okrOwner': '公司 OKR',

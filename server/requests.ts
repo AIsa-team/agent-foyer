@@ -11,7 +11,7 @@
  */
 import { appUrl, config } from './config.ts';
 import { all, get, now, run, tx, type App, type User } from './db.ts';
-import { tr, UserError } from './i18n/index.ts';
+import { isSupportedLocale, tr, UserError } from './i18n/index.ts';
 import { localize } from './localized.ts';
 import { messenger } from './notify.ts';
 import { canAdministerApp, canManageApp } from './apps/access.ts';
@@ -34,7 +34,8 @@ const short = (s: string, n: number) => (s.length > n ? s.slice(0, n) + '…' : 
 const nameOf = (id: string | null) => (id ? get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? '' : '');
 
 // ---------------------------------------------------------------- the group new pool requests go to
-export interface Chat { id: string; name: string }
+/** locale: the language messages to the group are written in */
+export interface Chat { id: string; name: string; locale?: string }
 
 export function requestsChat(): Chat | null {
   try {
@@ -50,7 +51,11 @@ export function setRequestsChat(user: User, chat: Chat | null) {
   if (!/^oc_[\w-]+$/.test(chat.id)) throw new UserError('err.requests.badChat');
   run(`INSERT INTO settings (key, value, updated_at) VALUES (?, ?, ?)
        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
-  CHAT_KEY, JSON.stringify({ id: chat.id, name: chat.name.trim().slice(0, 100) || chat.id }), now());
+  CHAT_KEY, JSON.stringify({
+    id: chat.id, name: chat.name.trim().slice(0, 100) || chat.id,
+    // the group reads the language chosen for it, else the language of the admin who chose it
+    locale: isSupportedLocale(chat.locale) ? chat.locale : user.locale ?? config.defaultLocale,
+  }), now());
 }
 
 // ---------------------------------------------------------------- messages
@@ -68,7 +73,7 @@ async function announce(r: Row) {
   const chat = requestsChat();
   if (!messenger || !chat) return;
   try {
-    await messenger.toGroup(chat.id, tr(config.defaultLocale, 'requests.msg.pool', { name: nameOf(r.requester_id), title: r.title, body: short(r.body, 300), url: link(r.id) }));
+    await messenger.toGroup(chat.id, tr(chat.locale ?? config.defaultLocale, 'requests.msg.pool', { name: nameOf(r.requester_id), title: r.title, body: short(r.body, 300), url: link(r.id) }));
   } catch (e) {
     console.warn('[requests] could not post to the group', (e as Error).message);
   }

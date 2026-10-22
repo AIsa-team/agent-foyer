@@ -749,6 +749,8 @@ const en: Record<MessageKey, string> = {
   'admin.requestsChat': 'Group for new requests',
   'admin.requestsChatHint': 'Requests put in the pool are posted to this group by the hub’s bot (e.g. the dev group), so whoever has time can take them. Invitations are never posted.',
   'admin.requestsChatNone': 'Do not post',
+  'admin.requestsChatLocale': 'Language of the group messages',
+  'admin.requestsChatLocaleIs': 'Post in {name}',
   'admin.requestsChatName': 'Group name (optional)',
   'admin.requestsChatUse': 'Use this group',
   'admin.okrOwner': 'Company OKRs',

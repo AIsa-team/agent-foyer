@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { api, type AppInfo, type LarkLink } from '../api';
 import { useI18n } from '../i18n';
+import { LOCALES } from '../i18n/locales';
 import { ConnectionsSection } from '../connections';
 import { AppIcon, Avatar, Icon, LinkIcon, Loading, useAction, useApi, useMe, useToast } from '../ui';
 
@@ -12,7 +13,7 @@ interface AdminData {
   devLogin: boolean;
   alertNotify: 'admins' | 'everyone';
   okrOwner: string | null;
-  requestsChat: { id: string; name: string } | null;
+  requestsChat: { id: string; name: string; locale?: string } | null;
 }
 
 /** The Lark group new pool requests are posted to: picked from the groups the bot is in, or entered by id. */
@@ -25,7 +26,7 @@ function RequestsChatSection({ chat, reload }: { chat: AdminData['requestsChat']
   useEffect(() => {
     api.get<{ chats: { id: string; name: string }[] }>('/admin/lark-chats').then((r) => setChats(r.chats), (e: Error) => { setChats([]); setProblem(e.message); });
   }, []);
-  const save = (c: { id: string; name: string } | null) => run(() => api.post('/admin/requests-chat', { chat: c }), t('admin.alertsSaved')).then(reload);
+  const save = (c: { id: string; name: string; locale?: string } | null) => run(() => api.post('/admin/requests-chat', { chat: c && { ...c, locale: c.locale ?? chat?.locale } }), t('admin.alertsSaved')).then(reload);
   return (
     <div className="section">
       <div className="section-title">{t('admin.requestsChat')}</div>
@@ -38,6 +39,12 @@ function RequestsChatSection({ chat, reload }: { chat: AdminData['requestsChat']
             {chat && !chats?.some((c) => c.id === chat.id) && <option value={chat.id}>{chat.name}</option>}
             {(chats ?? []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
           </select>
+          {chat && (
+            <select className="select" style={{ maxWidth: 200 }} disabled={busy} value={chat.locale ?? ''} aria-label={t('admin.requestsChatLocale')}
+              onChange={(e) => save({ ...chat, locale: e.target.value })}>
+              {LOCALES.map((l) => <option key={l.code} value={l.code}>{t('admin.requestsChatLocaleIs', { name: l.name })}</option>)}
+            </select>
+          )}
         </div>
         {problem && (
           <div className="stack" style={{ gap: 8, marginTop: 12 }}>

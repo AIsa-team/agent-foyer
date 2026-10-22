@@ -522,8 +522,8 @@ api.get('/admin/lark-chats', async (c) => {
   return c.json({ chats: config.lark.enabled ? await botChats() : [] });
 });
 api.post('/admin/requests-chat', async (c) => {
-  const b = await body<{ chat?: { id: string; name: string } | null }>(c);
-  requests.setRequestsChat(c.get('user'), b.chat ? { id: String(b.chat.id ?? '').trim(), name: String(b.chat.name ?? '') } : null);
+  const b = await body<{ chat?: { id: string; name: string; locale?: string } | null }>(c);
+  requests.setRequestsChat(c.get('user'), b.chat ? { id: String(b.chat.id ?? '').trim(), name: String(b.chat.name ?? ''), locale: b.chat.locale } : null);
   return c.json({ ok: true, requestsChat: requests.requestsChat() });
 });
 

@@ -1811,7 +1811,8 @@ try {
     check((await api(alice.jar, 'POST', '/requests', { title: 'x', body: 'too short' })).status === 400, 'a request needs a title and enough detail');
     const pool = (await api(alice.jar, 'POST', '/requests', { title: 'KOL 周报', body: '每周一汇总 KOL 合作进度，数据在 KOL 名单表里，市场组用', due: '2026-12-01' })).body as { id: number; scope: string; status: string };
     await wait(1);
-    check(pool.scope === 'pool' && pool.status === 'open' && lark.messages[0]?.id === 'oc_dev' && lark.messages[0].text.includes('KOL 周报') && lark.messages[0].text.includes(`/requests/${pool.id}`), 'a pool request is posted to the requests group');
+    check(pool.scope === 'pool' && pool.status === 'open' && lark.messages[0]?.id === 'oc_dev' && lark.messages[0].text.includes('KOL 周报') && lark.messages[0].text.includes(`/requests/${pool.id}`) && lark.messages[0].text.startsWith('[Requests]'),
+      'a pool request is posted to the requests group, in the language of the admin who chose it');
     const bobList = (await api(bob.jar, 'GET', '/requests?status=open')).body as { requests: { id: number }[]; waiting: number };
     check(bobList.requests.some((r) => r.id === pool.id) && bobList.waiting >= 1 && ((await api(bob.jar, 'GET', '/apps')).body.requestsWaiting as number) >= 1, 'everyone sees pool requests, and the apps page counts the waiting ones');
     await api(bob.jar, 'POST', `/requests/${pool.id}`, { action: 'me_too', note: '我们组也要' });
@@ -1830,9 +1831,11 @@ try {
     const declined = (await api(alex.jar, 'POST', `/requests/${inv.id}`, { action: 'decline', reason: '这周没空' })).body as { request: { invitee: unknown; status: string; scope: string } };
     await wait(1);
     check(declined.request.invitee === null && declined.request.status === 'open' && declined.request.scope === 'invite' && lark.messages[0]?.id === 'ou_dev_alice' && lark.messages[0].text.includes('这周没空'), 'declining tells the requester why, and the request stays private');
+    await api(alex.jar, 'POST', '/admin/requests-chat', { chat: { id: 'oc_dev', name: '开发群', locale: 'zh-CN' } });
     lark.messages = [];
     await api(alice.jar, 'POST', `/requests/${inv.id}`, { action: 'to_pool' });
     await wait(1);
+    check(lark.messages[0]?.text.startsWith('【需求池】'), 'or in the language chosen for the group');
     check(lark.messages[0]?.id === 'oc_dev' && ((await api(bob.jar, 'GET', `/requests/${inv.id}`)).body as { scope: string }).scope === 'pool', 'moved to the pool, it is posted and everyone sees it');
     await api(alice.jar, 'POST', `/requests/${inv.id}`, { action: 'close', reason: '不需要了' });
     check(((await api(bob.jar, 'GET', `/requests/${inv.id}`)).body as { status: string; can: { take: boolean } }).can.take === false, 'a closed request cannot be taken');
