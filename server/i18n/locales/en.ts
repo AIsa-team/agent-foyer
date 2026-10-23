@@ -295,6 +295,7 @@ const en: Record<MessageKey, string> = {
   'err.calendar.badRange': 'from and to are dates (YYYY-MM-DD), to not before from, at most 31 days apart.',
   'err.docs.searchEmpty': 'Give some keywords to search for.',
   'err.docs.searchScope': 'To search Lark documents for you, allow the hub to search them once: {url}\nIf that page does not offer it, an admin first enables search:docs:read in the Lark developer console. {detail}',
+  'err.directory.none': 'This hub has no directory to sync from (it comes from the company platform, e.g. Lark).',
   'err.docs.denied': 'You do not have access to this document or place in Lark.',
   'err.docs.badLink': 'Cannot read this link: {url}. Give the link of a Lark document, wiki page or Drive folder.',
   'err.docs.notDoc': 'This link is not a document (it is a {type}); use the tools for sheets and Bases instead.',

@@ -11,11 +11,11 @@ import { UserError } from '../i18n/index.ts';
 import * as apps from '../apps/service.ts';
 import * as appLark from '../apps/larkApi.ts';
 import * as resources from '../apps/resources.ts';
-import * as dataSources from '../data/sources.ts';
 import { connection, connectUrl } from './userToken.ts';
 import { listPeriods, userOkrs } from './okr.ts';
 import { okrBoard } from './okrBoard.ts';
 import * as workspace from './workspace.ts';
+import { inspect } from './baseSource.ts';
 import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
 
@@ -40,7 +40,7 @@ export function larkDataTools({ server, user, guard }: ToolKit) {
   server.registerTool('inspect_base', {
     description: 'Look inside a Lark Base (Bitable) or spreadsheet link with the user\'s Lark access. Base: its tables, and for the chosen table (from ?table= in the link, or `table`) the fields with their types and 5 sample rows. Spreadsheet: its sheets, and for the chosen sheet (?sheet= or `table`) the columns from row 1 and the last 5 rows.',
     inputSchema: { url: z.string().describe('a Lark Base, spreadsheet or wiki link, e.g. https://xxx.larksuite.com/base/AbC…?table=tbl… or …/sheets/AbC…?sheet=…'), table: z.string().optional().describe('table id (Base) or sheet id (spreadsheet)') },
-  }, guard((a: { url: string; table?: string }) => dataSources.inspect(user, a.url, a.table)));
+  }, guard((a: { url: string; table?: string }) => inspect(user, a.url, a.table)));
 }
 
 /** Apps that keep their records and documents in Lark, as the person using them. */

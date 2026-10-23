@@ -294,7 +294,7 @@ export function AdminPage() {
 
       <div className="section">
         <div className="section-title">{t('admin.members')} <span className="count">{t('admin.memberCount', { n: data.users.length })}</span><span className="spacer" />
-          {!data.devLogin && me.hub.features.lark && <button className="btn sm" disabled={busy} onClick={sync} type="button"><Icon name="refresh" /> {t('admin.sync')}</button>}
+          {!data.devLogin && me.hub.features.directory && <button className="btn sm" disabled={busy} onClick={sync} type="button"><Icon name="refresh" /> {t('admin.sync')}</button>}
         </div>
         <div className="card table-wrap">
           <table className="table">

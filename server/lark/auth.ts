@@ -1,6 +1,7 @@
 import { config } from '../config.ts';
 import { now, run } from '../db.ts';
 import { upsertUser, type Identity } from '../auth/users.ts';
+import type { DirectorySnapshot } from '../directory.ts';
 import { larkFetch } from './client.ts';
 
 export function larkAuthorizeUrl(redirectUri: string, state: string, scope?: string): string {
@@ -53,10 +54,7 @@ export async function getTenantToken(): Promise<string> {
 }
 
 
-/**
- * Pull the company directory so people can be picked as app members before they ever log in.
- * Needs the contact:user.base:readonly + contact:department.base:readonly scopes and a contact range covering the company.
- */
+/** Contacts and departments as Lark returns them. */
 type LarkDept = {
   open_department_id: string; name: string; parent_department_id?: string; leader_user_id?: string;
   i18n_name?: { zh_cn?: string; en_us?: string }; leaders?: { leaderType: number; leaderID: string }[];
@@ -80,12 +78,13 @@ async function allPages<K extends string, T>(path: string, key: K, token: string
 }
 
 /**
- * Pull the company directory so people can be picked as app members before they ever log in.
- * Reads only what the app's contact range covers (Lark returns it via /contact/v3/scopes), so it works
- * whether the range is the whole company or a few departments. Needs contact:contact.base:readonly.
+ * The company directory as Lark has it, for the hub to keep people and departments in step (see ../directory.ts).
+ * Reads only what the app's contact range covers (Lark returns it via /contact/v3/scopes), so it works whether the
+ * range is the whole company or a few departments. Needs contact:contact.base:readonly.
  */
-export async function syncDirectory(): Promise<number> {
-  if (config.devLogin) return 0;
+export async function readDirectory(): Promise<DirectorySnapshot> {
+  const out: DirectorySnapshot = { departments: [], people: [], members: [] };
+  if (config.devLogin) return out;
   const token = await getTenantToken();
   const scope = { departments: [] as string[], users: [] as string[] };
   let pageToken = '';
@@ -100,27 +99,22 @@ export async function syncDirectory(): Promise<number> {
   } while (pageToken);
 
   const departments = new Set(scope.departments);
-  const saveDept = (d: LarkDept) => {
+  const addDept = (d: LarkDept) => {
     const i18n: Record<string, string> = {};
     if (d.i18n_name?.zh_cn) i18n['zh-CN'] = d.i18n_name.zh_cn;
     if (d.i18n_name?.en_us) i18n.en = d.i18n_name.en_us;
-    const leaders = [d.leader_user_id, ...(d.leaders ?? []).map((l) => l.leaderID)].filter(Boolean);
-    run(
-      `INSERT INTO departments (id, name, name_i18n, parent_id, leader_ids, updated_at) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, name_i18n = excluded.name_i18n, parent_id = excluded.parent_id,
-         leader_ids = excluded.leader_ids, updated_at = excluded.updated_at`,
-      d.open_department_id, d.name, Object.keys(i18n).length ? JSON.stringify(i18n) : null, d.parent_department_id ?? null, JSON.stringify([...new Set(leaders)]), now(),
-    );
+    const leaders = [d.leader_user_id, ...(d.leaders ?? []).map((l) => l.leaderID)].filter((x): x is string => !!x);
+    out.departments.push({ id: d.open_department_id, name: d.name, i18n, parentId: d.parent_department_id ?? null, leaderIds: [...new Set(leaders)] });
   };
   for (const dep of scope.departments) {
     try {
       const info = await larkFetch<{ data: { department: LarkDept } }>(`/contact/v3/departments/${dep}?department_id_type=open_department_id&user_id_type=open_id`, { token });
-      saveDept(info.data.department);
+      addDept(info.data.department);
       const children = await allPages<'items', LarkDept>(
         `/contact/v3/departments/${dep}/children?fetch_child=true&department_id_type=open_department_id&user_id_type=open_id`, 'items', token);
       for (const c of children) {
         departments.add(c.open_department_id);
-        saveDept(c);
+        addDept(c);
       }
     } catch (e) {
       console.warn('[lark] skip sub-departments of', dep, (e as Error).message);
@@ -128,19 +122,17 @@ export async function syncDirectory(): Promise<number> {
   }
 
   const seen = new Set<string>();
-  const save = (u: LarkContact) => {
+  const add = (u: LarkContact) => {
     if (seen.has(u.open_id)) return;
     seen.add(u.open_id);
-    upsertUser(identityOf(u), false);
+    out.people.push(identityOf(u));
   };
   for (const dep of departments) {
     try {
       const users = await allPages<'items', LarkContact>(
         `/contact/v3/users/find_by_department?department_id=${dep}&department_id_type=open_department_id&user_id_type=open_id`, 'items', token);
-      users.forEach(save);
-      // membership is refreshed per department, so moves between departments are picked up
-      run('DELETE FROM user_departments WHERE department_id = ?', dep);
-      for (const u of users) run('INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES (?, ?)', u.open_id, dep);
+      users.forEach(add);
+      out.members.push({ departmentId: dep, userIds: users.map((u) => u.open_id) });
     } catch (e) {
       console.warn('[lark] skip members of department', dep, (e as Error).message);
     }
@@ -150,10 +142,10 @@ export async function syncDirectory(): Promise<number> {
     if (seen.has(id)) continue;
     try {
       const r = await larkFetch<{ data: { user: LarkContact } }>(`/contact/v3/users/${id}?user_id_type=open_id`, { token });
-      save(r.data.user);
+      add(r.data.user);
     } catch (e) {
       console.warn('[lark] skip user', id, (e as Error).message);
     }
   }
-  return seen.size;
+  return out;
 }

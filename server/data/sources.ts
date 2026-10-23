@@ -1,8 +1,8 @@
 /**
- * Named data sources for home pages, boards, metric alerts and data checks. Three kinds:
+ * Named data sources for home pages, boards, metric alerts and data checks. Their kinds:
  *
- * - base: a Lark Base table, always read with the viewer's own Lark access, so people only see rows they could open
- *   in Lark.
+ * - a table in a platform the company works in, read with the viewer's own access there, so people only see rows
+ *   they could open themselves (Lark Base, brought by the Lark channel: see ./kinds.ts and ../channels.ts).
  * - app: rows served by one of the company's hub apps (anything an agent built: a Metabase question, a database
  *   query, a CRM export…). The app answers GET <path> with { rows: [...] } (or a bare array) of plain JSON objects;
  *   optional `_id` and `_url` on a row identify it and link back to where it lives. The hub requests it as the viewer
@@ -19,7 +19,6 @@
  * All kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
  */
 import { existsSync, readFileSync, rmSync, writeFile } from 'node:fs';
-import { inspectSheet, parseSheetUrl, resolveSpreadsheet, wikiObject } from '../lark/sheets.ts';
 import path from 'node:path';
 import { gunzipSync, gzip } from 'node:zlib';
 import { appUrl, config, paths } from '../config.ts';
@@ -32,15 +31,12 @@ import { fetchFromApp } from '../gateway.ts';
 import { filterRows, runQuery, toChart, toStat, type DataChartKind, type Query, type Result } from './query.ts';
 import { connectionConfig } from './connectors/index.ts';
 import { z } from 'zod';
-import { fetchRecords, isAdvanced, listFields, listTables, parseBaseUrl, pickTable, resolveAppToken, searchRecords } from '../lark/base.ts';
+import { sourceKind, sourceKinds } from '../channels.ts';
+import type { Row, SourceRow, Table } from './kinds.ts';
 import { FIELD, isDateField, plainText, type Field, type Condition } from './fields.ts';
 
-export interface SourceRow {
-  id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector' | 'combined'; app_token: string; table_id: string; view_id: string | null;
-  app_slug: string | null; app_path: string | null; connection_id: string | null; item: string | null; audience: string | null;
-  description_i18n: string | null; description_manual: number;
-  owner_id: string; created_at: number; updated_at: number;
-}
+export type { Row, SourceRow, Table };
+
 const descriptionOf = (s: Pick<SourceRow, 'description_i18n'>, locale: string) => (s.description_i18n ? pick(JSON.parse(s.description_i18n), locale) || undefined : undefined);
 /** Who besides admins may read a connector source. Nothing set = admins only. */
 export const audienceSchema = z.object({
@@ -50,8 +46,6 @@ export const audienceSchema = z.object({
 });
 export type Audience = { company?: boolean; people?: string[]; departments?: string[] };
 const audienceOf = (s: SourceRow): Audience => (s.audience ? JSON.parse(s.audience) as Audience : {});
-export interface Row { id: string; url?: string; fields: Record<string, unknown> }
-export interface Table { fields: Field[]; rows: Row[] }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
@@ -198,6 +192,7 @@ export function mayReadConnector(user: User, s: SourceRow): boolean {
 
 // ---------------------------------------------------------------- rows through a connection (one shared key)
 const SHARED_TTL = config.connectorRefreshMs;
+const snapshotFile = (id: string) => path.join(paths.snapshots, `${id.replace(/[^\w-]/g, '_')}.json.gz`);
 const shared = new Map<string, { at: number; value: Promise<Table> }>();
 
 /**
@@ -238,6 +233,59 @@ function connectorTable(s: SourceRow, fresh: boolean): Promise<Table> {
   if (fresh) return refresh();
   if (Date.now() - hit.at > SHARED_TTL) void refresh().catch(() => {});
   return hit.value;
+}
+
+/** Data sources someone looks at or is warned about: on a home page or board, or under an alert rule (with the parts of combined ones). */
+function sourcesInUse(): Set<string> {
+  const ids = new Set<string>();
+  const walk = (v: unknown): void => {
+    if (Array.isArray(v)) return v.forEach(walk);
+    if (!v || typeof v !== 'object') return;
+    const o = v as Record<string, unknown>;
+    // a module's source names its data source by id ({ data: 'orders', query }); a chart's own data is an object
+    if (typeof o.data === 'string') ids.add(o.data);
+    Object.values(o).forEach(walk);
+  };
+  for (const t of ['homepages', 'boards']) for (const r of all<{ layout: string }>(`SELECT layout FROM ${t}`)) walk(JSON.parse(r.layout));
+  for (const r of all<{ source_id: string }>('SELECT DISTINCT source_id FROM alert_rules')) ids.add(r.source_id);
+  for (const c of all<SourceRow>("SELECT * FROM data_sources WHERE kind = 'combined'")) if (ids.has(c.id)) combineOf(c).sources.forEach((x) => ids.add(x));
+  return ids;
+}
+
+/**
+ * Reads again the connector sources in use whose rows are older than `maxAge`, two at a time (to go easy on the other
+ * system). Returns how many it read.
+ */
+let refreshingInUse: Promise<number> | null = null;
+export function refreshSourcesInUse(maxAge = SHARED_TTL): Promise<number> {
+  if (refreshingInUse) return refreshingInUse;
+  const stale = (id: string) => !shared.has(id) || Date.now() - shared.get(id)!.at > maxAge;
+  refreshingInUse = (async () => {
+    const queue = [...sourcesInUse()]
+      .map((id) => get<SourceRow>("SELECT * FROM data_sources WHERE id = ? AND kind = 'connector'", id))
+      .filter((src): src is SourceRow => !!src && stale(src.id));
+    let n = 0;
+    await Promise.all([0, 1].map(async () => {
+      for (let src = queue.shift(); src; src = queue.shift()) {
+        // a copy from disk (after a restart) is served first; read again only if that is still too old
+        await connectorTable(src, false).catch(() => {});
+        if (stale(src.id)) await connectorTable(src, true).catch((e) => console.warn('[data] refresh failed', src!.id, (e as Error).message));
+        n++;
+      }
+    }));
+    return n;
+  })().finally(() => { refreshingInUse = null; });
+  return refreshingInUse;
+}
+
+/**
+ * Keeps the rows of connector sources in use fresh in the background, so whoever opens a page sees numbers at most
+ * CONNECTOR_REFRESH_MINUTES old instead of an old copy while a refresh runs.
+ */
+export function startConnectorRefresher() {
+  const tick = () => { refreshSourcesInUse().catch((e) => console.warn('[data] refresh failed', (e as Error).message)); };
+  setTimeout(tick, 60_000).unref();
+  setInterval(tick, 5 * 60_000).unref();
 }
 
 // ---------------------------------------------------------------- rows from an app
@@ -287,30 +335,6 @@ async function appTable(user: User, s: Pick<SourceRow, 'app_slug' | 'app_path'>)
 }
 
 // ---------------------------------------------------------------- inspecting and registering
-/** What an agent needs to configure charts: tables in the Base, and for the chosen table its fields and a few rows. */
-export async function inspect(user: User, url: string, table?: string) {
-  if (!config.lark.enabled) throw new UserError('err.lark.disabled');
-  // a spreadsheet (directly or inside a wiki): its sheets, columns and last rows
-  const sheetRef = parseSheetUrl(url);
-  if (sheetRef && (sheetRef.kind === 'sheets' || (await wikiObject(user, sheetRef.token)).type === 'sheet')) {
-    return inspectSheet(user, (await resolveSpreadsheet(user, sheetRef))!, table ?? sheetRef.sheet);
-  }
-  const ref = parseBaseUrl(url);
-  const app = await resolveAppToken(user, ref);
-  const tables = await listTables(user, app);
-  const tableId = table ?? ref.table ?? (tables.length === 1 ? tables[0].id : undefined);
-  if (!tableId) return { tables, hint: 'pick a table id and call again' };
-  const fields = await listFields(user, app, tableId, ref.view);
-  const rows = await searchRecords(user, { app, table: tableId, view: ref.view, max: 5 });
-  return {
-    tables,
-    table: tableId,
-    view: ref.view ?? null,
-    fields: fields.map((f) => ({ name: f.name, type: f.uiType ?? f.type })),
-    sample: rows.map((r) => Object.fromEntries(fields.map((f) => [f.name, plainText(r[f.name], f)]))),
-  };
-}
-
 /** The same for rows served by an app, as the user would get them. */
 export async function inspectApp(user: User, slug: string, path: string) {
   const t = await appTable(user, { app_slug: slug, app_path: path });
@@ -358,14 +382,12 @@ export async function saveSource(user: User, input: { id: string; title: Record<
     await appTable(user, { app_slug: input.app, app_path: path });
     row = { kind: 'app', url: appUrl(input.app) + path, app_token: '', table_id: '', view_id: null, app_slug: input.app, app_path: path };
   } else {
-    if (!config.lark.enabled) throw new UserError('err.lark.disabled');
+    // a table in one of the company's platforms (Lark Base…), recognised by its link
+    const kinds = sourceKinds();
+    if (!kinds.length) throw new UserError('err.lark.disabled');
     if (!input.url) throw new UserError('err.data.badUrl', { url: '' });
-    const ref = parseBaseUrl(input.url);
-    const app = await resolveAppToken(user, ref);
-    const table = await pickTable(user, app, input.table ?? ref.table);
-    // reading the fields proves the person can open it, and that the ids are right
-    await listFields(user, app, table, ref.view);
-    row = { kind: 'base', url: input.url, app_token: app, table_id: table, view_id: ref.view ?? null, app_slug: null, app_path: null };
+    const k = kinds.find((x) => x.matches(input.url!)) ?? kinds[0];
+    row = { kind: k.kind, ...(await k.register(user, { url: input.url, table: input.table })), app_slug: null, app_path: null };
   }
   run(`INSERT INTO data_sources (id, title_i18n, url, kind, app_token, table_id, view_id, app_slug, app_path, connection_id, item, audience, owner_id, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -439,48 +461,14 @@ const TTL = 60_000;
 const cache = new Map<string, { at: number; value: Promise<Result> }>();
 const tables = new Map<string, { at: number; value: Promise<Table> }>();
 function clearCache(id: string) {
-  snapshots.delete(id);
   shared.delete(id);
   refreshingShared.delete(id);
   rmSync(snapshotFile(`conn-${id}`), { force: true });
-  rmSync(snapshotFile(id), { force: true });
-  for (const m of [cache, tables, readable]) for (const k of m.keys()) if (k.startsWith(`${id}\u0000`)) m.delete(k);
+  for (const k of sourceKinds()) k.forget?.(id);
+  for (const m of [cache, tables]) for (const k of m.keys()) if (k.startsWith(`${id}\u0000`)) m.delete(k);
 }
 
-/**
- * Big Base tables take Lark a while to page through (12k rows ≈ 20 s), so pages use a shared snapshot of each Base
- * source, read with its owner's access and refreshed in the background every few minutes. That is only safe when
- * every reader sees the same rows: the Base must not use advanced (row-level) permissions, and the viewer must be
- * able to open the table themselves (checked with their own Lark access). Otherwise rows are read as the viewer.
- * App sources are not shared: an app may answer each person differently.
- */
-const SNAPSHOT_TTL = 5 * 60_000;
-const snapshots = new Map<string, { at: number; advanced: boolean; value: Promise<Row[]> }>();
-
-// Snapshots are also kept on disk (gzipped JSON in the data folder). After a restart the last copy is served at once,
-// marked as old so it is refreshed in the background; one older than a day is not used.
-const snapshotFile = (id: string) => path.join(paths.snapshots, `${id.replace(/[^\w-]/g, '_')}.json.gz`);
-function saveSnapshot(id: string, at: number, rows: Row[]) {
-  gzip(JSON.stringify({ at, rows }), (err, buf) => {
-    if (err) return console.warn('[data] could not save snapshot', id, err.message);
-    writeFile(snapshotFile(id), buf, { mode: 0o600 }, (e) => e && console.warn('[data] could not save snapshot', id, e.message));
-  });
-}
-function loadSnapshot(id: string) {
-  if (snapshots.has(id) || !existsSync(snapshotFile(id))) return;
-  try {
-    const { at, rows } = JSON.parse(gunzipSync(readFileSync(snapshotFile(id))).toString()) as { at: number; rows: Row[] };
-    if (Date.now() - at < 86_400_000) snapshots.set(id, { at, advanced: false, value: Promise.resolve(rows) });
-  } catch (e) {
-    console.warn('[data] could not read snapshot', id, (e as Error).message);
-  }
-}
-const readable = new Map<string, { at: number; ok: Promise<boolean> }>();
-
-/**
- * Whether this person may read the source: open the Base table in Lark, or open the app. The Lark answer is kept
- * for 5 minutes (asking Lark on every chart would be slow), so access removed in Lark takes up to that long to apply.
- */
+/** Whether this person may read the source: its audience, the app, or (a platform's table) whether they can open it there. */
 export function canReadSource(user: User, s: SourceRow): Promise<boolean> {
   if (s.kind === 'connector') return Promise.resolve(mayReadConnector(user, s));
   if (s.kind === 'combined') {
@@ -491,66 +479,7 @@ export function canReadSource(user: User, s: SourceRow): Promise<boolean> {
     const app = get<App>('SELECT * FROM apps WHERE slug = ?', s.app_slug ?? '');
     return Promise.resolve(!!app && canAccessApp(app, user));
   }
-  const key = `${s.id}\u0000${user.id}`;
-  const hit = readable.get(key);
-  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.ok;
-  const ok = listFields(user, s.app_token, s.table_id, s.view_id ?? undefined).then(() => true, () => false);
-  readable.set(key, { at: Date.now(), ok });
-  return ok;
-}
-
-const baseRows = (user: User, s: SourceRow) => fetchRecords(user, { app: s.app_token, table: s.table_id, view: s.view_id ?? undefined, max: 50_000 });
-const refreshing = new Set<string>();
-
-/** Reads a Base source as its owner into the snapshot. Until a first read lands, callers wait for it; later reads swap in quietly. */
-function takeSnapshot(s: SourceRow) {
-  const owner = get<User>('SELECT * FROM users WHERE id = ?', s.owner_id);
-  if (!owner || refreshing.has(s.id)) return;
-  refreshing.add(s.id);
-  const prev = snapshots.get(s.id);
-  const value = (async () => {
-    if (await isAdvanced(owner, s.app_token)) throw Object.assign(new Error('advanced'), { advanced: true });
-    return baseRows(owner, s);
-  })();
-  const entry = { at: Date.now(), advanced: false, value };
-  if (!prev) snapshots.set(s.id, entry);
-  value.then(
-    (rows) => { snapshots.set(s.id, entry); saveSnapshot(s.id, entry.at, rows); },
-    (e: { advanced?: boolean }) => {
-      if (e.advanced) snapshots.set(s.id, { ...entry, advanced: true });
-      else if (!prev) snapshots.delete(s.id); // a failed refresh keeps serving the last good snapshot
-    },
-  ).finally(() => refreshing.delete(s.id));
-}
-
-/** Keeps every Base source's snapshot fresh, so nobody waits for a cold read (a 12k-row table is ~26 Lark pages per refresh). */
-export function startSnapshotRefresher() {
-  const tick = () => {
-    for (const src of all<SourceRow>("SELECT * FROM data_sources WHERE kind = 'base'")) {
-      loadSnapshot(src.id);
-      const snap = snapshots.get(src.id);
-      if (!snap || (!snap.advanced && Date.now() - snap.at > SNAPSHOT_TTL)) takeSnapshot(src);
-    }
-  };
-  setTimeout(tick, 2_000);
-  return setInterval(tick, 60_000);
-}
-
-async function sharedRows(user: User, s: SourceRow): Promise<Row[] | null> {
-  loadSnapshot(s.id);
-  let snap = snapshots.get(s.id);
-  if (snap?.advanced) return null;
-  if (!(await canReadSource(user, s))) return null;
-  if (!snap) {
-    takeSnapshot(s);
-    snap = snapshots.get(s.id);
-  } else if (Date.now() - snap.at > SNAPSHOT_TTL) takeSnapshot(s); // refresh in the background, serve the current one
-  if (!snap) return null;
-  try {
-    return await snap.value;
-  } catch {
-    return null;
-  }
+  return sourceKind(s.kind)?.canRead(user, s) ?? Promise.resolve(false);
 }
 
 /**
@@ -568,11 +497,10 @@ export function loadTable(user: User, s: SourceRow, fresh = false): Promise<Tabl
     : s.kind === 'app'
     ? appTable(user, s)
     : (async () => {
-      // a Base source saved while the hub still signed in with Lark
-      if (!config.lark.enabled) throw new UserError('err.lark.disabled');
-      const fields = await listFields(user, s.app_token, s.table_id, s.view_id ?? undefined);
-      const rows = (!fresh && (await sharedRows(user, s))) || (await baseRows(user, s));
-      return { fields, rows };
+      // e.g. a Lark Base source saved while the hub still signed in with Lark
+      const k = sourceKind(s.kind);
+      if (!k) throw new UserError('err.lark.disabled');
+      return k.load(user, s, fresh);
     })();
   tables.set(key, { at: Date.now(), value });
   value.catch(() => tables.delete(key));
@@ -633,7 +561,7 @@ export async function describeSource(user: User, id: string, locale: string) {
     ? { label: 'combined', url: '', parts: combineOf(s).sources.map((sid) => ({ id: sid, title: pick(JSON.parse(getSource(sid).title_i18n), locale) })), mode: combineOf(s).mode }
     : s.kind === 'connector' ? { label: get<{ type: string }>('SELECT type FROM connections WHERE id = ?', s.connection_id ?? '')?.type ?? '', url: s.url }
     : s.kind === 'app' ? { label: s.app_slug ?? '', url: `${config.hubUrl}/apps/${s.app_slug}` }
-    : { label: 'lark', url: s.url };
+    : { label: sourceKind(s.kind)?.label ?? s.kind, url: s.url };
   // how far back each date field goes, so the page does not draw days the source has no data for as zeros
   const span = (f: Field) => {
     let lo = Infinity, hi = -Infinity;

@@ -59,6 +59,8 @@ export interface Connector {
   /** optional: the system's dashboards, and one of them in the hub's terms (see importBoard) */
   boards?(cfg: ConnectionConfig, q?: string): Promise<Item[]>;
   board?(cfg: ConnectionConfig, id: string): Promise<BoardDef>;
+  /** optional: when a dashboard or any question on it last changed (ms), to sync imported boards when it does */
+  boardChangedAt?(cfg: ConnectionConfig, id: string): Promise<number>;
   /** optional: the databases a read-only SQL query can run on, and how such a query is written down as an item */
   databases?(cfg: ConnectionConfig): Promise<Item[]>;
   sqlItem?(database: string, sql: string): string;

@@ -2,7 +2,8 @@
  * Turns a dashboard of another system (any connector with boards, e.g. Metabase) into hub boards on the Data page:
  * every chart's item becomes a data source (reused when it already is one), and every card a module, so the numbers
  * get the hub's audiences, detail pages, alerts and agent tools. One hub board per tab. Importing again syncs: the
- * boards are rebuilt, sources kept.
+ * boards are rebuilt (a tab gone there is gone here), sources kept, and new sources get the audience the dashboard was
+ * imported with. Imported dashboards are also synced on their own, hourly, whenever they or a question on them changed.
  *
  * Charts come as they are drawn there. When the other system does not say which columns are the axis and which the
  * values, the first date (else text) column is the axis and the number columns the values. Rates and percentages go
@@ -127,6 +128,7 @@ async function pool<T, R>(items: T[], n: number, fn: (x: T) => Promise<R>): Prom
 /** Imports (or syncs) a dashboard. New sources get `audience` (nothing = admins only); existing ones keep theirs. */
 export async function importBoard(user: User, connection: string, board: string, opts: { audience?: Audience; locale?: string } = {}) {
   if (user.role !== 'admin') throw new UserError('err.adminOnly');
+  const before = importedBoards(connection).filter((b) => b.origin.board === board);
   const { connector } = connectionConfig(connection);
   if (!connector.board) throw new UserError('err.conn.noBoards', { name: connector.label });
   const { cfg } = connectionConfig(connection);
@@ -137,6 +139,11 @@ export async function importBoard(user: User, connection: string, board: string,
 
   // the items behind the charts, as data sources (each read once to check it and to see its columns)
   const items = [...new Set(def.tabs.flatMap((t) => t.cards).filter((c) => c.kind === 'chart' && c.item).map((c) => c.item!))];
+  // who sees new sources: as asked, else as when it was imported before; boards imported before that was recorded
+  // go by their sources, when those all agree. A first import without an audience keeps new sources for admins.
+  const known = before.length ? items.map((item) => get<{ audience: string | null }>('SELECT audience FROM data_sources WHERE connection_id = ? AND item = ?', connection, item)?.audience).filter((x): x is string => !!x) : [];
+  const agreed = known.length && known.every((x) => x === known[0]) ? (JSON.parse(known[0]) as Audience) : undefined;
+  const audience = opts.audience ?? before.find((x) => x.origin.audience)?.origin.audience ?? agreed ?? {};
   const sourceOf = new Map<string, { id: string; table: Table } | { error: string }>();
   await pool(items, 2, async (item) => {
     const card = def.tabs.flatMap((t) => t.cards).find((c) => c.item === item)!;
@@ -144,7 +151,7 @@ export async function importBoard(user: User, connection: string, board: string,
       const existing = get<{ id: string }>('SELECT id FROM data_sources WHERE connection_id = ? AND item = ?', connection, item);
       const id = existing?.id ?? `${connection}-${item}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 41);
       if (!existing) {
-        await saveSource(user, { id, title: everyLocale(card.name ?? item), connection, item, audience: opts.audience ?? {} });
+        await saveSource(user, { id, title: everyLocale(card.name ?? item), connection, item, audience });
         created.push(id);
       } else {
         reused.push(id);
@@ -190,15 +197,55 @@ export async function importBoard(user: User, connection: string, board: string,
     const id = `${connection}-${board}${tabs.length > 1 ? `-${ti + 1}` : ''}`.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 41);
     const title = tab.name && tabs.length > 1 ? `${def.name} · ${tab.name}` : def.name;
     saveBoard(user, { id, title: everyLocale(title), layout: { modules } });
-    run('UPDATE boards SET origin = ? WHERE id = ?', JSON.stringify({ connection, board, tab: tab.name ?? null, url: def.url }), id);
+    run('UPDATE boards SET origin = ? WHERE id = ?', JSON.stringify({ connection, board, tab: tab.name ?? null, url: def.url, audience }), id);
     boards.push({ id, title });
   });
+  // a tab removed there (or left without charts) goes here too
+  for (const b of before) if (!boards.some((x) => x.id === b.id)) run('DELETE FROM boards WHERE id = ?', b.id);
   return { name: def.name, url: def.url, boards, sources: { created, reused }, skipped };
 }
 
 /** Boards imported through a connection, for the admin page (with the dashboard each came from, to sync it). */
 export function importedBoards(connection: string) {
   return all<{ id: string; title_i18n: string; origin: string; updated_at: number }>("SELECT id, title_i18n, origin, updated_at FROM boards WHERE origin IS NOT NULL")
-    .map((b) => ({ id: b.id, titles: JSON.parse(b.title_i18n) as Record<string, string>, origin: JSON.parse(b.origin) as { connection: string; board: string; tab: string | null; url: string }, updatedAt: b.updated_at }))
+    .map((b) => ({ id: b.id, titles: JSON.parse(b.title_i18n) as Record<string, string>, origin: JSON.parse(b.origin) as { connection: string; board: string; tab: string | null; url: string; audience?: Audience }, updatedAt: b.updated_at }))
     .filter((b) => b.origin.connection === connection);
+}
+
+// ---------------------------------------------------------------- keeping imported dashboards in step
+/**
+ * Re-imports every imported dashboard that changed in its own system (the dashboard or a question on it) since its
+ * boards were last built, as the admin who last built them (else any admin). Returns what it synced.
+ */
+export async function syncImportedBoards(): Promise<{ connection: string; board: string; ok: boolean; detail?: string }[]> {
+  const done: { connection: string; board: string; ok: boolean; detail?: string }[] = [];
+  const dashboards = new Map<string, { connection: string; board: string; builtAt: number; by: string | null }>();
+  for (const b of all<{ origin: string; updated_at: number; updated_by: string | null }>('SELECT origin, updated_at, updated_by FROM boards WHERE origin IS NOT NULL')) {
+    const o = JSON.parse(b.origin) as { connection: string; board: string };
+    const key = `${o.connection}\u0000${o.board}`;
+    const prev = dashboards.get(key);
+    dashboards.set(key, { connection: o.connection, board: o.board, builtAt: Math.min(prev?.builtAt ?? Infinity, b.updated_at), by: prev?.by ?? b.updated_by });
+  }
+  for (const d of dashboards.values()) {
+    try {
+      const { connector, cfg } = connectionConfig(d.connection);
+      if (!connector.boardChangedAt) continue;
+      if ((await connector.boardChangedAt(cfg, d.board)) <= d.builtAt) continue;
+      const admin = (d.by ? get<User>("SELECT * FROM users WHERE id = ? AND role = 'admin'", d.by) : undefined) ?? get<User>("SELECT * FROM users WHERE role = 'admin' ORDER BY created_at LIMIT 1");
+      if (!admin) continue;
+      const r = await importBoard(admin, d.connection, d.board);
+      done.push({ connection: d.connection, board: d.board, ok: true, detail: `${r.boards.length} boards, ${r.sources.created.length} new sources, ${r.skipped.length} skipped` });
+    } catch (e) {
+      done.push({ connection: d.connection, board: d.board, ok: false, detail: (e as Error).message });
+    }
+  }
+  for (const x of done) console.log(`[boards] sync ${x.connection}/${x.board}: ${x.ok ? 'ok' : 'failed'} ${x.detail ?? ''}`);
+  return done;
+}
+
+/** Checks imported dashboards for changes a few minutes after start, then hourly. */
+export function startBoardSync() {
+  const tick = () => { syncImportedBoards().catch((e) => console.warn('[boards] sync failed', (e as Error).message)); };
+  setTimeout(tick, 5 * 60_000).unref();
+  setInterval(tick, 3600_000).unref();
 }

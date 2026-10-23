@@ -20,8 +20,10 @@ import { requestLocale, tr } from './i18n/index.ts';
 import { handleAppRequest, handleAppUpgrade, slugFromHost } from './gateway.ts';
 import { startAlertScheduler } from './data/alerts.ts';
 import { startCheckScheduler } from './data/checks.ts';
-import { syncDirectory } from './lark/auth.ts';
-import { startSnapshotRefresher } from './data/sources.ts';
+import { directoryProvider, syncDirectory } from './directory.ts';
+import { sourceKinds } from './channels.ts';
+import { startConnectorRefresher } from './data/sources.ts';
+import { startBoardSync } from './data/importBoard.ts';
 import { run, now } from './db.ts';
 import { pruneReads } from './cache.ts';
 
@@ -154,13 +156,15 @@ server.listen(config.port, () => {
   console.log(`  login: ${config.devLogin ? 'DEV' : config.auth.provider === 'lark' ? 'Lark ' + config.lark.domain : 'OIDC ' + config.oidc.issuer}`);
 });
 
-// alerts and data checks also run on data apps; Lark only adds Base snapshots, bot messages and the directory
+// alerts and data checks run on every kind of source; channels add their own background work and the directory
 startAlertScheduler().unref();
 startCheckScheduler().unref();
-if (config.lark.enabled) {
-  startSnapshotRefresher().unref();
-  // keep departments and colleagues in step with Lark (the admin page can still sync on demand)
-  const sync = () => syncDirectory().catch((e) => console.warn('[lark] directory sync failed', (e as Error).message));
+for (const k of sourceKinds()) k.start?.();
+startConnectorRefresher();
+startBoardSync();
+if (directoryProvider()) {
+  // keep departments and colleagues in step with the company's platform (the admin page can still sync on demand)
+  const sync = () => syncDirectory().catch((e) => console.warn('[directory] sync failed', (e as Error).message));
   setTimeout(sync, 60_000).unref();
   setInterval(sync, 6 * 3600_000).unref();
 }

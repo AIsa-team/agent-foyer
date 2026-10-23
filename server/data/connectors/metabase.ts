@@ -110,6 +110,12 @@ export const metabase: Connector = {
       .filter((d) => !d.archived && (!needle || d.name.toLowerCase().includes(needle) || String(d.id) === needle))
       .map((d) => ({ id: String(d.id), name: d.name, group: (d as { collection?: { name?: string } | null }).collection?.name ?? undefined, url: `${base(cfg)}/dashboard/${d.id}` }));
   },
+  async boardChangedAt(cfg, id) {
+    if (!/^\d+$/.test(id)) throw new UserError('err.conn.itemGone');
+    const d = await mb<MbDashboard & { updated_at?: string }>(cfg, `/api/dashboard/${id}`);
+    const times = [d.updated_at, ...d.dashcards.map((c) => c.card?.updated_at)].map((t) => (t ? Date.parse(t) : 0));
+    return Math.max(0, ...times.filter(Number.isFinite));
+  },
   async board(cfg, id): Promise<BoardDef> {
     if (!/^\d+$/.test(id)) throw new UserError('err.conn.itemGone');
     const d = await mb<MbDashboard>(cfg, `/api/dashboard/${id}`);
@@ -146,7 +152,7 @@ export const metabase: Connector = {
 interface MbDashboard {
   name: string;
   tabs?: { id?: number; name?: string }[];
-  dashcards: { row: number; col: number; size_x?: number; dashboard_tab_id?: number | null; visualization_settings?: Record<string, unknown>; card?: { id?: number; name: string; display?: string; visualization_settings?: Record<string, unknown>; result_metadata?: { name: string; display_name?: string }[] } | null }[];
+  dashcards: { row: number; col: number; size_x?: number; dashboard_tab_id?: number | null; visualization_settings?: Record<string, unknown>; card?: { id?: number; name: string; display?: string; updated_at?: string; visualization_settings?: Record<string, unknown>; result_metadata?: { name: string; display_name?: string }[] } | null }[];
 }
 
 /** Rows the regular query endpoint returns at most; a question with more is exported instead. */

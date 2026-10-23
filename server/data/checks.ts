@@ -12,7 +12,8 @@ import { config } from '../config.ts';
 import { all, get, now, run, tx, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
-import { canReadSource, getSource, loadTable, type Row } from './sources.ts';
+import { canReadSource, getSource, loadTable, type Row, type SourceRow } from './sources.ts';
+import { sourceKind } from '../channels.ts';
 import { isDateField, people, plainNumber, plainText, plainValues, timeOf, type Field } from './fields.ts';
 
 // ---------------------------------------------------------------- rule format (also the MCP schema)
@@ -296,11 +297,10 @@ export function startCheckScheduler() {
 }
 
 // ---------------------------------------------------------------- who may see which issues
-/** Where to fix a record: the link the app gave, else the record inside the Lark Base, else the source itself. */
-function recordUrl(src: { kind: string; url: string }, issue: { record_id: string; url: string | null }) {
+/** Where to fix a record: the link the app gave, else the record inside its platform (Lark Base…), else the source itself. */
+function recordUrl(src: SourceRow, issue: { record_id: string; url: string | null }) {
   if (issue.url) return issue.url;
-  if (src.kind !== 'base') return src.url;
-  return `${src.url}${src.url.includes('?') ? '&' : '?'}record=${encodeURIComponent(issue.record_id)}`;
+  return sourceKind(src.kind)?.recordUrl?.(src, issue.record_id) ?? src.url;
 }
 
 /** The issues page: what the viewer may see, grouped by check, plus counts by person and level. */

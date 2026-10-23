@@ -77,9 +77,13 @@ const lark = {
   appInfo: false,
   /** calls to the fake Metabase's own MCP server: the tool, its arguments and the key it came with */
   mbMcp: [] as { tool: string; args: unknown; key: string }[],
+  /** the fake dashboard 100: when it last changed there, and the changes made since */
+  mbDash: { changedAt: '2026-01-01T00:00:00Z', extraCard: false, dropDetail: false },
   /** SQL the fake Metabase was asked to run */
   mbSql: [] as string[],
   calendarTokens: new Set<string>(),
+  /** the fake company directory: where "Bea" works (moves between syncs) */
+  beaIn: 'od-east',
   searchTokens: new Set<string>(),
   searches: [] as Record<string, unknown>[],
   calendarQueries: [] as { start: number; end: number }[],
@@ -370,8 +374,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     if (mp === '/api/dashboard') return send([{ id: 100, name: '每日运营', collection: { name: '运营' } }, { id: 7, name: 'Old', archived: true }]);
     if (mp === '/api/dashboard/100') {
       const dc = (tab: number, row: number, col: number, size: number, id?: number, vs: Record<string, unknown> = {}) =>
-        ({ dashboard_tab_id: tab, row, col, size_x: size, visualization_settings: id ? {} : vs, card: id ? { id, name: id === 232 ? '每日新增用户' : MB_CARDS[String(id)]?.name ?? 'gone', display: id === 232 ? 'bar' : MB_CARDS[String(id)]?.display ?? 'line', visualization_settings: vs } : null });
-      return send({ name: '每日运营', tabs: [{ id: 1, name: '基础' }, { id: 2, name: '明细' }, { id: 3, name: '空的' }], dashcards: [
+        ({ dashboard_tab_id: tab, row, col, size_x: size, visualization_settings: id ? {} : vs, card: id ? { id, name: id === 232 ? '每日新增用户' : MB_CARDS[String(id)]?.name ?? 'gone', display: id === 232 ? 'bar' : MB_CARDS[String(id)]?.display ?? 'line', visualization_settings: vs, updated_at: '2026-01-01T00:00:00Z' } : null });
+      const changes = [...(lark.mbDash.extraCard ? [dc(1, 6, 0, 24, 405)] : [])];
+      return send({ name: '每日运营', updated_at: lark.mbDash.changedAt, tabs: [{ id: 1, name: '基础' }, ...(lark.mbDash.dropDetail ? [] : [{ id: 2, name: '明细' }]), { id: 3, name: '空的' }], dashcards: [...changes, 
         dc(1, 0, 0, 24, undefined, { text: '## 口径\n**上海时间**，[说明](https://example.com/doc)' }),
         dc(1, 1, 0, 24, 401, { 'graph.dimensions': ['date'], 'graph.metrics': ['payg_usd', 'builder_usd', 'success_rate'], series_settings: { payg_usd: { title: 'PAYG 收入' } } }),
         dc(1, 2, 0, 24, undefined, { text: '**本周销售**' }),
@@ -379,7 +384,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
         dc(1, 4, 0, 12, 406, { 'stackable.stack_type': 'stacked', 'graph.y_axis.title_text': '订单（未扣退款）', column_settings: { '["name","orders"]': { number_style: 'currency', currency: 'USD' } } }),
         dc(1, 4, 12, 12, 232, { 'graph.dimensions': ['reg_date'], 'graph.metrics': ['real_users'] }),
         dc(1, 5, 0, 24, 408),
-        dc(2, 0, 0, 24, 404), dc(2, 1, 0, 12, 405), dc(2, 1, 12, 12, 407),
+        ...(lark.mbDash.dropDetail ? [] : [dc(2, 0, 0, 24, 404), dc(2, 1, 0, 12, 405), dc(2, 1, 12, 12, 407)]),
         dc(3, 0, 0, 24, undefined, { text: 'only text' }),
       ] });
     }
@@ -538,6 +543,19 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       : send({ code: 99991668, msg: 'user access token not support' });
   }
   // everything below reads documents as the user
+  // the company directory (contact range: one department tree plus one person granted on their own)
+  if (p.startsWith('/contact/v3/') && bearer === 't-app') {
+    const person = (id: string, name: string) => ({ open_id: id, name, enterprise_email: `${id}@acme.example` });
+    if (p === '/contact/v3/scopes') return send({ code: 0, data: { department_ids: ['od-sales'], user_ids: ['ou_solo'], has_more: false } });
+    if (p === '/contact/v3/departments/od-sales') return send({ code: 0, data: { department: { open_department_id: 'od-sales', name: '销售', i18n_name: { en_us: 'Sales' }, leader_user_id: 'ou_lead' } } });
+    if (p === '/contact/v3/departments/od-sales/children') return send({ code: 0, data: { items: [{ open_department_id: 'od-east', name: '华东', parent_department_id: 'od-sales' }], has_more: false } });
+    if (p === '/contact/v3/users/find_by_department') {
+      const dep = url.searchParams.get('department_id');
+      const items = dep === 'od-sales' ? [person('ou_lead', 'Lee'), ...(lark.beaIn === 'od-sales' ? [person('ou_bea', 'Bea')] : [])] : lark.beaIn === 'od-east' ? [person('ou_bea', 'Bea')] : [];
+      return send({ code: 0, data: { items, has_more: false } });
+    }
+    if (p === '/contact/v3/users/ou_solo') return send({ code: 0, data: { user: person('ou_solo', 'Solo') } });
+  }
   if (!userOk()) return send({ code: 99991668, msg: 'invalid user token' });
   if (lark.rejectOnce) {
     lark.rejectOnce = false;
@@ -2294,6 +2312,52 @@ try {
     check(lark.scopesAsked.split(' ').includes('calendar:calendar:readonly'), 'reconnecting Lark keeps calendar reading');
     check(!(await tool(alex.token, 'save_homepage', { scope: 'me', layout: { modules: [{ type: 'agenda', width: 'half' }, { type: 'apps' }] } })).error, 'an agenda module can be put on a home page');
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
+  }
+
+  // ---------------------------------------------------------------- imported dashboards and their data stay in step
+  {
+    type Synced = { boards: { board: string; ok: boolean }[]; refreshed: number };
+    check((await api(bob.jar, 'POST', '/admin/connections/sync')).status >= 400, 'only admins update now');
+    const runs = lark.mbRuns;
+    const idle = (await api(alex.jar, 'POST', '/admin/connections/sync')).body as Synced;
+    check(idle.boards.length === 0, 'a dashboard that has not changed there is left as it is');
+    check(idle.refreshed > 0 && lark.mbRuns > runs, 'every Metabase source on a page or board is read again');
+    const tab1 = () => (((api(alex.jar, 'GET', '/boards')) as Promise<{ body: Record<string, unknown> }>));
+    const modulesOf = async (id: string) => ((await tab1()).body.boards as { id: string; layout: { modules: unknown[] } }[]).find((b) => b.id === id)?.layout.modules.length;
+    const before = await modulesOf('metabase-100-1');
+    lark.mbDash = { changedAt: new Date(Date.now() + 1000).toISOString(), extraCard: true, dropDetail: false };
+    const changed = (await api(alex.jar, 'POST', '/admin/connections/sync')).body as Synced;
+    check(changed.boards.length === 1 && changed.boards[0].ok && (await modulesOf('metabase-100-1'))! > before!, 'a dashboard changed there is synced: a card added there shows up here');
+    lark.mbDash = { changedAt: new Date(Date.now() + 2000).toISOString(), extraCard: true, dropDetail: true };
+    await api(alex.jar, 'POST', '/admin/connections/sync');
+    check((await modulesOf('metabase-100-2')) === undefined, 'a tab removed there is removed here');
+    lark.mbDash = { changedAt: new Date(Date.now() + 3000).toISOString(), extraCard: false, dropDetail: false };
+    await api(alex.jar, 'POST', '/admin/connections/sync');
+    check((await modulesOf('metabase-100-2'))! > 0 && (await modulesOf('metabase-100-1')) === before, 'and changing it back brings the board back as it was');
+  }
+
+  // ---------------------------------------------------------------- the directory comes from the channel (Lark contacts)
+  {
+    // a hub that signs in with Lark for real (not the dev login used above), on its own database
+    const dirData = mkdtempSync(path.join(tmpdir(), 'hub-dir-'));
+    const { execFile } = await import('node:child_process');
+    const run = () => new Promise<string>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
+      const { syncDirectory } = await import(${JSON.stringify(path.resolve('server/directory.ts'))});
+      const { all } = await import(${JSON.stringify(path.resolve('server/db.ts'))});
+      const n = await syncDirectory();
+      console.log(JSON.stringify({ n, users: all('SELECT id, name, email FROM users ORDER BY id'), deps: all('SELECT id, name, name_i18n, parent_id, leader_ids FROM departments ORDER BY id'), mem: all('SELECT department_id, user_id FROM user_departments ORDER BY department_id, user_id') }));
+    `], { env: { ...process.env, DEV_LOGIN: '', AUTH_PROVIDER: 'lark', DATA_DIR: dirData, HUB_SECRET: 'smoke', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis` } },
+      (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(out))));
+    type Dir = { n: number; users: { id: string; email: string }[]; deps: { id: string; name_i18n: string; parent_id: string | null; leader_ids: string }[]; mem: { department_id: string; user_id: string }[] };
+    const first = JSON.parse((await run()).trim().split('\n').at(-1)!) as Dir;
+    check(first.n === 3 && first.users.map((u) => u.id).join() === 'ou_bea,ou_lead,ou_solo' && first.users[0].email === 'ou_bea@acme.example', 'a sync brings in everyone in the contact range, with their company email');
+    check(first.deps.map((d) => `${d.id}<${d.parent_id ?? ''}`).join() === 'od-east<od-sales,od-sales<' && JSON.parse(first.deps[1].leader_ids)[0] === 'ou_lead' && JSON.parse(first.deps[1].name_i18n).en === 'Sales',
+      'and the departments, with their parent, leader and names per language');
+    check(first.mem.map((m) => `${m.department_id}:${m.user_id}`).join() === 'od-east:ou_bea,od-sales:ou_lead', 'and who is in which department');
+    lark.beaIn = 'od-sales';
+    const second = JSON.parse((await run()).trim().split('\n').at(-1)!) as Dir;
+    check(second.users.length === 3 && second.mem.map((m) => `${m.department_id}:${m.user_id}`).join() === 'od-sales:ou_bea,od-sales:ou_lead', 'syncing again picks up someone moving department, without duplicates');
+    rmSync(dirData, { recursive: true, force: true });
   }
 
   // ---------------------------------------------------------------- searching Lark documents (read-only, as the person)

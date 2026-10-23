@@ -293,6 +293,7 @@ const zhCN = {
   'err.calendar.badRange': 'from 和 to 是日期（YYYY-MM-DD），to 不能早于 from，最多相隔 31 天。',
   'err.docs.searchEmpty': '请给出要搜索的关键词。',
   'err.docs.searchScope': '要替你搜索 Lark 文档，需要你授权中台搜索云文档（一次即可）：{url}\n如果授权页没有这项权限，请管理员先在 Lark 开发者后台开通 search:docs:read。{detail}',
+  'err.directory.none': '这个中台没有可同步的通讯录（通讯录来自公司用的平台，比如 Lark）。',
   'err.docs.denied': '你在 Lark 里没有这个文档或位置的权限。',
   'err.docs.badLink': '看不懂这个链接：{url}。请给 Lark 文档、知识库页面或云空间文件夹的链接。',
   'err.docs.notDoc': '这个链接不是文档（是 {type}），表格和多维表格请用对应的工具。',

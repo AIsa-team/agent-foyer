@@ -1,8 +1,11 @@
 /**
- * The organisation page and the hub-wide search. Both only use what the hub already shows to every signed-in
- * colleague (the synced Lark directory, apps they can open, Skills, the resources page, boards they can see).
+ * The company directory (people and departments, kept in step with where the company keeps them), the organisation
+ * page and the hub-wide search. The page and the search only use what the hub already shows to every signed-in
+ * colleague (the synced directory, apps they can open, Skills, the resources page, boards they can see).
  */
-import { all, get, type User } from './db.ts';
+import { all, get, now, run, type User } from './db.ts';
+import { upsertUser, type Identity } from './auth/users.ts';
+import { channels } from './channels.ts';
 import { pick } from './library.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
@@ -12,6 +15,43 @@ import { listRequests } from './requests.ts';
 
 interface DeptRow { id: string; name: string; name_i18n: string | null; parent_id: string | null; leader_ids: string | null }
 
+// ---------------------------------------------------------------- the directory, from a channel
+/** People and departments as the company's platform has them; `members` lists each department's people in full. */
+export interface DirectorySnapshot {
+  departments: { id: string; name: string; i18n?: Record<string, string>; parentId?: string | null; leaderIds: string[] }[];
+  people: Identity[];
+  members: { departmentId: string; userIds: string[] }[];
+}
+/** Where the directory comes from (a channel, e.g. Lark's contacts). */
+export interface DirectoryProvider { name: string; read(): Promise<DirectorySnapshot> }
+
+export const directoryProvider = (): DirectoryProvider | null => channels.find((c) => c.directory)?.directory ?? null;
+
+/**
+ * Brings people and departments in step with the provider, so colleagues can be picked (as app members, recipients…)
+ * before they ever sign in. Membership is replaced per department the provider listed, so moves are picked up.
+ * Returns how many people it saw (0 without a provider).
+ */
+export async function syncDirectory(): Promise<number> {
+  const provider = directoryProvider();
+  if (!provider) return 0;
+  const d = await provider.read();
+  // one write at a time (upsertUser runs its own transaction)
+  for (const dep of d.departments) {
+    run(`INSERT INTO departments (id, name, name_i18n, parent_id, leader_ids, updated_at) VALUES (?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET name = excluded.name, name_i18n = excluded.name_i18n, parent_id = excluded.parent_id,
+           leader_ids = excluded.leader_ids, updated_at = excluded.updated_at`,
+      dep.id, dep.name, dep.i18n && Object.keys(dep.i18n).length ? JSON.stringify(dep.i18n) : null, dep.parentId ?? null, JSON.stringify(dep.leaderIds), now());
+  }
+  for (const p of d.people) upsertUser(p, false);
+  for (const m of d.members) {
+    run('DELETE FROM user_departments WHERE department_id = ?', m.departmentId);
+    for (const id of m.userIds) run('INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES (?, ?)', id, m.departmentId);
+  }
+  return d.people.length;
+}
+
+// ---------------------------------------------------------------- the organisation page
 export function organisation(locale: string) {
   const depts = all<DeptRow>('SELECT * FROM departments ORDER BY name');
   const members = all<{ user_id: string; department_id: string }>('SELECT * FROM user_departments');

@@ -22,7 +22,7 @@ import { pick } from './library.ts';
 import * as homepage from './homepage.ts';
 import * as dataSources from './data/sources.ts';
 import * as connectors from './data/connectors/index.ts';
-import { importBoard, importedBoards } from './data/importBoard.ts';
+import { importBoard, importedBoards, syncImportedBoards } from './data/importBoard.ts';
 import * as alerts from './data/alerts.ts';
 import { querySchema, CHART_KINDS } from './data/query.ts';
 import * as checks from './data/checks.ts';
@@ -34,7 +34,7 @@ import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as requests from './requests.ts';
 import * as boards from './boards.ts';
-import { organisation, search } from './directory.ts';
+import { directoryProvider, organisation, search, syncDirectory } from './directory.ts';
 import { isSupportedLocale, tr, UserError } from './i18n/index.ts';
 import { body, localeOf, requireAdmin, type HubEnv } from './http.ts';
 import { LARK_ONLY, larkAdminSettings, larkApi, larkLinks } from './lark/routes.ts';
@@ -77,7 +77,7 @@ api.get('/me', (c) => {
       url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName,
       accent: config.accent || null, devLogin: config.devLogin, login: loginName,
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
-      features: { lark: config.lark.enabled, messages: !!messenger, github: githubEnabled(), linear: linearEnabled() },
+      features: { lark: config.lark.enabled, directory: !!directoryProvider(), messages: !!messenger, github: githubEnabled(), linear: linearEnabled() },
       /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
       mailbox: mailboxName() || null,
     },
@@ -265,6 +265,12 @@ api.get('/boards', async (c) => {
   // a board shows each person only the numbers they may see
   const list = await Promise.all(boards.boardsFor(u, localeOf(c)).map(async (b) => ({ ...b, layout: { modules: await homepage.forViewer(u, b.layout.modules) } })));
   return c.json({ boards: list, canEditCompany: u.role === 'admin', editableDepartments: homepage.editableDepartments(u, localeOf(c)) });
+});
+/** Bring people and departments in step with the company's platform now (admins; hubs with a directory). */
+api.post('/admin/sync-directory', async (c) => {
+  requireAdmin(c.get('user'));
+  if (!directoryProvider()) throw new UserError('err.directory.none');
+  return c.json({ synced: await syncDirectory() });
 });
 api.get('/org', (c) => c.json(organisation(localeOf(c))));
 api.get('/search', (c) => c.json(search(c.get('user'), c.req.query('q') ?? '', localeOf(c))));
@@ -458,6 +464,12 @@ api.get('/admin', (c) => {
 });
 
 // ---- data connections (Metabase…) and the sources read through them; admins only
+/** Update now (admins): sync imported dashboards that changed there, and read again every connector source in use. */
+api.post('/admin/connections/sync', async (c) => {
+  requireAdmin(c.get('user'));
+  const synced = await syncImportedBoards();
+  return c.json({ boards: synced, refreshed: await dataSources.refreshSourcesInUse(0) });
+});
 api.get('/admin/connections', (c) => {
   requireAdmin(c.get('user'));
   return c.json({

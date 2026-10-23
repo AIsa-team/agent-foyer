@@ -1,6 +1,6 @@
 /**
  * The hub's API for what only exists when it signs in with Lark: each person's Lark connection, OKRs, their calendar,
- * apps' permission to use their Lark data, the Lark apps admins pin, the bot's group chats and the directory sync.
+ * apps' permission to use their Lark data, the Lark apps admins pin and the bot's group chats.
  * api.ts mounts this on a hub with Lark; on one without, the same paths answer that Lark is off (LARK_ONLY).
  */
 import { Hono } from 'hono';
@@ -12,7 +12,6 @@ import { cachedRead, forgetReads } from '../cache.ts';
 import * as appLark from '../apps/larkApi.ts';
 import { body, localeOf, requireAdmin, type HubEnv } from '../http.ts';
 import { larkAppCatalog } from './appCatalog.ts';
-import { syncDirectory } from './auth.ts';
 import { connection, connectUrl, forgetTokens } from './userToken.ts';
 import { userOkrs } from './okr.ts';
 import * as okrBoard from './okrBoard.ts';
@@ -25,7 +24,7 @@ export const larkApi = new Hono<HubEnv>();
 export const larkAdminSettings = () => ({ okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null });
 
 /** Paths that answer "Lark is off" on a hub without Lark. */
-export const LARK_ONLY = ['/lark/*', '/okr', '/okr/*', '/calendar', '/admin/okr-owner', '/admin/sync-directory', '/admin/lark-chats', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*'];
+export const LARK_ONLY = ['/lark/*', '/okr', '/okr/*', '/calendar', '/admin/okr-owner', '/admin/lark-chats', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*'];
 
 export interface LarkLink { id: number; name: string; description: string; url: string; icon: string; sort: number; in_sidebar: number }
 /** The Lark apps admins put on the Apps page (and the sidebar); none on a hub without Lark. */
@@ -122,9 +121,4 @@ larkApi.delete('/lark-links/:id', (c) => {
 larkApi.get('/admin/lark-chats', async (c) => {
   requireAdmin(c.get('user'));
   return c.json({ chats: await botChats() });
-});
-
-larkApi.post('/admin/sync-directory', async (c) => {
-  requireAdmin(c.get('user'));
-  return c.json({ synced: await syncDirectory() });
 });

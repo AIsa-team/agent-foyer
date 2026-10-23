@@ -14,7 +14,7 @@ import { pick as pickText } from './library.ts';
 import { CHART_KINDS, querySchema } from './data/query.ts';
 import { githubEnabled } from './github/app.ts';
 import { canReadSource, type SourceRow } from './data/sources.ts';
-import { connection } from './lark/userToken.ts';
+import { sourceKind } from './channels.ts';
 
 // ---------------------------------------------------------------- layout schema (also the MCP tool schema agents see)
 const text = () => z.record(z.string(), z.string().max(400)).describe(`text per hub language (${localeCodes().join(', ')})`);
@@ -111,7 +111,8 @@ const moduleSchema = z.discriminatedUnion('type', [
   }).describe('the viewer\'s own GitHub contributions in the company organisation: a calendar heatmap with commits, pull requests, reviews, streak and top repositories (each person sees their own; asks them to connect GitHub if they have not)'),
 ]);
 
-export const layoutSchema = z.object({ modules: z.array(moduleSchema).max(24) });
+// a dashboard imported from Metabase can be large; 60 modules is plenty for any page someone reads
+export const layoutSchema = z.object({ modules: z.array(moduleSchema).max(60) });
 export type Layout = z.infer<typeof layoutSchema>;
 
 export const DEFAULT_LAYOUT: Layout = { modules: [{ type: 'apps', id: 'apps' }, { type: 'skills', id: 'skills', width: 'half' }, { type: 'resources', id: 'resources', width: 'half' }] };
@@ -357,7 +358,6 @@ export function resetHome(user: User, scope: Scope, departmentId?: string) {
  * module asks them to connect).
  */
 export async function forViewer<M extends Module & { own?: boolean }>(user: User, modules: M[]): Promise<M[]> {
-  const larkConnected = connection(user.id).connected;
   const memo = new Map<string, Promise<boolean>>();
   const readable = (src: unknown): Promise<boolean> => {
     if (!src || typeof src !== 'object') return Promise.resolve(true);
@@ -368,7 +368,9 @@ export async function forViewer<M extends Module & { own?: boolean }>(user: User
     const id = String((src as { data?: string }).data ?? '');
     if (!memo.has(id)) {
       const s = get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', id);
-      memo.set(id, !s ? Promise.resolve(false) : s.kind === 'base' && !larkConnected ? Promise.resolve(true) : canReadSource(user, s));
+      // a platform the viewer has not connected yet: keep the module, which offers to connect
+      const k = s && sourceKind(s.kind);
+      memo.set(id, !s ? Promise.resolve(false) : k && !k.connected(user) ? Promise.resolve(true) : canReadSource(user, s));
     }
     return memo.get(id)!;
   };
