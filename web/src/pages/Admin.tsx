@@ -13,6 +13,7 @@ interface AdminData {
   larkLinks: LarkLink[];
   devLogin: boolean;
   alertNotify: 'admins' | 'everyone';
+  dataCombine: boolean;
   okrOwner: string | null;
   requestsChat: { id: string; name: string; locale?: string } | null;
 }
@@ -282,6 +283,13 @@ export function AdminPage() {
       <div className="section" id="connections">
         <div className="section-title">{t('admin.connections')} <span className="count">{t('admin.connectionsHint')}</span></div>
         <ConnectionsSection />
+        <div className="card pad" style={{ marginTop: 12 }}>
+          <label className="row" style={{ gap: 10, alignItems: 'flex-start' }}>
+            <input type="checkbox" checked={data.dataCombine} disabled={busy} style={{ marginTop: 3 }}
+              onChange={(e) => run(() => api.post('/admin/data-combine', { on: e.target.checked }), t(e.target.checked ? 'admin.combineOn' : 'admin.combineOff')).then(reload)} />
+            <span><b>{t('admin.combine')}</b><br /><span className="small muted">{t('admin.combineHint')}</span></span>
+          </label>
+        </div>
       </div>
 
       <div className="section">

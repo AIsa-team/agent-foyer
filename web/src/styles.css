@@ -429,6 +429,9 @@ kbd { font: 11px/1 var(--aisa-font-mono, ui-monospace, monospace); padding: 3px 
 .okr-people { display: flex; flex-wrap: wrap; gap: 8px 16px; }
 /* data boards */
 .data-tabs { margin-bottom: 16px; flex-wrap: wrap; }
+.conn-sql { display: inline-block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; font-family: var(--aisa-font-mono, monospace); font-size: 12px; }
+.data-tabs-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
+.data-tabs__label { align-self: center; padding: 0 8px 0 10px; font-size: 12px; color: var(--muted); }
 /* organisation */
 .org { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 16px; align-items: start; }
 @media (max-width: 900px) { .org { grid-template-columns: 1fr; } }

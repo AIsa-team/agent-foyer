@@ -13,7 +13,7 @@ import { oidcAuthorize, oidcExchange } from './oidc.ts';
 import { upsertUser } from './users.ts';
 import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userToken.ts';
 import { MAIL_SCOPES } from '../lark/mail.ts';
-import { DOCS_SCOPES, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
+import { DOCS_SCOPES, SEARCH_SCOPE, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
 import { CALENDAR_SCOPE } from '../lark/calendar.ts';
 import { SHEETS_SCOPE } from '../lark/sheets.ts';
 import { mailboxName, mailConnectUrl } from '../mail.ts';
@@ -70,7 +70,7 @@ authRoutes.get('/auth/lark/connect', (c) => {
   }
   const state = randomToken(16);
   setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|connect`, { ...cookieOpts, maxAge: 600 });
-  // keep write, document, wiki, mail and calendar access when reconnecting someone who already granted it
+  // keep write, document, wiki, mail, calendar and search access when reconnecting someone who already granted it
   const had = connection(user.id).scopes ?? [];
   const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
   const docs = c.req.query('docs') === '1' || DOCS_SCOPES.some((s) => had.includes(s));
@@ -78,7 +78,8 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const mail = config.mailDrafts === 'lark' && (c.req.query('mail') === '1' || MAIL_SCOPES.every((s) => had.includes(s)));
   const sheets = c.req.query('sheets') === '1' || had.includes(SHEETS_SCOPE);
   const calendar = c.req.query('calendar') === '1' || had.includes(CALENDAR_SCOPE);
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : [])];
+  const search = c.req.query('search') === '1' || had.includes(SEARCH_SCOPE);
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : []), ...(search ? [SEARCH_SCOPE] : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 

@@ -1,5 +1,6 @@
 /**
- * Lark documents for agents, always as the person: list the pages under a wiki page, read a document as Markdown
+ * Lark documents for agents, always as the person: search documents and wiki pages by keyword, list the pages under a
+ * wiki page, read a document as Markdown
  * (and its tables cell by cell), change the text of its cells and paragraphs or add to its end, and create one from
  * Markdown (so it is theirs, in their own space, a folder or under a wiki page they can edit). Writing asks for
  * document scopes the first time; placing under a wiki page also asks for wiki editing. Lark decides what the person
@@ -14,6 +15,8 @@ import { markdownToBlocks, type NewBlock } from './markdown.ts';
 
 /** Editing and creating documents; asked for when someone first has an agent write one. */
 export const DOCS_SCOPES = ['docx:document', 'docx:document:create'];
+/** Searching documents and wiki pages; asked for the first time someone has an agent search. */
+export const SEARCH_SCOPE = 'search:docs:read';
 /** Creating pages in a knowledge base; only asked for when a document is placed under a wiki page. */
 export const WIKI_WRITE_SCOPE = 'wiki:wiki';
 
@@ -57,6 +60,58 @@ function linkLike(given: string, kind: 'docx' | 'wiki', token: string) {
     if (/^https?:$/.test(u.protocol) && /(larksuite\.com|feishu\.cn|larkoffice\.com)$/.test(u.hostname)) return `https://${u.host}/${kind}/${token}`;
   } catch { /* a bare token */ }
   return larkLink(kind, token);
+}
+
+// ---------------------------------------------------------------- search
+interface SearchUnit {
+  title_highlighted?: string; summary_highlighted?: string; entity_type?: string;
+  result_meta?: { doc_types?: string; url?: string; owner_name?: string; update_time?: number; last_open_time?: number; edit_user_name?: string };
+}
+const plain = (s?: string) => (s ?? '').replace(/<\/?h>/g, '').trim();
+
+/**
+ * Documents and wiki pages matching `query` that the person may open, most relevant first (Lark's search, as them).
+ * `titleOnly` matches titles only; `limit` is at most 50.
+ */
+export async function searchDocs(user: User, query: string, opts: { titleOnly?: boolean; limit?: number; where?: 'all' | 'docs' | 'wiki' } = {}) {
+  const q = query.trim().slice(0, 50);
+  if (!q) throw new UserError('err.docs.searchEmpty');
+  const limit = Math.min(Math.max(opts.limit ?? 20, 1), 50);
+  const filter = opts.titleOnly ? { only_title: true } : {};
+  const where = opts.where ?? 'all';
+  const found: SearchUnit[] = [];
+  let total = 0;
+  let page = '';
+  for (let i = 0; i < 5 && found.length < limit; i++) {
+    const body = {
+      query: q, page_size: Math.min(20, limit - found.length), ...(page ? { page_token: page } : {}),
+      ...(where !== 'wiki' ? { doc_filter: filter } : {}), ...(where !== 'docs' ? { wiki_filter: filter } : {}),
+    };
+    let r: { data: { res_units?: SearchUnit[]; total?: number; has_more?: boolean; page_token?: string } };
+    try {
+      r = await asUser(user, '/search/v2/doc_wiki/search', { method: 'POST', body: JSON.stringify(body) });
+    } catch (e) {
+      if (e instanceof LarkError && SCOPE_CODES.has(e.code)) throw new UserError('err.docs.searchScope', { detail: e.message, url: `${config.hubUrl}/auth/lark/connect?return=%2Fme&search=1` });
+      throw e;
+    }
+    found.push(...(r.data.res_units ?? []));
+    total = r.data.total ?? found.length;
+    if (!r.data.has_more || !r.data.page_token) break;
+    page = r.data.page_token;
+  }
+  const day = (s?: number) => (s ? new Intl.DateTimeFormat('en-CA', { timeZone: config.timezone }).format(new Date(s * 1000)) : null);
+  return {
+    query: q, total,
+    results: found.slice(0, limit).map((u) => ({
+      title: plain(u.title_highlighted),
+      type: (u.result_meta?.doc_types ?? u.entity_type ?? '').toLowerCase(),
+      url: u.result_meta?.url ?? null,
+      ...(plain(u.summary_highlighted) ? { summary: plain(u.summary_highlighted) } : {}),
+      owner: u.result_meta?.owner_name ?? null,
+      updated: day(u.result_meta?.update_time),
+      ...(u.result_meta?.edit_user_name ? { lastEditedBy: u.result_meta.edit_user_name } : {}),
+    })),
+  };
 }
 
 // ---------------------------------------------------------------- wiki pages

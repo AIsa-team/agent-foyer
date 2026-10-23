@@ -59,6 +59,9 @@ export interface Connector {
   /** optional: the system's dashboards, and one of them in the hub's terms (see importBoard) */
   boards?(cfg: ConnectionConfig, q?: string): Promise<Item[]>;
   board?(cfg: ConnectionConfig, id: string): Promise<BoardDef>;
+  /** optional: the databases a read-only SQL query can run on, and how such a query is written down as an item */
+  databases?(cfg: ConnectionConfig): Promise<Item[]>;
+  sqlItem?(database: string, sql: string): string;
   /** optional: the system's own MCP server, reached with this connection's key (one identity for everyone) */
   mcp?(cfg: ConnectionConfig): { url: string; headers: Record<string, string> };
 }

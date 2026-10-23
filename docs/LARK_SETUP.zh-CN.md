@@ -62,6 +62,7 @@
 | `docx:document:readonly`（查看云文档） | Agent 读这个人能打开的 Lark 文档（制度、SOP、日报等） |
 | `docx:document`（编辑云文档）、`docx:document:create`（创建云文档）**可选** | Agent 替这个人新建 Lark 文档（Markdown 转成文档），或修改他有权编辑的文档（比如日报里他自己的单元格）。第一次用到时才会请求 |
 | `calendar:calendar:readonly`（获取日历、日程及忙闲信息）**可选** | 首页「今日日程」模块和 Agent 的 `list_calendar_events`：只读这个人自己的日历。第一次用到时才会请求 |
+| `search:docs:read`（搜索云文档）**可选** | Agent 的 `search_lark_docs`：按关键词搜这个人能打开的文档和知识库页面。第一次用到时才会请求 |
 | `wiki:wiki`（编辑知识库）**可选** | Agent 把新文档直接建在某个知识库页面下面。只在第一次这样做时请求 |
 
 指标提醒要由中台机器人在 Lark 里发消息：

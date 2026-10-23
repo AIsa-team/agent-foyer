@@ -12,8 +12,8 @@ import { Icon, useApi } from '../ui';
  */
 
 interface Meta {
-  id: string; title: string; description: string | null; kind: 'base' | 'app' | 'connector'; item: string | null; records: number;
-  where: { label: string; url: string }; fields: { name: string; kind: 'date' | 'number' | 'text'; from?: number; to?: number }[];
+  id: string; title: string; description: string | null; kind: 'base' | 'app' | 'connector' | 'combined'; item: string | null; records: number;
+  where: { label: string; url: string; parts?: { id: string; title: string }[]; mode?: 'join' | 'union' }; fields: { name: string; kind: 'date' | 'number' | 'text'; from?: number; to?: number }[];
 }
 type Cond = { field: string; op: string; value?: string | number };
 interface Query { measure: { op: string; field?: string }; date?: { field: string; bucket: string; last?: number }; groupBy?: string; series?: string; where?: Cond[] }
@@ -171,7 +171,12 @@ export function DataSourcePage() {
           {d.description && <p className="ds-desc">{d.description}</p>}
           <p>{t('ds.sub', { n: d.records.toLocaleString(locale) })}</p>
         </div>
-        <a className="aisa-btn" href={d.where.url} target="_blank" rel="noreferrer">{openLabel} <Icon name="external" size={13} /></a>
+        {d.kind === 'combined' && d.where.parts ? (
+          <p className="ds-parts aisa-small aisa-muted">
+            {t(d.where.mode === 'union' ? 'ds.stackedFrom' : 'ds.joinedFrom')}{' '}
+            {d.where.parts.map((p, i) => <span key={p.id}>{i > 0 && ' + '}<Link to={`/data/source/${encodeURIComponent(p.id)}`}>{p.title}</Link></span>)}
+          </p>
+        ) : <a className="aisa-btn" href={d.where.url} target="_blank" rel="noreferrer">{openLabel} <Icon name="external" size={13} /></a>}
       </div>
 
       {/* one filter row: the range first, then how to count and split */}

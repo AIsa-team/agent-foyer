@@ -84,11 +84,18 @@ export function deleteConnection(user: User, id: string) {
   return { deleted: true };
 }
 
-/** What can be connected (admins pick from it when adding a data source). */
-export async function browseConnection(user: User, id: string, q?: string) {
-  if (user.role !== 'admin') throw new UserError('err.adminOnly');
+/** What can be read through it, to register as a data source (anyone; only admins share what they register). */
+export async function browseConnection(_user: User, id: string, q?: string) {
   const { connector, cfg } = connectionConfig(id);
-  return { items: await connector.browse(cfg, q) };
+  return { items: await connector.browse(cfg, q), ...(connector.databases ? { databases: await connector.databases(cfg) } : {}) };
+}
+
+/** The connections, as anyone may see them: which there are and what they can do, never their settings. */
+export function connectionsForAll() {
+  return listConnections().map((c) => {
+    const k = connectorOf(c.type);
+    return { id: c.id, type: c.type, label: k.label, sql: !!k.sqlItem };
+  });
 }
 
 /** The other system's dashboards, to import one (connectors that have them). */

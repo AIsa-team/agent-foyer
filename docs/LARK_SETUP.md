@@ -69,6 +69,7 @@ Add these **user** scopes (user_access_token):
 | `docx:document:readonly` | agents reading Lark documents (policies, SOPs, daily reports) the person can open |
 | `docx:document`, `docx:document:create` **optional** | an agent creating a Lark document for the person (from Markdown), or changing one they may edit (e.g. their own cells of the daily report); only requested when someone first does that |
 | `calendar:calendar:readonly` **optional** | the home page's agenda module and agents' `list_calendar_events`: reading the person's own calendar, read-only; only requested when someone first uses it |
+| `search:docs:read` **optional** | agents' `search_lark_docs`: searching the documents and wiki pages the person may open, by keyword; only requested when someone first uses it |
 | `wiki:wiki` **optional** | an agent putting a new document under a wiki page; only requested the first time someone does that |
 
 Alerts are sent by the hub's bot in Lark:

@@ -66,7 +66,16 @@ export const metabase: Connector = {
       .slice(0, 200)
       .map((c) => ({ id: String(c.id), name: c.name, group: c.collection?.name ?? undefined, kind: c.display, url: `${base(cfg)}/question/${c.id}` }));
   },
+  async databases(cfg) {
+    const r = await mb<{ data: { id: number; name: string; engine?: string }[] } | { id: number; name: string; engine?: string }[]>(cfg, '/api/database');
+    return (Array.isArray(r) ? r : r.data).map((d) => ({ id: String(d.id), name: d.name, kind: d.engine }));
+  },
+  sqlItem(database, sql) {
+    if (!/^\d+$/.test(database)) throw new UserError('err.conn.badDatabase', { database });
+    return `sql:${database}:${readOnlySql(sql)}`;
+  },
   async fetch(cfg, item): Promise<Fetched> {
+    if (item.startsWith('sql:')) return runSql(cfg, item);
     if (!/^\d+$/.test(item)) throw new UserError('err.conn.itemGone');
     // the regular query answers from Metabase's result cache (the export below never does), up to 2,000 rows
     const q = await mb<{ status?: string; error?: string; row_count?: number; data?: { rows: unknown[][]; cols: { name: string; base_type?: string; effective_type?: string }[] } }>(
@@ -81,8 +90,15 @@ export const metabase: Connector = {
     }
     return exported(cfg, item);
   },
-  link: (cfg, item) => `${base(cfg)}/question/${item}`,
+  link: (cfg, item) => {
+    const sql = parseSqlItem(item);
+    if (!sql) return `${base(cfg)}/question/${item}`;
+    // an unsaved question in Metabase, opened from its definition
+    const card = { dataset_query: { database: Number(sql.database), type: 'native', native: { query: sql.sql } }, display: 'table', visualization_settings: {} };
+    return `${base(cfg)}/question#${Buffer.from(JSON.stringify(card)).toString('base64')}`;
+  },
   async info(cfg, item) {
+    if (parseSqlItem(item)) return { name: 'SQL' };
     if (!/^\d+$/.test(item)) throw new UserError('err.conn.itemGone');
     const card = await mb<Card & { description?: string | null }>(cfg, `/api/card/${item}`);
     return { name: card.name, description: card.description?.trim() || undefined };
@@ -135,6 +151,84 @@ interface MbDashboard {
 
 /** Rows the regular query endpoint returns at most; a question with more is exported instead. */
 const QUERY_LIMIT = 2000;
+
+// ---------------------------------------------------------------- read-only SQL, run as an unsaved question
+/**
+ * One SELECT (or WITH … SELECT) and nothing else: no second statement, nothing that writes, locks or changes the
+ * session. Metabase runs what it is given with its own database login, so this is checked here as well; the login
+ * itself should only be able to read.
+ */
+export function readOnlySql(sql: string): string {
+  const text = String(sql ?? '').trim().replace(/;\s*$/, '');
+  if (!text) throw new UserError('err.conn.sqlEmpty');
+  if (text.length > 20_000) throw new UserError('err.conn.sqlTooLong');
+  // what is left once comments and quoted text are taken out is what the database would act on
+  const bare = withoutQuotesAndComments(text).toLowerCase();
+  if (bare.includes(';')) throw new UserError('err.conn.sqlOneStatement');
+  if (!/^\s*\(*\s*(select|with)\b/.test(bare)) throw new UserError('err.conn.sqlSelectOnly');
+  const bad = /\b(insert|update|delete|merge|upsert|drop|alter|create|truncate|rename|grant|revoke|call|exec|execute|handler|load|lock|unlock|attach|detach|copy|vacuum|analyze|optimize|kill|shutdown|set|use|into|outfile|dumpfile)\b|\breplace\s+into\b|\bfor\s+(update|share)\b|\bpg_sleep\b|\bsleep\s*\(|\bbenchmark\s*\(/.exec(bare);
+  if (bad) throw new UserError('err.conn.sqlReadOnly', { word: bad[0].trim() });
+  return text;
+}
+
+/** The SQL with quoted text and comments blanked, read in one pass so neither can hide the other. */
+function withoutQuotesAndComments(sql: string): string {
+  let out = '';
+  for (let i = 0; i < sql.length;) {
+    const c = sql[i], two = sql.slice(i, i + 2);
+    if (c === "'" || c === '"' || c === '`') {
+      let j = i + 1;
+      while (j < sql.length) {
+        if (sql[j] === '\\' && c !== '`') { j += 2; continue; }
+        if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
+        j++;
+      }
+      // an unclosed quote hides the rest: refuse rather than guess
+      if (j >= sql.length) throw new UserError('err.conn.sqlReadOnly', { word: c });
+      out += c === '`' ? ' x ' : " '' ";
+      i = j + 1;
+    } else if (two === '--' || c === '#') {
+      const j = sql.indexOf('\n', i);
+      out += ' ';
+      i = j < 0 ? sql.length : j;
+    } else if (two === '/*') {
+      const j = sql.indexOf('*/', i + 2);
+      if (j < 0) throw new UserError('err.conn.sqlReadOnly', { word: '/*' });
+      // MySQL runs /*! … */ as code
+      if (sql[i + 2] === '!') throw new UserError('err.conn.sqlReadOnly', { word: '/*!' });
+      out += ' ';
+      i = j + 2;
+    } else {
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+function parseSqlItem(item: string): { database: string; sql: string } | null {
+  const m = /^sql:(\d+):([\s\S]+)$/.exec(item);
+  return m ? { database: m[1], sql: m[2] } : null;
+}
+
+type DatasetAnswer = { status?: string; error?: string; row_count?: number; data?: { rows: unknown[][]; cols: { name: string; base_type?: string; effective_type?: string }[] } };
+
+async function runSql(cfg: ConnectionConfig, item: string): Promise<Fetched> {
+  const parsed = parseSqlItem(item);
+  if (!parsed) throw new UserError('err.conn.itemGone');
+  const query = { database: Number(parsed.database), type: 'native', native: { query: readOnlySql(parsed.sql) } };
+  const q = await mb<DatasetAnswer>(cfg, '/api/dataset', { method: 'POST', body: JSON.stringify(query) });
+  if (q.status !== 'completed' || !q.data) throw new UserError('err.conn.failed', { detail: String(q.error ?? q.status ?? 'unexpected result') });
+  const cols = q.data.cols;
+  const fields = cols.map((c) => ({ name: c.name, type: typeOf(c.effective_type ?? c.base_type) }));
+  if ((q.row_count ?? q.data.rows.length) < QUERY_LIMIT) return { rows: q.data.rows.map((r) => Object.fromEntries(cols.map((c, i) => [c.name, r[i]]))), fields };
+  // more than the regular query returns: the export has no limit
+  const rows = await mb<unknown>(cfg, '/api/dataset/json', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ query: JSON.stringify(query) }).toString(),
+  });
+  if (!Array.isArray(rows)) throw new UserError('err.conn.failed', { detail: String((rows as { error?: string })?.error ?? 'unexpected result') });
+  return { rows: rows as Record<string, unknown>[], fields };
+}
 
 /** All rows, through the export (no row limit, but no cache either). */
 async function exported(cfg: ConnectionConfig, item: string): Promise<Fetched> {

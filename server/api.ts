@@ -554,7 +554,7 @@ api.get('/admin', (c) => {
   const u = c.get('user');
   const pending = all<App>("SELECT * FROM apps WHERE visibility = 'public' AND public_status = 'pending'").map((a) => apps.serializeApp(a, u, localeOf(c)));
   const users = all<User>('SELECT id, name, email, avatar, role, last_seen_at FROM users ORDER BY last_seen_at DESC NULLS LAST, name');
-  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null, requestsChat: requests.requestsChat() });
+  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), dataCombine: dataSources.combineEnabled(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null, requestsChat: requests.requestsChat() });
 });
 
 // ---- data connections (Metabase…) and the sources read through them; admins only
@@ -603,6 +603,12 @@ api.post('/admin/requests-chat', async (c) => {
   const b = await body<{ chat?: { id: string; name: string; locale?: string } | null }>(c);
   requests.setRequestsChat(c.get('user'), b.chat ? { id: String(b.chat.id ?? '').trim(), name: String(b.chat.name ?? ''), locale: b.chat.locale } : null);
   return c.json({ ok: true, requestsChat: requests.requestsChat() });
+});
+
+api.post('/admin/data-combine', async (c) => {
+  const b = await body<{ on?: boolean }>(c);
+  dataSources.setCombineEnabled(c.get('user'), !!b.on);
+  return c.json({ ok: true, on: dataSources.combineEnabled() });
 });
 
 api.post('/admin/alerts', async (c) => {

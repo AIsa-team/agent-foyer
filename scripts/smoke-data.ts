@@ -77,7 +77,11 @@ const lark = {
   appInfo: false,
   /** calls to the fake Metabase's own MCP server: the tool, its arguments and the key it came with */
   mbMcp: [] as { tool: string; args: unknown; key: string }[],
+  /** SQL the fake Metabase was asked to run */
+  mbSql: [] as string[],
   calendarTokens: new Set<string>(),
+  searchTokens: new Set<string>(),
+  searches: [] as Record<string, unknown>[],
   calendarQueries: [] as { start: number; end: number }[],
   /** extra events for the demo, at real times */
   calendarExtra: [] as Record<string, unknown>[],
@@ -161,6 +165,7 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('wiki:wiki')) lark.wikiTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('search:docs:read')) lark.searchTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -313,6 +318,26 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       return send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no such method' } });
     }
     if (mp === '/api/user/current') return send({ common_name: key === 'mb_admin' ? 'Admin' : 'AIsa Hub', is_superuser: key === 'mb_admin' });
+    // read-only SQL as an unsaved question: the result depends on the table it reads
+    if (mp === '/api/database') return send({ data: [{ id: 2, name: 'prod (read only)', engine: 'mysql' }] });
+    if (mp === '/api/dataset' || mp === '/api/dataset/json') {
+      const query = mp === '/api/dataset' ? JSON.parse(raw) : JSON.parse(new URLSearchParams(raw).get('query') ?? '{}');
+      const sql = String(query.native?.query ?? '');
+      lark.mbSql.push(sql);
+      const tables: Record<string, Record<string, unknown>[]> = {
+        orders: [{ customer: 'c1', amount: 10 }, { customer: 'C2 ', amount: 5 }, { customer: 'c3', amount: 1 }],
+        tiers: [{ customer: 'c1', tier: 'A' }, { customer: 'c2', tier: 'B' }],
+        signups: [{ day: '2026-10-01', n: 3 }, { day: '2026-10-02', n: 4 }],
+        big: Array.from({ length: 2500 }, (_, i) => ({ k: i })),
+      };
+      const name = Object.keys(tables).find((t) => new RegExp(`from\\s+${t}\\b`, 'i').test(sql));
+      if (!name) return send({ status: 'failed', error: 'Table not found' });
+      const all = tables[name];
+      if (mp === '/api/dataset/json') return send(all);
+      const shown = all.slice(0, 2000);
+      const cols = Object.keys(all[0]).map((c) => ({ name: c, base_type: typeof all[0][c] === 'number' ? 'type/Integer' : 'type/Text' }));
+      return send({ status: 'completed', row_count: shown.length, data: { cols, rows: shown.map((r) => cols.map((c) => r[c.name])) } });
+    }
     if (mp === '/api/card') return send([
       { id: 232, name: '每日新增用户', collection: { name: '运营' }, display: 'line' },
       { id: 309, name: '每日收入拆分', collection: { name: '运营' }, display: 'line' },
@@ -561,6 +586,19 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const only = url.searchParams.getAll('period_ids');
     const list = only.length ? mine.filter((e) => only.includes(e.period_id)) : mine;
     return send({ code: 0, data: { okr_list: list, total: list.length } });
+  }
+  // searching documents and wiki pages: needs the search scope; pages of page_size
+  if (p === '/search/v2/doc_wiki/search' && req.method === 'POST') {
+    if (!lark.searchTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [search:docs:read]' });
+    lark.searches.push(body);
+    const all = [
+      { title_highlighted: '团队工作<h>日报</h> 1023', summary_highlighted: '昨天完成…', entity_type: 'WIKI', result_meta: { doc_types: 'WIKI', url: 'https://acme.larksuite.com/wiki/wikDaily1023', owner_name: 'Alex L', update_time: 1792750000, edit_user_name: 'Bo' } },
+      { title_highlighted: '<h>日报</h>模板', summary_highlighted: '', entity_type: 'DOC', result_meta: { doc_types: 'DOCX', url: 'https://acme.larksuite.com/docx/doxTemplate', owner_name: 'Alex L', update_time: 1792700000 } },
+      { title_highlighted: '用户与市场洞察', summary_highlighted: '本周<h>用户</h>访谈', entity_type: 'WIKI', result_meta: { doc_types: 'WIKI', url: 'https://acme.larksuite.com/wiki/wikInsight', owner_name: 'Bo', update_time: 1792600000 } },
+    ].filter((u) => u.title_highlighted.replace(/<\/?h>/g, '').includes(String(body.query)) || (!body.doc_filter?.only_title && !body.wiki_filter?.only_title && u.summary_highlighted.replace(/<\/?h>/g, '').includes(String(body.query))));
+    const from = Number(body.page_token ?? 0), size = Number(body.page_size ?? 20);
+    const units = all.slice(from, from + size);
+    return send({ code: 0, data: { total: all.length, has_more: from + size < all.length, ...(from + size < all.length ? { page_token: String(from + size) } : {}), res_units: units } });
   }
   // the person's own calendar: needs the calendar scope; events are placed from the start of the range asked for
   if (p === '/calendar/v4/calendars/primary' && req.method === 'POST') {
@@ -2258,11 +2296,115 @@ try {
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
   }
 
+  // ---------------------------------------------------------------- searching Lark documents (read-only, as the person)
+  {
+    check(String((await tool(alex.token, 'search_lark_docs', { query: '日报' })).error).includes('search=1'), 'searching first asks the person to allow it');
+    await connect(alex.jar, '&search=1');
+    check(lark.scopesAsked.split(' ').includes('search:docs:read'), 'allowing it asks Lark for searching only');
+    type Found = { total: number; results: { title: string; type: string; url: string; summary?: string; owner: string; updated: string; lastEditedBy?: string }[] };
+    const found = await tool(alex.token, 'search_lark_docs', { query: '日报' }) as Found;
+    check(found.total === 2 && found.results[0].title === '团队工作日报 1023' && found.results[0].type === 'wiki' && found.results[0].url.endsWith('/wiki/wikDaily1023')
+      && found.results[0].updated === '2026-10-23' && found.results[0].lastEditedBy === 'Bo' && found.results[1].type === 'docx',
+      'documents and wiki pages come back with title (no highlight marks), type, link, owner and date');
+    const sent = lark.searches.at(-1) as { doc_filter?: unknown; wiki_filter?: unknown };
+    check(!!sent.doc_filter && !!sent.wiki_filter, 'both documents and wiki pages are searched by default');
+    await tool(alex.token, 'search_lark_docs', { query: '用户', where: 'wiki', title_only: true });
+    const wikiOnly = lark.searches.at(-1) as { doc_filter?: unknown; wiki_filter?: { only_title?: boolean } };
+    check(!wikiOnly.doc_filter && wikiOnly.wiki_filter?.only_title === true, 'and it can be wiki pages only, titles only');
+    check((await tool(alex.token, 'search_lark_docs', { query: '用户与市场洞察' }) as Found).results[0]?.url.endsWith('/wiki/wikInsight'), 'a page is found by its name');
+    const one = await tool(alex.token, 'search_lark_docs', { query: '日报', limit: 1 }) as Found;
+    check(one.results.length === 1 && one.total === 2, 'limit keeps the first results and says how many there are');
+    check(String((await tool(alex.token, 'search_lark_docs', { query: '  ' })).error).length > 0, 'an empty search is refused');
+    await connect(alex.jar);
+    check(lark.scopesAsked.split(' ').includes('search:docs:read'), 'reconnecting Lark keeps searching');
+  }
+
+  // ---------------------------------------------------------------- people pull their own data from Metabase
+  {
+    type Conn = { id: string; sql?: boolean; config?: unknown };
+    const conns = (await tool(bob.token, 'list_connections')) as { connections: Conn[] };
+    check(conns.connections.some((c) => c.id === 'metabase' && c.sql) && conns.connections.every((c) => c.config === undefined), 'anyone sees the data connections, without their settings');
+    const browsed = await tool(bob.token, 'browse_connection', { connection: 'metabase' }) as { items: { id: string }[]; databases: { id: string; name: string }[] };
+    check(browsed.items.some((x) => x.id === '232') && browsed.databases[0]?.id === '2', 'and browses what it can read, with the databases SQL can run on');
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-signups', title: { 'zh-CN': '新增', en: 'Sign-ups' }, connection: 'metabase', item: '232', audience: { company: true } })).error).includes('admin'),
+      'sharing what is read through the key is for admins');
+    check((await tool(bob.token, 'save_data_source', { id: 'bob-q', title: { 'zh-CN': '新增', en: 'Sign-ups' }, connection: 'metabase', item: '232' })).saved === true, 'a member registers a Metabase question for themselves');
+    const sqlBad = await tool(bob.token, 'save_data_source', { id: 'bob-bad', title: { en: 'x' }, connection: 'metabase', database: '2', sql: "select 1; delete from orders" });
+    check(String(sqlBad.error).length > 0 && !lark.mbSql.some((q) => /delete/i.test(q)), 'SQL that is more than one SELECT is refused before Metabase sees it');
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-bad', title: { en: 'x' }, connection: 'metabase', database: '2', sql: 'update orders set amount = 0' })).error).length > 0, 'and so is SQL that writes');
+    check((await tool(bob.token, 'save_data_source', { id: 'bob-orders', title: { 'zh-CN': '我的订单', en: 'My orders' }, connection: 'metabase', database: '2', sql: 'select customer, amount from orders' })).saved === true,
+      'a read-only SELECT becomes a data source');
+    const sum = await tool(bob.token, 'query_data', { source: 'bob-orders', query: { measure: { op: 'sum', field: 'amount' } } }) as { stat: { value: number } };
+    check(sum.stat.value === 16, 'and is queried like any other source');
+    check((await tool(bob.token, 'save_data_source', { id: 'bob-big', title: { en: 'Big' }, connection: 'metabase', database: '2', sql: 'select k from big' })).saved === true
+      && (await tool(bob.token, 'read_data_rows', { source: 'bob-big', limit: 1 }) as { total: number }).total === 2500, 'more rows than a regular query returns come through the export');
+    const aliceSees = (await tool(alice.token, 'list_data_sources')) as { sources: { id: string }[] };
+    check(!aliceSees.sources.some((x) => x.id === 'bob-orders') && !!(await tool(alice.token, 'read_data_rows', { source: 'bob-orders' })).error, "it is the member's own: colleagues neither see nor read it");
+    const sharedSrc = await tool(alex.token, 'set_data_source_audience', { id: 'bob-orders', audience: { company: true } });
+    check(!sharedSrc.error && !(await tool(alice.token, 'read_data_rows', { source: 'bob-orders' })).error, 'an admin shares it with the company');
+    await tool(bob.token, 'save_data_source', { id: 'bob-orders', title: { 'zh-CN': '我的订单', en: 'My orders' }, connection: 'metabase', database: '2', sql: 'select customer, amount from orders where amount > 1' });
+    check(!!(await tool(alice.token, 'read_data_rows', { source: 'bob-orders' })).error, 'when its owner changes what it reads, it is private again until an admin looks');
+    await tool(alex.token, 'set_data_source_audience', { id: 'bob-orders', audience: {} });
+    await tool(bob.token, 'save_data_source', { id: 'bob-orders', title: { 'zh-CN': '我的订单', en: 'My orders' }, connection: 'metabase', database: '2', sql: 'select customer, amount from orders' });
+
+    // ---------------------------------------------------------------- everyone's own boards
+    const ownLayout = { modules: [{ type: 'note', body: { 'zh-CN': '我的笔记', en: 'My note' } }, { type: 'stats', items: [{ label: { 'zh-CN': '金额', en: 'Amount' }, source: { data: 'bob-orders', query: { measure: { op: 'sum', field: 'amount' } } } }] }] };
+    check(String((await tool(bob.token, 'save_board', { id: 'bob-board', title: { 'zh-CN': '我的', en: 'Mine' }, layout: ownLayout })).error).includes('scope'), 'a member asking for a company board is told to make their own');
+    const own = await tool(bob.token, 'save_board', { id: 'bob-board', title: { 'zh-CN': '我的看板', en: 'My board' }, scope: 'me', layout: ownLayout }) as { saved: boolean; scope: string; url: string };
+    check(own.saved && own.scope === 'me' && own.url.endsWith('/data?board=bob-board'), 'anyone builds a board of their own');
+    type B = { id: string; scope: string; mine?: boolean; owner?: { name: string }; share?: { company: boolean }; layout: { modules: { type: string }[] } };
+    const bobList = (await api(bob.jar, 'GET', '/boards')).body.boards as B[];
+    check(bobList.find((b) => b.id === 'bob-board')?.mine === true && bobList.find((b) => b.id === 'bob-board')?.layout.modules.length === 2, 'it is on their Data page');
+    check(!((await api(alice.jar, 'GET', '/boards')).body.boards as B[]).some((b) => b.id === 'bob-board') && !((await api(alex.jar, 'GET', '/boards')).body.boards as B[]).some((b) => b.id === 'bob-board'),
+      'nobody else sees it, admins included');
+    check(String((await tool(alice.token, 'save_board', { id: 'bob-board', title: { en: 'x' }, scope: 'me', layout: ownLayout })).error).length > 0
+      && String((await tool(alice.token, 'delete_board', { id: 'bob-board' })).error).length > 0, "others can neither take its id nor delete it");
+    const shared = await tool(bob.token, 'share_board', { id: 'bob-board', share: { people: ['alice@example.com'] } }) as { sharedWith: { people?: string[] } };
+    check(shared.sharedWith.people?.length === 1, 'its owner shares it with a colleague');
+    const aliceBoard = ((await api(alice.jar, 'GET', '/boards')).body.boards as B[]).find((b) => b.id === 'bob-board');
+    check(aliceBoard?.owner?.name !== undefined && !aliceBoard?.mine && !aliceBoard?.share, 'who it is shared with sees it, with whose it is (but not whom else it is shared with)');
+    check(aliceBoard?.layout.modules.map((m) => m.type).join() === 'note', "a module on the owner's own data stays hidden for them");
+    check(String((await tool(alex.token, 'share_board', { id: 'company-sales', share: { company: true } })).error).length > 0, 'company and department boards are not shared this way');
+    await tool(bob.token, 'share_board', { id: 'bob-board', share: {} });
+    check(!((await api(alice.jar, 'GET', '/boards')).body.boards as B[]).some((b) => b.id === 'bob-board'), 'sharing with nobody makes it private again');
+
+    // ---------------------------------------------------------------- combining two sources (admins turn it on)
+    await tool(bob.token, 'save_data_source', { id: 'bob-tiers', title: { 'zh-CN': '客户分级', en: 'Tiers' }, connection: 'metabase', database: '2', sql: 'select customer, tier from tiers' });
+    const joinDef = { sources: ['bob-orders', 'bob-tiers'], mode: 'join', on: [{ left: 'customer', right: 'customer' }] };
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-joined', title: { en: 'Joined' }, combine: joinDef })).error).includes('admin'), 'combining is off until an admin turns it on');
+    check((await api(bob.jar, 'POST', '/admin/data-combine', { on: true })).status >= 400, 'only admins switch it');
+    check((await api(alex.jar, 'POST', '/admin/data-combine', { on: true })).body.on === true, 'an admin turns combining on');
+    check((await tool(bob.token, 'save_data_source', { id: 'bob-joined', title: { 'zh-CN': '订单和分级', en: 'Orders with tiers' }, combine: joinDef })).saved === true, 'then two sources are joined on a field');
+    const joined = await tool(bob.token, 'read_data_rows', { source: 'bob-joined', sort: { field: 'amount', desc: true } }) as { total: number; rows: Record<string, string>[] };
+    check(joined.total === 3 && joined.rows.map((r) => `${r.customer}:${r.tier ?? ''}`).join() === 'c1:A,C2 :B,c3:', 'every left row stays, matched ignoring case and spaces');
+    const byTier = await tool(bob.token, 'query_data', { source: 'bob-joined', query: { measure: { op: 'sum', field: 'amount' }, groupBy: 'tier' } }) as { rows: { key: string; value: number }[] };
+    check(byTier.rows.some((r) => r.key === 'A' && r.value === 10) && byTier.rows.some((r) => r.key === 'B' && r.value === 5), 'and is charted by fields of either side');
+    await tool(bob.token, 'save_data_source', { id: 'bob-inner', title: { en: 'Inner' }, combine: { ...joinDef, how: 'inner' } });
+    check((await tool(bob.token, 'read_data_rows', { source: 'bob-inner' }) as { total: number }).total === 2, 'an inner join drops rows without a match');
+    await tool(bob.token, 'save_data_source', { id: 'bob-stacked', title: { en: 'Stacked' }, combine: { sources: ['bob-orders', 'bob-tiers'], mode: 'union', label: 'from' } });
+    const stacked = await tool(bob.token, 'read_data_rows', { source: 'bob-stacked', fields: ['customer', 'from'] }) as { total: number; rows: Record<string, string>[] };
+    check(stacked.total === 5 && new Set(stacked.rows.map((r) => r.from)).size === 2, 'two sources are stacked, saying where each row came from');
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-nested', title: { en: 'x' }, combine: { sources: ['bob-joined', 'bob-tiers'], mode: 'union' } })).error).length > 0, 'a combined source is not combined again');
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-nokey', title: { en: 'x' }, combine: { sources: ['bob-orders', 'bob-tiers'], mode: 'join', on: [{ left: 'customer', right: 'nope' }] } })).error).includes('nope'), 'join fields are checked');
+    check(!!(await tool(alice.token, 'read_data_rows', { source: 'bob-joined' })).error, 'whoever cannot read a part cannot read the combination');
+    check(String((await tool(bob.token, 'delete_data_source', { id: 'bob-tiers' })).error).includes('bob-'), 'a part cannot be deleted while a combination uses it');
+    await api(alex.jar, 'POST', '/admin/data-combine', { on: false });
+    check(String((await tool(bob.token, 'read_data_rows', { source: 'bob-joined' })).error).length > 0, 'turning combining off stops combined sources');
+    await api(alex.jar, 'POST', '/admin/data-combine', { on: true });
+    for (const id of ['bob-joined', 'bob-inner', 'bob-stacked']) await tool(bob.token, 'delete_data_source', { id });
+  }
+
   if (KEEP) {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert
     await connect(alex.jar);
     const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
     await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true, disabledTools: ['question_write'] });
+    await tool(bob.token, 'save_data_source', { id: 'bob-joined', title: { 'zh-CN': '订单和客户分级', en: 'Orders with tiers' }, combine: { sources: ['bob-orders', 'bob-tiers'], mode: 'join', on: [{ left: 'customer', right: 'customer' }] } });
+    await tool(bob.token, 'save_board', { id: 'bob-board', title: { 'zh-CN': '我的客户', en: 'My customers' }, scope: 'me', layout: { modules: [
+      { type: 'stats', items: [{ label: { 'zh-CN': '订单金额', en: 'Amount' }, source: { data: 'bob-orders', query: { measure: { op: 'sum', field: 'amount' } } } }, { label: { 'zh-CN': '客户数', en: 'Customers' }, source: { data: 'bob-joined', query: { measure: { op: 'count' } } } }] },
+      { type: 'chart', kind: 'bar', width: 'half', title: { 'zh-CN': '各分级金额', en: 'Amount by tier' }, source: { data: 'bob-joined', query: { measure: { op: 'sum', field: 'amount' }, groupBy: 'tier' } } },
+      { type: 'table', width: 'half', title: { 'zh-CN': '订单', en: 'Orders' }, source: { data: 'bob-joined' } },
+    ] } });
     lark.calendarExtra.push(
       { event_id: 'e-now', summary: '产品评审', start_time: minutes(-20), end_time: minutes(25), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/9' }, attendees: [{ type: 'resource', display_name: '会议室 B' }], event_organizer: { display_name: 'Alex L' } },
       { event_id: 'e-soon', summary: 'Tether 支付对接', start_time: minutes(35), end_time: minutes(80), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/10' }, event_organizer: { display_name: 'Bo' } },

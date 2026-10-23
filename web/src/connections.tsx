@@ -9,7 +9,7 @@ interface Imported { id: string; title: string; board: string; url: string; upda
 interface Connection { id: string; type: string; label: string; config: Record<string, string>; secretsSet: string[]; status: string | null; checkedAt: number | null; sources: number; imported: Imported[] }
 interface ImportResult { name: string; url: string; boards: { id: string; title: string }[]; sources: { created: string[]; reused: string[] }; skipped: { name: string; reason: string }[] }
 interface Audience { company: boolean; people: { id: string; name: string }[]; departments: { id: string; name: string }[] }
-interface Source { id: string; title: string; description?: string; url: string; connection: string; item: string; audience: Audience }
+interface Source { id: string; title: string; description?: string; url: string; connection: string; item: string; audience: Audience; owner: string; ownerReads?: boolean }
 interface Data { connectors: ConnectorInfo[]; connections: Connection[]; sources: Source[]; departments: { id: string; name: string }[] }
 interface Item { id: string; name: string; group?: string; url?: string }
 
@@ -93,9 +93,9 @@ function ConnectionCard({ connector, conn, reload }: { connector: ConnectorInfo;
   );
 }
 
-const audienceText = (a: Audience, t: ReturnType<typeof useI18n>['t']) => {
+const audienceText = (a: Audience, t: ReturnType<typeof useI18n>['t'], owner?: string) => {
   if (a.company) return t('conn.aud.company');
-  const parts = [...a.departments.map((d) => d.name), ...a.people.map((p) => p.name)];
+  const parts = [...(owner ? [owner] : []), ...a.departments.map((d) => d.name), ...a.people.filter((p) => p.name !== owner).map((p) => p.name)];
   return parts.length ? t('conn.aud.adminsAnd', { who: parts.join(t('common.listSeparator')) }) : t('conn.aud.admins');
 };
 
@@ -127,10 +127,14 @@ function SourcesList({ conn, sources, departments, reload }: { conn: Connection;
                       {s.description ? s.description : <span className="muted">{t('conn.desc.none')}</span>}
                     </button>
                   </td>
-                  <td className="small hide-sm"><a href={s.url} target="_blank" rel="noreferrer">#{s.item} <Icon name="external" size={12} /></a></td>
+                  <td className="small hide-sm">
+                    <a href={s.url} target="_blank" rel="noreferrer" title={s.item.startsWith('sql:') ? s.item.replace(/^sql:\d+:/, '') : undefined}>
+                      {s.item.startsWith('sql:') ? <span className="conn-sql">SQL · {s.item.replace(/^sql:\d+:/, '')}</span> : `#${s.item}`} <Icon name="external" size={12} />
+                    </a>
+                  </td>
                   <td className="small">
                     <button className="btn sm ghost" onClick={() => setAudienceOf(s)} type="button" title={t('conn.aud.edit')}>
-                      <Icon name={s.audience.company ? 'org' : 'user'} size={13} /> {audienceText(s.audience, t)}
+                      <Icon name={s.audience.company ? 'org' : 'user'} size={13} /> {audienceText(s.audience, t, s.ownerReads ? s.owner : undefined)}
                     </button>
                   </td>
                   <td style={{ textAlign: 'right' }}>

@@ -582,6 +582,10 @@ const MIGRATIONS: string[] = [
   `,  // a service reached with a data connection's credential, the same for everyone (e.g. Metabase's own MCP)
   `
   ALTER TABLE mcp_services ADD COLUMN connection_id TEXT REFERENCES connections(id) ON DELETE SET NULL;
+  `,  // someone's own boards on the Data page, and who they share them with
+  `
+  ALTER TABLE boards ADD COLUMN owner_id TEXT REFERENCES users(id) ON DELETE CASCADE;
+  ALTER TABLE boards ADD COLUMN audience TEXT;
   `,
 ];
 

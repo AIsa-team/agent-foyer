@@ -8,9 +8,13 @@
  *   optional `_id` and `_url` on a row identify it and link back to where it lives. The hub requests it as the viewer
  *   (the same identity headers a browser request gets), and only for people allowed to open the app.
  *
- * - connector: an item in another system read through a connection an admin set up (a Metabase question…), with
- *   one shared key. The hub decides who may read it: admins, plus its audience (the company, chosen people,
- *   departments). See ./connectors.
+ * - connector: an item in another system read through a connection an admin set up (a Metabase question, a
+ *   read-only SQL query…), with one shared key. Anyone may register one; the hub decides who may read it: admins,
+ *   whoever registered it, plus its audience (the company, chosen people, departments), which only admins set.
+ *   See ./connectors.
+ *
+ * - combined: two other sources joined on matching fields or stacked into one (when an admin turned combining on).
+ *   Each part is read as the viewer, so a combined source never shows anyone more than its parts would.
  *
  * All kinds come out as fields + rows, so queries, charts, alerts and checks treat them alike.
  */
@@ -32,7 +36,7 @@ import { connectionConfig } from './connectors/index.ts';
 import { z } from 'zod';
 
 export interface SourceRow {
-  id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector'; app_token: string; table_id: string; view_id: string | null;
+  id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector' | 'combined'; app_token: string; table_id: string; view_id: string | null;
   app_slug: string | null; app_path: string | null; connection_id: string | null; item: string | null; audience: string | null;
   description_i18n: string | null; description_manual: number;
   owner_id: string; created_at: number; updated_at: number;
@@ -51,6 +55,98 @@ export interface Table { fields: Field[]; rows: Row[] }
 
 const SLUG = /^[a-z0-9][a-z0-9-]{1,40}$/;
 
+// ---------------------------------------------------------------- combined sources (hub-wide switch, off by default)
+export function combineEnabled(): boolean {
+  return get<{ value: string }>("SELECT value FROM settings WHERE key = 'data.combine'")?.value === 'on';
+}
+export function setCombineEnabled(user: User, on: boolean) {
+  if (user.role !== 'admin') throw new UserError('err.adminOnly');
+  run(`INSERT INTO settings (key, value, updated_at) VALUES ('data.combine', ?, ?)
+       ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`, on ? 'on' : 'off', now());
+  for (const c of all<{ id: string }>("SELECT id FROM data_sources WHERE kind = 'combined'")) clearCache(c.id);
+}
+
+export const combineSchema = z.object({
+  sources: z.array(z.string()).length(2).describe('ids of the two data sources: [left, right]'),
+  mode: z.enum(['join', 'union']).describe('join: put the right source\'s fields next to each left row with matching values; union: rows of both, one under the other'),
+  on: z.array(z.object({ left: z.string(), right: z.string() })).min(1).max(3).optional().describe('join: field pairs that must match (compared as text, ignoring case and surrounding spaces)'),
+  how: z.enum(['left', 'inner']).optional().describe('join: left keeps left rows without a match (default), inner drops them'),
+  label: z.string().max(40).optional().describe('union: name of the added field saying which source a row came from (default "source")'),
+});
+export type Combine = z.infer<typeof combineSchema>;
+const MAX_COMBINED_ROWS = 100_000;
+
+const combineOf = (s: SourceRow): Combine => JSON.parse(s.item ?? '{}') as Combine;
+
+/** Checks a definition against the two sources as they are now, read by `user`. */
+async function checkCombine(user: User, c: Combine, id: string) {
+  const parts = c.sources.map((sid) => {
+    if (sid === id) throw new UserError('err.data.combineSelf');
+    const src = getSource(sid);
+    if (src.kind === 'combined') throw new UserError('err.data.combineNested', { id: sid });
+    return src;
+  });
+  if (c.mode === 'join' && !c.on?.length) throw new UserError('err.data.combineOn');
+  const [a, b] = await Promise.all(parts.map((src) => loadTable(user, src)));
+  for (const pair of c.mode === 'join' ? c.on ?? [] : []) {
+    if (!a.fields.some((f) => f.name === pair.left)) throw new UserError('err.data.noField', { field: pair.left, role: 'on.left', fields: a.fields.map((f) => f.name).join(', ') });
+    if (!b.fields.some((f) => f.name === pair.right)) throw new UserError('err.data.noField', { field: pair.right, role: 'on.right', fields: b.fields.map((f) => f.name).join(', ') });
+  }
+  return combineTables(c, parts, a, b);
+}
+
+/** The two tables made into one: joined on the `on` fields, or stacked. */
+function combineTables(c: Combine, parts: SourceRow[], a: Table, b: Table): Table {
+  const keyOf = (t: Table, names: string[]) => {
+    const fs = names.map((n) => t.fields.find((f) => f.name === n));
+    return (r: Row) => fs.map((f) => (f ? String(plainText(r.fields[f.name], f) ?? '').trim().toLowerCase() : '')).join('\u0000');
+  };
+  if (c.mode === 'union') {
+    const label = c.label?.trim() || 'source';
+    const titleOf = (src: SourceRow) => pick(JSON.parse(src.title_i18n), config.defaultLocale) || src.id;
+    const fields: Field[] = [...a.fields];
+    for (const f of b.fields) if (!fields.some((x) => x.name === f.name)) fields.push(f);
+    if (!fields.some((f) => f.name === label)) fields.push({ id: label, name: label, type: FIELD.text, uiType: 'Text' });
+    const rows = [
+      ...a.rows.map((r) => ({ ...r, id: r.id ? `a:${r.id}` : '', fields: { ...r.fields, [label]: titleOf(parts[0]) } })),
+      ...b.rows.map((r) => ({ ...r, id: r.id ? `b:${r.id}` : '', fields: { ...r.fields, [label]: titleOf(parts[1]) } })),
+    ];
+    if (rows.length > MAX_COMBINED_ROWS) throw new UserError('err.data.combineTooBig', { n: MAX_COMBINED_ROWS });
+    return { fields, rows };
+  }
+  const on = c.on ?? [];
+  const rightKeys = new Set(on.map((p) => p.right));
+  // right fields that clash with a left one are named after their source: "amount (crm-orders)"
+  const rename = new Map(b.fields.filter((f) => !rightKeys.has(f.name)).map((f) => [f.name, a.fields.some((x) => x.name === f.name) ? `${f.name} (${parts[1].id})` : f.name]));
+  const fields: Field[] = [...a.fields, ...b.fields.filter((f) => rename.has(f.name)).map((f) => ({ ...f, id: rename.get(f.name)!, name: rename.get(f.name)! }))];
+  const leftKey = keyOf(a, on.map((p) => p.left)), rightKey = keyOf(b, on.map((p) => p.right));
+  const index = new Map<string, Row[]>();
+  for (const r of b.rows) {
+    const k = rightKey(r);
+    if (!k.replace(/\u0000/g, '')) continue;
+    index.set(k, [...(index.get(k) ?? []), r]);
+  }
+  const rows: Row[] = [];
+  for (const l of a.rows) {
+    const k = leftKey(l);
+    const matches = k.replace(/\u0000/g, '') ? index.get(k) ?? [] : [];
+    if (!matches.length && c.how !== 'inner') rows.push(l);
+    for (const m of matches) {
+      rows.push({ id: l.id && m.id ? `${l.id}|${m.id}` : l.id, url: l.url ?? m.url, fields: { ...l.fields, ...Object.fromEntries([...rename].map(([from, to]) => [to, m.fields[from]])) } });
+    }
+    if (rows.length > MAX_COMBINED_ROWS) throw new UserError('err.data.combineTooBig', { n: MAX_COMBINED_ROWS });
+  }
+  return { fields, rows };
+}
+
+async function combinedTable(user: User, s: SourceRow, fresh: boolean): Promise<Table> {
+  if (!combineEnabled()) throw new UserError('err.data.combineOff');
+  const c = combineOf(s);
+  const parts = c.sources.map((sid) => getSource(sid));
+  const [a, b] = await Promise.all(parts.map((src) => loadTable(user, src, fresh)));
+  return combineTables(c, parts, a, b);
+}
+
 export function getSource(id: string): SourceRow {
   const s = get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', id);
   if (!s) throw new UserError('err.data.sourceNotFound', { id });
@@ -64,13 +160,16 @@ const canEdit = (u: User, s: SourceRow) => u.role === 'admin' || s.owner_id === 
  * open a Lark table or an app is checked when it is read).
  */
 export function listSources(locale: string, viewer?: User) {
-  return all<SourceRow & { owner_name: string }>('SELECT d.*, u.name AS owner_name FROM data_sources d JOIN users u ON u.id = d.owner_id ORDER BY d.created_at')
+  return all<SourceRow & { owner_name: string; owner_role: string }>('SELECT d.*, u.name AS owner_name, u.role AS owner_role FROM data_sources d JOIN users u ON u.id = d.owner_id ORDER BY d.created_at')
     .filter((s) => !viewer || s.kind !== 'connector' || mayReadConnector(viewer, s))
     .map((s) => ({
       id: s.id, title: pick(JSON.parse(s.title_i18n), locale), kind: s.kind, url: s.url, owner: s.owner_name,
+      // a member's own connector source is also theirs to read
+      ...(s.kind === 'connector' && s.owner_role !== 'admin' ? { ownerReads: true } : {}),
       ...(descriptionOf(s, locale) ? { description: descriptionOf(s, locale) } : {}),
       ...(s.kind === 'app' ? { app: s.app_slug, path: s.app_path }
         : s.kind === 'connector' ? { connection: s.connection_id, item: s.item, audience: describeAudience(audienceOf(s)) }
+        : s.kind === 'combined' ? { combine: combineOf(s) }
         : { table: s.table_id, view: s.view_id }),
     }));
 }
@@ -224,20 +323,33 @@ export async function inspectApp(user: User, slug: string, path: string) {
   };
 }
 
-export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; audience?: Audience; description?: Record<string, string> }) {
+export async function saveSource(user: User, input: { id: string; title: Record<string, string>; url?: string; table?: string; app?: string; path?: string; connection?: string; item?: string; sql?: string; database?: string; combine?: Combine; audience?: Audience; description?: Record<string, string> }) {
   if (!SLUG.test(input.id)) throw new UserError('err.data.badId', { id: input.id });
   if (!Object.values(input.title).some((t) => t.trim())) throw new UserError('err.data.titleRequired');
   const existing = get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', input.id);
   if (existing && !canEdit(user, existing)) throw new UserError('err.data.notOwner', { id: input.id });
   let row: Pick<SourceRow, 'kind' | 'url' | 'app_token' | 'table_id' | 'view_id' | 'app_slug' | 'app_path'> & Partial<Pick<SourceRow, 'connection_id' | 'item' | 'audience'>>;
-  if (input.connection) {
-    // the key is the admins': only they decide what is read with it, and who sees it
-    if (user.role !== 'admin') throw new UserError('err.adminOnly');
+  if (input.combine) {
+    if (!combineEnabled()) throw new UserError('err.data.combineOff');
+    const c = combineSchema.parse(input.combine);
+    // reading it once proves both parts can be read and the fields exist
+    await checkCombine(user, c, input.id);
+    row = { kind: 'combined', url: `${config.hubUrl}/data/source/${input.id}`, app_token: '', table_id: '', view_id: null, app_slug: null, app_path: null, item: JSON.stringify(c) };
+  } else if (input.connection) {
+    // anyone may read through the key for themselves; only admins decide who else sees what it reads
+    const admin = user.role === 'admin';
+    if (!admin && input.audience && Object.keys(cleanAudience(input.audience)).length) throw new UserError('err.data.shareAdminOnly');
     const { connector, cfg } = connectionConfig(input.connection);
-    const item = String(input.item ?? '').trim();
+    let item = String(input.item ?? '').trim();
+    if (input.sql !== undefined) {
+      if (!connector.sqlItem) throw new UserError('err.conn.noSql', { name: connector.label });
+      item = connector.sqlItem(String(input.database ?? ''), input.sql);
+    }
     if (!item) throw new UserError('err.conn.itemRequired');
     normalizeAppRows(await connector.fetch(cfg, item));
-    const audience = input.audience ?? (existing?.audience ? (JSON.parse(existing.audience) as Audience) : {});
+    const before = existing?.audience ? (JSON.parse(existing.audience) as Audience) : {};
+    // what an admin shared stays shared only while it reads the same thing
+    const audience = admin ? input.audience ?? before : existing && existing.item === item && existing.connection_id === input.connection ? before : {};
     row = { kind: 'connector', url: connector.link(cfg, item), app_token: '', table_id: '', view_id: null, app_slug: null, app_path: null,
       connection_id: input.connection, item, audience: JSON.stringify(cleanAudience(audience)) };
   } else if (input.app) {
@@ -315,6 +427,8 @@ export async function setDescription(user: User, id: string, description: Record
 export function deleteSource(user: User, id: string) {
   const s = getSource(id);
   if (!canEdit(user, s)) throw new UserError('err.data.notOwner', { id });
+  const usedBy = all<SourceRow>("SELECT * FROM data_sources WHERE kind = 'combined'").find((c) => combineOf(c).sources.includes(id));
+  if (usedBy) throw new UserError('err.data.usedByCombined', { id: usedBy.id });
   run('DELETE FROM data_sources WHERE id = ?', id);
   clearCache(id);
   return { deleted: true };
@@ -369,6 +483,10 @@ const readable = new Map<string, { at: number; ok: Promise<boolean> }>();
  */
 export function canReadSource(user: User, s: SourceRow): Promise<boolean> {
   if (s.kind === 'connector') return Promise.resolve(mayReadConnector(user, s));
+  if (s.kind === 'combined') {
+    if (!combineEnabled()) return Promise.resolve(false);
+    return Promise.all(combineOf(s).sources.map((id) => get<SourceRow>('SELECT * FROM data_sources WHERE id = ?', id)).map((p) => (p ? canReadSource(user, p) : Promise.resolve(false)))).then((ok) => ok.every(Boolean));
+  }
   if (s.kind === 'app') {
     const app = get<App>('SELECT * FROM apps WHERE slug = ?', s.app_slug ?? '');
     return Promise.resolve(!!app && canAccessApp(app, user));
@@ -443,7 +561,9 @@ export function loadTable(user: User, s: SourceRow, fresh = false): Promise<Tabl
   const key = `${s.id}\u0000${user.id}`;
   const hit = tables.get(key);
   if (hit && !fresh && Date.now() - hit.at < TTL) return hit.value;
-  const value = s.kind === 'connector'
+  const value = s.kind === 'combined'
+    ? combinedTable(user, s, fresh)
+    : s.kind === 'connector'
     ? (mayReadConnector(user, s) ? connectorTable(s, fresh) : Promise.reject(new UserError('err.data.audienceDenied')))
     : s.kind === 'app'
     ? appTable(user, s)
@@ -509,7 +629,9 @@ export async function describeSource(user: User, id: string, locale: string) {
   const s = getSource(id);
   const t = await loadTable(user, s);
   const kindOf = (f: Field): 'date' | 'number' | 'text' => isDateField(f) ? 'date' : f.type === FIELD.number || f.uiType === 'Number' || f.uiType === 'Currency' ? 'number' : 'text';
-  const where = s.kind === 'connector' ? { label: get<{ type: string }>('SELECT type FROM connections WHERE id = ?', s.connection_id ?? '')?.type ?? '', url: s.url }
+  const where = s.kind === 'combined'
+    ? { label: 'combined', url: '', parts: combineOf(s).sources.map((sid) => ({ id: sid, title: pick(JSON.parse(getSource(sid).title_i18n), locale) })), mode: combineOf(s).mode }
+    : s.kind === 'connector' ? { label: get<{ type: string }>('SELECT type FROM connections WHERE id = ?', s.connection_id ?? '')?.type ?? '', url: s.url }
     : s.kind === 'app' ? { label: s.app_slug ?? '', url: `${config.hubUrl}/apps/${s.app_slug}` }
     : { label: 'lark', url: s.url };
   // how far back each date field goes, so the page does not draw days the source has no data for as zeros
