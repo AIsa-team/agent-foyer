@@ -1444,6 +1444,9 @@ try {
   // Skills get feedback too, from the hub page or from the person's agent
   const skillDir = mkdtempSync(path.join(tmpdir(), 'hub-skill-'));
   (await import('node:fs')).writeFileSync(path.join(skillDir, 'SKILL.md'), '---\nname: invoice-check\ndescription: Checks invoices\n---\nCheck invoices.');
+  (await import('node:fs')).mkdirSync(path.join(skillDir, 'references'));
+  (await import('node:fs')).writeFileSync(path.join(skillDir, 'references', 'rules.md'), '# 规则\n专票要核对税号。');
+  (await import('node:fs')).writeFileSync(path.join(skillDir, 'logo.bin'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x01, 0xff, 0xfe]));
   execFileSync(process.execPath, ['scripts/admin.ts', 'publish-skill', skillDir, '--owner', 'alex@example.com',
     '--localized', JSON.stringify({ 'zh-CN': { name: '发票检查', description: '检查发票' }, en: { name: 'Invoice check', description: 'Checks invoices' } })],
     { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis` }, stdio: 'pipe' });
@@ -1451,6 +1454,16 @@ try {
   check(String((await tool(bob.token, 'install_skill', { name: 'invoice-check' })).install).includes('invoice-check'), 'install_skill also takes the name');
   const howTo = String((await tool(bob.token, 'install_skill', { slug: 'invoice-check' })).install);
   check(howTo.includes('DIR=~/.claude/skills/invoice-check;') && howTo.includes('DIR=~/.codex/skills/invoice-check;') && howTo.includes('.codex\\skills\\invoice-check'), 'install_skill gives a ready command for Claude Code and for Codex');
+  // agents that cannot install Skills read them instead
+  const readSk = await tool(bob.token, 'read_skill', { skill: 'invoice-check' }) as { version: number; instructions: string; files: { path: string; text: boolean }[] };
+  check(readSk.version === 1 && readSk.instructions.includes('Check invoices.') && readSk.files.map((f) => `${f.path}:${f.text}`).sort().join() === 'logo.bin:false,references/rules.md:true',
+    'read_skill gives the latest SKILL.md and lists the other files (not the hub\'s own .hub-skill.json)');
+  const shownName = ((await tool(bob.token, 'list_skills')) as { slug: string; name: string }[]).find((x) => x.slug === 'invoice-check')!.name;
+  check((await tool(bob.token, 'read_skill', { skill: shownName }) as { slug: string }).slug === 'invoice-check', 'and finds a Skill by its display name too');
+  check((await tool(bob.token, 'read_skill', { skill: 'invoice-check', file: 'references/rules.md' }) as { content: string }).content === '# 规则\n专票要核对税号。', 'one of its files is read by path');
+  check(String((await tool(bob.token, 'read_skill', { skill: 'invoice-check', file: 'logo.bin' })).error).includes('install_skill'), 'a binary file points to installing the Skill');
+  check(String((await tool(bob.token, 'read_skill', { skill: 'invoice-check', file: 'nope.md' })).error).length > 0 && String((await tool(bob.token, 'read_skill', { skill: 'no-such-skill' })).error).length > 0, 'a missing file or Skill is refused');
+  check(String(((await api(bob.jar, 'GET', '/skills/invoice-check')).body as { readme: string }).readme).includes('Check invoices.'), 'the Skill page still shows SKILL.md');
   lark.messages = [];
   check((await api(bob.jar, 'POST', '/skills/invoice-check/feedback', { body: '日期格式识别错了' })).status === 200, 'a colleague leaves feedback on a Skill');
   const sent = await tool(alice.token, 'send_feedback', { kind: 'skill', slug: 'invoice-check', body: '遇到增值税专票会报错', context: 'Step 2, error: unknown field "tax_rate" (v1)' });

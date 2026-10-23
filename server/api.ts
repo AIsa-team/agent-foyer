@@ -1,6 +1,5 @@
 import { Hono, type Context } from 'hono';
 import { getCookie } from 'hono/cookie';
-import * as tar from 'tar';
 import { profileRadar } from './radar.ts';
 import { homePulse } from './pulse.ts';
 import { larkAppCatalog } from './lark/appCatalog.ts';
@@ -477,14 +476,7 @@ api.get('/skills', (c) => c.json({ skills: skills.listSkills(c.get('user'), loca
 api.get('/skills/:slug', async (c) => {
   const s = skills.listSkills(c.get('user'), localeOf(c)).find((x) => x.slug === c.req.param('slug'));
   if (!s) return c.json({ error: tr(localeOf(c), 'err.skill.notFound', { slug: c.req.param('slug') }) }, 404);
-  let readme = '';
-  await tar.t({
-    file: skills.skillFile(s.slug, s.version),
-    onReadEntry: (entry) => {
-      if (entry.path.replace(/^\.\//, '') === 'SKILL.md') entry.on('data', (d: Buffer) => (readme += d.toString()));
-      else entry.resume();
-    },
-  });
+  const readme = (await skills.skillContents(s.slug, s.version)).get('SKILL.md')?.toString('utf8') ?? '';
   return c.json({ skill: s, versions: skills.skillVersions(s.slug), readme, feedback: feedback.feedbackFor(c.get('user'), 'skill', s.slug) });
 });
 

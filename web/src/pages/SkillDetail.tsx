@@ -4,7 +4,7 @@ import { api, type AppInfo, type Feedback, type LocalizedMap, type SkillInfo } f
 import { FeedbackCard } from '../feedback';
 import { CollaboratorsCard } from '../collab';
 import { useI18n } from '../i18n';
-import { skillInstallPrompt } from '../prompts';
+import { skillInstallPrompt, skillReadPrompt } from '../prompts';
 import { SkillIcon } from './Skills';
 import { Avatar, CopyBox, Icon, IconEditor, LinkEditor, LocalizedFields, Loading, sameLocalized, useAction, useApi, useMe } from '../ui';
 
@@ -95,6 +95,8 @@ export function SkillDetailPage() {
             <h3>{skill.myVersion === null ? t('skill.install') : skill.hasUpdate ? t('skill.update') : t('skill.reinstall')}</h3>
             <p className="small muted" style={{ marginTop: -6 }}>{t('skill.sendThis')}</p>
             <CopyBox text={skillInstallPrompt(me, t, skill.slug)} />
+            <p className="small muted" style={{ margin: '12px 0 6px' }}>{t('skill.noInstall')}</p>
+            <CopyBox text={skillReadPrompt(me, t, skill.slug)} />
           </div>
           <div className="card pad">
             <h3>SKILL.md</h3>

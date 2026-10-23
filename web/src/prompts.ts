@@ -10,6 +10,7 @@ export const publishPrompt = (me: Me, t: T) => t('prompt.publish', { hub: hub(me
 export const skillWritePrompt = (t: T) => t('prompt.skillWrite');
 export const skillSharePrompt = (me: Me, t: T) => t('prompt.skillShare', { hub: hub(me, t) });
 export const skillInstallPrompt = (me: Me, t: T, slug: string) => t('prompt.skillInstall', { hub: hub(me, t), slug });
+export const skillReadPrompt = (me: Me, t: T, slug: string) => t('prompt.skillRead', { hub: hub(me, t), slug });
 export const skillUpdatePrompt = (me: Me, t: T) => t('prompt.skillUpdate', { hub: hub(me, t) });
 export const iconPrompt = (me: Me, t: T, slug: string) => t('prompt.icon', { hub: hub(me, t), slug });
 export const feedbackPrompt = (me: Me, t: T, kind: 'app' | 'skill', slug: string) => t(`prompt.feedback.${kind}`, { hub: hub(me, t), slug });

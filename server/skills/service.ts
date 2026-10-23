@@ -136,6 +136,62 @@ export function installInstructions(user: User, slug: string) {
   };
 }
 
+/** A Skill version's files (path → contents), read from its archive once and kept: versions never change. */
+const contents = new Map<string, Map<string, Buffer>>();
+export async function skillContents(slug: string, version: number): Promise<Map<string, Buffer>> {
+  const key = `${slug}@${version}`;
+  const hit = contents.get(key);
+  if (hit) return hit;
+  const files = new Map<string, Buffer>();
+  await tar.t({
+    file: skillFile(slug, version),
+    onReadEntry: (entry) => {
+      const name = entry.path.replace(/^\.\//, '');
+      if (entry.type !== 'File' || name === '.hub-skill.json') return entry.resume();
+      const parts: Buffer[] = [];
+      entry.on('data', (d: Buffer) => parts.push(d));
+      entry.on('end', () => files.set(name, Buffer.concat(parts)));
+    },
+  });
+  if (contents.size > 50) contents.delete(contents.keys().next().value!);
+  contents.set(key, files);
+  return files;
+}
+
+const TEXT_LIMIT = 200_000;
+
+/**
+ * A Skill read rather than installed, for agents that cannot install Skills (hosted agents, scheduled tasks): its
+ * SKILL.md and the list of its other files, or one of those files. Always the latest version. `ref` is the Skill's
+ * name in the market (slug) or its display name.
+ */
+export async function readSkill(user: User, locale: string, ref: string, file?: string) {
+  const want = ref.trim().toLowerCase();
+  const visible = listSkills(user, locale);
+  const s = visible.find((x) => x.slug === want) ?? visible.find((x) => x.name.trim().toLowerCase() === want);
+  if (!s) throw new UserError('err.skill.notFound', { slug: ref });
+  const files = await skillContents(s.slug, s.version);
+  const text = (b: Buffer) => {
+    const t = b.toString('utf8');
+    return t.includes('�') || t.includes('\u0000') ? null : t;
+  };
+  if (file) {
+    const name = file.replace(/^\.?\//, '');
+    const b = files.get(name);
+    if (!b) throw new UserError('err.skill.noFile', { file, slug: s.slug });
+    const t = text(b);
+    if (t === null) throw new UserError('err.skill.binaryFile', { file: name });
+    if (b.length > TEXT_LIMIT) throw new UserError('err.skill.fileTooBig', { file: name });
+    return { slug: s.slug, version: s.version, file: name, content: t };
+  }
+  const md = files.get('SKILL.md');
+  return {
+    slug: s.slug, name: s.name, version: s.version, description: s.description,
+    instructions: md ? md.toString('utf8') : '',
+    files: [...files.entries()].filter(([n]) => n !== 'SKILL.md').map(([n, b]) => ({ path: n, size: b.length, text: text(b) !== null })),
+  };
+}
+
 export function checkUpdates(user: User, installed: { slug: string; version: number }[]) {
   const updates: { slug: string; name: string; installed: number; latest: number }[] = [];
   for (const i of installed) {
