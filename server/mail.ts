@@ -6,7 +6,8 @@ import { config } from './config.ts';
 import type { User } from './db.ts';
 import { createGmailDraft } from './google/gmail.ts';
 import { googleConnectUrl, googleConnection } from './google/auth.ts';
-import { createDraft as createLarkDraft, type Draft } from './lark/mail.ts';
+import { createDraft as createLarkDraft } from './lark/mail.ts';
+import type { Draft } from './eml.ts';
 
 export type { Draft };
 

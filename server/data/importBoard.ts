@@ -17,7 +17,7 @@ import { NOTE_MAX } from '../homepage.ts';
 import { connectionConfig } from './connectors/index.ts';
 import type { BoardCard } from './connectors/types.ts';
 import { getSource, loadTable, refreshDescription, saveSource, type Audience, type Table } from './sources.ts';
-import { FIELD, isDateField, type Field } from '../lark/base.ts';
+import { FIELD, isDateField, type Field } from './fields.ts';
 
 type Width = 'full' | 'half' | 'third';
 type Module = Record<string, unknown> & { type: string };

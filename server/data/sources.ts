@@ -29,11 +29,11 @@ import { pick } from '../library.ts';
 import { localeCodes } from '../localized.ts';
 import { canAccessApp } from '../apps/access.ts';
 import { fetchFromApp } from '../gateway.ts';
-import { FIELD, fetchRecords, isAdvanced, isDateField, listFields, listTables, parseBaseUrl, pickTable, plainText, resolveAppToken, searchRecords, type Field } from '../lark/base.ts';
 import { filterRows, runQuery, toChart, toStat, type DataChartKind, type Query, type Result } from './query.ts';
-import type { Condition } from '../lark/base.ts';
 import { connectionConfig } from './connectors/index.ts';
 import { z } from 'zod';
+import { fetchRecords, isAdvanced, listFields, listTables, parseBaseUrl, pickTable, resolveAppToken, searchRecords } from '../lark/base.ts';
+import { FIELD, isDateField, plainText, type Field, type Condition } from './fields.ts';
 
 export interface SourceRow {
   id: string; title_i18n: string; url: string; kind: 'base' | 'app' | 'connector' | 'combined'; app_token: string; table_id: string; view_id: string | null;

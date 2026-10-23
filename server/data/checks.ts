@@ -12,8 +12,8 @@ import { config } from '../config.ts';
 import { all, get, now, run, tx, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
-import { isDateField, people, plainNumber, plainText, plainValues, timeOf, type Field } from '../lark/base.ts';
 import { canReadSource, getSource, loadTable, type Row } from './sources.ts';
+import { isDateField, people, plainNumber, plainText, plainValues, timeOf, type Field } from './fields.ts';
 
 // ---------------------------------------------------------------- rule format (also the MCP schema)
 const conditionSchema = z.object({

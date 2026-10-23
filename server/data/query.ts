@@ -6,7 +6,7 @@
 import { z } from 'zod';
 import { config } from '../config.ts';
 import { UserError } from '../i18n/index.ts';
-import { FIELD, plainNumber, plainText, plainValues, timeOf, type Condition, type Field } from '../lark/base.ts';
+import { FIELD, plainNumber, plainText, plainValues, timeOf, type Condition, type Field } from './fields.ts';
 
 const measureSchema = z.object({
   op: z.enum(['count', 'sum', 'avg', 'min', 'max']).describe('count rows, or sum/avg/min/max a number field'),

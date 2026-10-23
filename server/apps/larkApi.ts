@@ -19,7 +19,6 @@ import { all, get, now, run, type App, type User } from '../db.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
 import { larkMessenger } from '../lark/messenger.ts';
-import { createRecord, fetchRecords, listFields, parseBaseUrl, pickTable, plainText, resolveAppToken, updateRecord, type Condition } from '../lark/base.ts';
 import { connection, WRITE_SCOPE } from '../lark/userToken.ts';
 import { createDoc, DOCS_SCOPES, parseDocRef, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
 import { appendSheetRow, parseSheetUrl, pickSheet, resolveSpreadsheet, sheetFields, sheetRecords, SHEETS_SCOPE, updateSheetRow, wikiObject } from '../lark/sheets.ts';
@@ -28,6 +27,8 @@ import { mailboxName, mailConnectUrl, saveDraft } from '../mail.ts';
 import { canAccessApp, canManageApp } from './access.ts';
 import { audience } from './resources.ts';
 import { shareWithAudience } from '../lark/workspace.ts';
+import { createRecord, fetchRecords, listFields, parseBaseUrl, pickTable, resolveAppToken, updateRecord } from '../lark/base.ts';
+import { plainText, type Condition } from '../data/fields.ts';
 
 // ---------------------------------------------------------------- declaration
 export const manifestSchema = z.object({

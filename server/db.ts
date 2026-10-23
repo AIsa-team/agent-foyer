@@ -7,7 +7,7 @@ db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeou
 const MIGRATIONS: string[] = [
   `
   CREATE TABLE users (
-    id TEXT PRIMARY KEY,            -- Lark open_id
+    id TEXT PRIMARY KEY,            -- the person at the sign-in provider (Lark open_id, OIDC subject)
     name TEXT NOT NULL,
     en_name TEXT,
     email TEXT,

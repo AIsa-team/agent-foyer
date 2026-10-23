@@ -20,8 +20,9 @@ import { UserError, type Msg } from '../i18n/index.ts';
 import { localize } from '../localized.ts';
 import { canAccessApp, canManageApp } from './access.ts';
 import { agentTable, issueTicket, manifestOf, type Table } from './larkApi.ts';
-import { createRecord, FIELD, fetchRecords, listFields, plainText, updateRecord, type Condition, type Field } from '../lark/base.ts';
 import { appendSheetRow, sheetFields, sheetRecords, updateSheetRow } from '../lark/sheets.ts';
+import { createRecord, fetchRecords, listFields, updateRecord } from '../lark/base.ts';
+import { FIELD, plainText, type Condition, type Field } from '../data/fields.ts';
 
 export const MANIFEST_FILE = 'hub-agent.json';
 const MANIFEST_MAX = 64 * 1024;

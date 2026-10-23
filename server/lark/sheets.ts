@@ -9,7 +9,7 @@ import type { User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
 import { asUser, connection } from './userToken.ts';
-import type { Condition } from './base.ts';
+import type { Condition } from '../data/fields.ts';
 
 export const SHEETS_SCOPE = 'sheets:spreadsheet';
 export const sheetsConnectUrl = (returnPath = '/me') => `${config.hubUrl}/auth/lark/connect?sheets=1&return=${encodeURIComponent(returnPath)}`;

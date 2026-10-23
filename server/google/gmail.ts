@@ -1,6 +1,6 @@
 import { config } from '../config.ts';
 import type { User } from '../db.ts';
-import { buildEml, type Draft } from '../lark/mail.ts';
+import { buildEml, type Draft } from '../eml.ts';
 import { googleAccessToken, googleConnection } from './auth.ts';
 
 /** Saves a draft in the person's Gmail (never sends), from the Google account they connected. */

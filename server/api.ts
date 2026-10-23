@@ -1,8 +1,7 @@
-import { Hono, type Context } from 'hono';
+import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { profileRadar } from './radar.ts';
 import { homePulse } from './pulse.ts';
-import { larkAppCatalog } from './lark/appCatalog.ts';
 import { config, loginName } from './config.ts';
 import { messenger } from './notify.ts';
 import { mailboxName } from './mail.ts';
@@ -14,9 +13,8 @@ import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
 import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, myIssues, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
-import { HUB_COOKIE, safeReturnPath, sessionUser } from './auth/session.ts';
+import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
-import { syncDirectory } from './lark/auth.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
@@ -27,10 +25,6 @@ import * as connectors from './data/connectors/index.ts';
 import { importBoard, importedBoards } from './data/importBoard.ts';
 import * as alerts from './data/alerts.ts';
 import { querySchema, CHART_KINDS } from './data/query.ts';
-import { connection, connectUrl, forgetTokens } from './lark/userToken.ts';
-import { userOkrs } from './lark/okr.ts';
-import { cachedRead, forgetReads } from './cache.ts';
-import * as okrBoard from './lark/okrBoard.ts';
 import * as checks from './data/checks.ts';
 import * as appLark from './apps/larkApi.ts';
 import * as feedback from './feedback.ts';
@@ -39,14 +33,13 @@ import { usageDetail } from './apps/visits.ts';
 import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as requests from './requests.ts';
-import { botChats } from './lark/chats.ts';
-import { calendarAppUrl, calendarEvents, today as calendarToday } from './lark/calendar.ts';
 import * as boards from './boards.ts';
 import { organisation, search } from './directory.ts';
-import { isSupportedLocale, requestLocale, tr, UserError } from './i18n/index.ts';
+import { isSupportedLocale, tr, UserError } from './i18n/index.ts';
+import { body, localeOf, requireAdmin, type HubEnv } from './http.ts';
+import { LARK_ONLY, larkAdminSettings, larkApi, larkLinks } from './lark/routes.ts';
 
-type Env = { Variables: { user: User } };
-export const api = new Hono<Env>();
+export const api = new Hono<HubEnv>();
 
 api.use('*', async (c, next) => {
   const user = sessionUser(getCookie(c, HUB_COOKIE));
@@ -62,15 +55,11 @@ api.use('*', async (c, next) => {
   await next();
 });
 
-const localeOf = (c: Context) => requestLocale((h) => c.req.header(h));
 
-// what only exists when the hub signs in with Lark
-for (const p of ['/lark/*', '/okr', '/okr/*', '/calendar', '/admin/okr-owner', '/admin/sync-directory', '/apps/:slug/lark-consent', '/lark-links', '/lark-links/*']) {
-  api.use(p, async (_c, next) => {
-    if (!config.lark.enabled) throw new UserError('err.lark.disabled');
-    await next();
-  });
-}
+
+// what only exists when the hub signs in with Lark (server/lark/routes.ts); without it those paths say Lark is off
+if (config.lark.enabled) api.route('/', larkApi);
+else for (const p of LARK_ONLY) api.use(p, () => { throw new UserError('err.lark.disabled'); });
 
 api.onError((e, c) => {
   // `code` lets the UI react to specific cases, e.g. offer the "connect Lark data" button
@@ -79,10 +68,6 @@ api.onError((e, c) => {
   return c.json({ error: tr(localeOf(c), 'err.internal', { message: e.message }) }, 500);
 });
 
-const body = async <T>(c: Context) => (await c.req.json().catch(() => ({}))) as T;
-const requireAdmin = (u: User) => {
-  if (u.role !== 'admin') throw new UserError('err.adminOnly');
-};
 
 api.get('/me', (c) => {
   const u = c.get('user');
@@ -167,8 +152,6 @@ api.get('/home/source', async (c) => {
   return c.json(await homepage.readSource(c.get('user'), { app, path, pick: c.req.query('pick') || undefined }));
 });
 
-// ---- Lark data: each person's own connection, Base data for home modules, alerts ----
-api.get('/lark/status', (c) => c.json({ ...connection(c.get('user').id), connectUrl: connectUrl('/me'), available: true }));
 // ---- GitHub: who each person is on GitHub ----
 // ---- other services' MCP servers, reached through the hub as each person
 api.get('/services', (c) => c.json({ services: services.servicesFor(c.get('user')) }));
@@ -250,14 +233,6 @@ api.post('/google/disconnect', (c) => {
   forgetGoogle(c.get('user').id);
   return c.json({ ok: true });
 });
-api.post('/lark/disconnect', (c) => {
-  forgetTokens(c.get('user').id);
-  // what was read with that access goes too
-  forgetReads(`okr|${c.get('user').id}|`);
-  forgetReads(`okr-board|${c.get('user').id}|`);
-  forgetReads(`calendar|${c.get('user').id}|`);
-  return c.json({ ok: true });
-});
 api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c), c.get('user')) }));
 api.post('/data/module', async (c) => {
   const b = await body<{ source?: string; query?: unknown; kind?: string }>(c);
@@ -315,48 +290,7 @@ api.post('/issues/exception', async (c) => {
   return c.json(checks.setException(c.get('user'), Number(b.check), String(b.record ?? ''), b.on !== false, b.reason));
 });
 
-/** The company OKR page: everyone's objectives for a period, how they align, and the team's pace. */
-api.get('/okr/board', async (c) => c.json(await okrBoard.okrBoard(c.get('user'), localeOf(c), c.req.query('period') || undefined, c.req.query('fresh') === '1')));
-api.post('/admin/okr-owner', async (c) => {
-  const b = await body<{ owner?: string | null }>(c);
-  okrBoard.setCompanyOwner(c.get('user'), b.owner || null);
-  return c.json({ ok: true });
-});
 
-/** Someone's OKRs (default: the viewer's own), read with the viewer's Lark access. `user` is an open_id or email. */
-api.get('/okr', async (c) => {
-  const ref = c.req.query('user');
-  const target = ref ? get<{ id: string }>('SELECT id FROM users WHERE id = ? OR lower(email) = lower(?)', ref, ref)?.id : undefined;
-  if (ref && !target) throw new UserError('err.colleagueNotFound', { query: ref });
-  const u = c.get('user'), period = c.req.query('period') || undefined, L = localeOf(c);
-  // the home page's OKR card: served at once from the last read, refreshed in the background after 5 minutes
-  return c.json(await cachedRead(`okr|${u.id}|${target ?? u.id}|${period ?? ''}|${L}`, { fresh: 300_000, keep: 7 * 86_400_000 },
-    () => userOkrs(u, { userId: target, periodId: period, locale: L })));
-});
-
-/**
- * The viewer's own Lark calendar for the home page's agenda: a whole month (`month=YYYY-MM`, or `month=current`),
- * or `days` days (1-7) from today.
- */
-api.get('/calendar', async (c) => {
-  const u = c.get('user');
-  const today = calendarToday();
-  const month = c.req.query('month') === 'current' ? today.slice(0, 7) : c.req.query('month');
-  let from = today, to = today;
-  if (month) {
-    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) throw new UserError('err.calendar.badRange');
-    const [y, mo] = month.split('-').map(Number);
-    from = `${month}-01`;
-    to = `${month}-${String(new Date(Date.UTC(y, mo, 0)).getUTCDate()).padStart(2, '0')}`;
-  } else {
-    const days = Math.min(7, Math.max(1, Number(c.req.query('days')) || 1));
-    to = new Date(Date.parse(`${from}T00:00:00Z`) + (days - 1) * 86_400_000).toISOString().slice(0, 10);
-  }
-  const back = safeReturnPath(c.req.query('return'));
-  // served at once from the last read, refreshed in the background after a minute
-  const events = await cachedRead(`calendar|${u.id}|${from}|${to}`, { fresh: 60_000, keep: 86_400_000 }, () => calendarEvents(u, from, to, back));
-  return c.json({ today, from, to, timezone: config.timezone, openUrl: calendarAppUrl(), events });
-});
 
 // ---- apps ----
 api.get('/apps', (c) => c.json({ apps: apps.listAppsFor(c.get('user'), localeOf(c)), larkLinks: larkLinks(), requestsWaiting: requests.waitingCount(c.get('user')) }));
@@ -394,11 +328,6 @@ api.post('/feedback/:id', async (c) => {
   return c.json(await feedback.resolveFeedback(c.get('user'), Number(c.req.param('id')), status, b.reply));
 });
 
-/** Take back an app's permission to use your Lark data. */
-api.delete('/apps/:slug/lark-consent', (c) => {
-  appLark.revokeConsent(c.get('user'), c.req.param('slug'));
-  return c.json({ ok: true });
-});
 
 api.get('/apps/:slug/releases/:version/log', (c) => {
   apps.requireManageable(c.req.param('slug'), c.get('user'));
@@ -501,36 +430,7 @@ api.delete('/agents/:id', (c) => {
   return c.json({ ok: true });
 });
 
-// ---- Lark native app shortcuts ----
-interface LarkLink { id: number; name: string; description: string; url: string; icon: string; sort: number; in_sidebar: number }
-const larkLinks = () => (config.lark.enabled ? all<LarkLink>('SELECT * FROM lark_links ORDER BY sort, id') : []);
 
-api.post('/lark-links', async (c) => {
-  requireAdmin(c.get('user'));
-  const b = await body<Partial<LarkLink>>(c);
-  if (!b.name || !b.url || !/^https?:\/\//.test(b.url)) throw new UserError('err.larkLinkInvalid');
-  run('INSERT INTO lark_links (name, description, url, icon, sort) VALUES (?, ?, ?, ?, ?)', b.name, b.description ?? '', b.url, b.icon ?? '', b.sort ?? 0);
-  return c.json({ ok: true });
-});
-
-/** For the admin's picker: Lark's own features and the apps installed in the company. */
-api.get('/lark-links/catalog', async (c) => {
-  requireAdmin(c.get('user'));
-  return c.json(await larkAppCatalog(localeOf(c)));
-});
-
-api.post('/lark-links/:id/sidebar', async (c) => {
-  requireAdmin(c.get('user'));
-  const b = await body<{ on?: boolean }>(c);
-  run('UPDATE lark_links SET in_sidebar = ? WHERE id = ?', b.on ? 1 : 0, Number(c.req.param('id')));
-  return c.json({ ok: true });
-});
-
-api.delete('/lark-links/:id', (c) => {
-  requireAdmin(c.get('user'));
-  run('DELETE FROM lark_links WHERE id = ?', Number(c.req.param('id')));
-  return c.json({ ok: true });
-});
 
 // ---- app requests (需求)
 api.get('/requests', (c) => {
@@ -554,7 +454,7 @@ api.get('/admin', (c) => {
   const u = c.get('user');
   const pending = all<App>("SELECT * FROM apps WHERE visibility = 'public' AND public_status = 'pending'").map((a) => apps.serializeApp(a, u, localeOf(c)));
   const users = all<User>('SELECT id, name, email, avatar, role, last_seen_at FROM users ORDER BY last_seen_at DESC NULLS LAST, name');
-  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), dataCombine: dataSources.combineEnabled(), okrOwner: config.lark.enabled ? okrBoard.companyOwner() : null, requestsChat: requests.requestsChat() });
+  return c.json({ pending, users, larkLinks: larkLinks(), devLogin: config.devLogin, alertNotify: alerts.notifyMode(), dataCombine: dataSources.combineEnabled(), ...larkAdminSettings(), requestsChat: requests.requestsChat() });
 });
 
 // ---- data connections (Metabase…) and the sources read through them; admins only
@@ -595,10 +495,6 @@ api.delete('/admin/data-sources/:id', (c) => {
   return c.json(dataSources.deleteSource(c.get('user'), c.req.param('id')));
 });
 
-api.get('/admin/lark-chats', async (c) => {
-  requireAdmin(c.get('user'));
-  return c.json({ chats: config.lark.enabled ? await botChats() : [] });
-});
 api.post('/admin/requests-chat', async (c) => {
   const b = await body<{ chat?: { id: string; name: string; locale?: string } | null }>(c);
   requests.setRequestsChat(c.get('user'), b.chat ? { id: String(b.chat.id ?? '').trim(), name: String(b.chat.name ?? ''), locale: b.chat.locale } : null);
@@ -635,7 +531,3 @@ api.post('/admin/users/:id/role', async (c) => {
   return c.json({ ok: true });
 });
 
-api.post('/admin/sync-directory', async (c) => {
-  requireAdmin(c.get('user'));
-  return c.json({ synced: await syncDirectory() });
-});
