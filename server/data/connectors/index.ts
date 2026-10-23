@@ -78,6 +78,8 @@ export function deleteConnection(user: User, id: string) {
   if (user.role !== 'admin') throw new UserError('err.adminOnly');
   const n = get<{ n: number }>('SELECT COUNT(*) AS n FROM data_sources WHERE connection_id = ?', id)!.n;
   if (n) throw new UserError('err.conn.inUse', { n });
+  const svc = get<{ name: string }>('SELECT name FROM mcp_services WHERE connection_id = ?', id);
+  if (svc) throw new UserError('err.conn.inUseByService', { name: svc.name });
   run('DELETE FROM connections WHERE id = ?', id);
   return { deleted: true };
 }

@@ -59,4 +59,6 @@ export interface Connector {
   /** optional: the system's dashboards, and one of them in the hub's terms (see importBoard) */
   boards?(cfg: ConnectionConfig, q?: string): Promise<Item[]>;
   board?(cfg: ConnectionConfig, id: string): Promise<BoardDef>;
+  /** optional: the system's own MCP server, reached with this connection's key (one identity for everyone) */
+  mcp?(cfg: ConnectionConfig): { url: string; headers: Record<string, string> };
 }

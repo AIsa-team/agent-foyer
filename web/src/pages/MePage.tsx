@@ -134,7 +134,7 @@ function ServiceCards({ services, reload, skip }: { services: Service[] | null; 
   const { busy, run } = useAction();
   return (
     <>
-      {(services ?? []).filter((s) => !skip.includes(s.id)).map((s) => (
+      {(services ?? []).filter((s) => !skip.includes(s.id) && !s.shared).map((s) => (
         <ConnectionCard key={s.id} logo={<ServiceMark s={s} />} title={t('me.service.title', { name: s.name })} connected={s.connected}
           action={s.connected
             ? <button className="btn sm ghost danger" disabled={busy} onClick={() => run(() => api.post(`/services/${s.id}/disconnect`), t('me.service.disconnected', { name: s.name })).then(reload)} type="button">{t('me.github.disconnect')}</button>

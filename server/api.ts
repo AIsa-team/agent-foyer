@@ -179,11 +179,18 @@ api.post('/services/:id/disconnect', (c) => {
 });
 api.get('/admin/services', (c) => {
   requireAdmin(c.get('user'));
-  return c.json({ services: services.servicesFor(c.get('user')), departments: all<{ id: string; name: string }>('SELECT id, name FROM departments ORDER BY name') });
+  return c.json({
+    services: services.servicesFor(c.get('user')), departments: all<{ id: string; name: string }>('SELECT id, name FROM departments ORDER BY name'),
+    // data connections whose system has its own MCP server, to reach with their key
+    connections: connectors.listConnections().filter((x) => connectors.connectorOf(x.type).mcp).map((x) => ({ id: x.id, type: x.type })),
+  });
 });
 api.post('/admin/services', async (c) => {
-  const b = await body<{ id: string; name: string; url: string; audience?: services.Audience; disabledTools?: string[]; create?: boolean }>(c);
-  return c.json(services.saveService(c.get('user'), { id: String(b.id ?? ''), name: String(b.name ?? ''), url: String(b.url ?? ''), audience: b.audience, disabledTools: b.disabledTools, create: !!b.create }));
+  const b = await body<{ id: string; name: string; url?: string; connection?: string | null; audience?: services.Audience; disabledTools?: string[]; create?: boolean }>(c);
+  return c.json(services.saveService(c.get('user'), {
+    id: String(b.id ?? ''), name: String(b.name ?? ''), url: String(b.url ?? ''), audience: b.audience, disabledTools: b.disabledTools, create: !!b.create,
+    ...(b.connection !== undefined ? { connection: b.connection ? String(b.connection) : null } : {}),
+  }));
 });
 api.delete('/admin/services/:id', (c) => {
   services.deleteService(c.get('user'), c.req.param('id'));

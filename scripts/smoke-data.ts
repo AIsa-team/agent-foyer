@@ -75,6 +75,8 @@ const ghKeys = generateKeyPairSync('rsa', { modulusLength: 2048, publicKeyEncodi
 
 const lark = {
   appInfo: false,
+  /** calls to the fake Metabase's own MCP server: the tool, its arguments and the key it came with */
+  mbMcp: [] as { tool: string; args: unknown; key: string }[],
   calendarTokens: new Set<string>(),
   calendarQueries: [] as { start: number; end: number }[],
   /** extra events for the demo, at real times */
@@ -292,6 +294,24 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const mp = p.slice(3);
     const key = req.headers['x-api-key'];
     if (key !== 'mb_good' && key !== 'mb_admin') return send({ message: 'Unauthenticated' }, 401);
+    // Metabase's built-in MCP server (stateless JSON answers), taking the API key like the rest of its API
+    if (mp === '/api/metabase-mcp') {
+      if (req.method !== 'POST') { res.writeHead(405); return res.end(); }
+      const m = JSON.parse(raw) as { id?: number; method: string; params?: { name?: string; arguments?: unknown; protocolVersion?: string } };
+      if (m.id === undefined) { res.writeHead(202); return res.end(); }
+      const reply = (result: unknown) => send({ jsonrpc: '2.0', id: m.id, result });
+      if (m.method === 'initialize') return reply({ protocolVersion: m.params?.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: 'metabase', version: '0.1.0' } });
+      if (m.method === 'tools/list') return reply({ tools: [
+        { name: 'search', description: 'Search questions, dashboards and tables', inputSchema: { type: 'object', properties: { q: { type: 'string' } } }, annotations: { readOnlyHint: true } },
+        { name: 'execute_sql', description: 'Run SQL on a database', inputSchema: { type: 'object', properties: { database_id: { type: 'number' }, sql: { type: 'string' } } } },
+        { name: 'question_write', description: 'Create or change a saved question', inputSchema: { type: 'object', properties: {} } },
+      ] });
+      if (m.method === 'tools/call') {
+        lark.mbMcp.push({ tool: m.params!.name!, args: m.params!.arguments, key: String(key) });
+        return reply({ content: [{ type: 'text', text: `${m.params!.name} ok` }] });
+      }
+      return send({ jsonrpc: '2.0', id: m.id, error: { code: -32601, message: 'no such method' } });
+    }
     if (mp === '/api/user/current') return send({ common_name: key === 'mb_admin' ? 'Admin' : 'AIsa Hub', is_superuser: key === 'mb_admin' });
     if (mp === '/api/card') return send([
       { id: 232, name: '每日新增用户', collection: { name: '运营' }, display: 'line' },
@@ -2168,6 +2188,24 @@ try {
     await api(bob.jar, 'POST', '/services/selfhub/disconnect');
     check(!((await api(bob.jar, 'GET', '/services')).body.services as { id: string; connected: boolean }[]).find((x) => x.id === 'selfhub')?.connected, 'and anyone can disconnect their account');
     await api(alex.jar, 'DELETE', '/admin/services/selfhub');
+
+    // a service reached with a data connection's key: Metabase's own MCP server, one company identity for everyone
+    const svcAdmin = (await api(alex.jar, 'GET', '/admin/services')).body as { connections: { id: string; type: string }[] };
+    check(svcAdmin.connections.some((x) => x.id === 'metabase'), 'admins can pick a data connection whose system has its own MCP server');
+    const mbSvc = (await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true })).body as { url: string; shared: boolean; connected: boolean };
+    check(mbSvc.shared && mbSvc.connected && mbSvc.url.endsWith('/mb/api/metabase-mcp'), "adding it takes the address from the connection, and nobody has to connect an account");
+    const bobSees = (await tool(bob.token, 'list_connected_tools', {}) as { service: string; shared?: boolean; connected: boolean; connectUrl?: string }[]).find((x) => x.service === 'metabase');
+    check(!!bobSees?.shared && bobSees.connected && !bobSees.connectUrl, 'agents see it as shared and ready, with no link to connect');
+    const mbTools = await tool(bob.token, 'list_connected_tools', { service: 'metabase' }) as { tools: { name: string; readOnly: boolean }[] };
+    check(mbTools.tools.map((x) => x.name).join() === 'search,execute_sql,question_write' && mbTools.tools[0].readOnly, "Metabase's own tools are listed");
+    const sql = await tool(bob.token, 'call_connected_tool', { service: 'metabase', tool: 'execute_sql', arguments: { database_id: 2, sql: 'select 1' } }) as { ok: boolean };
+    check(sql.ok && lark.mbMcp.at(-1)?.tool === 'execute_sql' && lark.mbMcp.at(-1)?.key === 'mb_good', "a call goes out with the data connection's key, whoever asks");
+    check(((await api(bob.jar, 'GET', '/services')).body.services as { id: string; shared?: boolean }[]).find((x) => x.id === 'metabase')?.shared === true, 'the Me page knows it needs no connecting');
+    await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', disabledTools: ['question_write'] });
+    check(String((await tool(bob.token, 'call_connected_tool', { service: 'metabase', tool: 'question_write' })).error).includes('question_write') && lark.mbMcp.at(-1)?.tool === 'execute_sql',
+      'admins switch off the tools that change things, and they are not called');
+    check(((await api(alex.jar, 'GET', '/admin/services/metabase/tools')).body.tools as { name: string; enabled: boolean }[]).find((x) => x.name === 'question_write')?.enabled === false, 'and see every tool with whether it is on');
+    await api(alex.jar, 'DELETE', '/admin/services/metabase');
   }
 
   // ---------------------------------------------------------------- the person's own Lark calendar (read-only)
@@ -2211,6 +2249,7 @@ try {
     // leave a demo running for screenshots: Alex connected with a full home page and a firing alert
     await connect(alex.jar);
     const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
+    await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true, disabledTools: ['question_write'] });
     lark.calendarExtra.push(
       { event_id: 'e-now', summary: '产品评审', start_time: minutes(-20), end_time: minutes(25), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/9' }, attendees: [{ type: 'resource', display_name: '会议室 B' }], event_organizer: { display_name: 'Alex L' } },
       { event_id: 'e-soon', summary: 'Tether 支付对接', start_time: minutes(35), end_time: minutes(80), status: 'confirmed', vchat: { meeting_url: 'https://vc.larksuite.com/j/10' }, event_organizer: { display_name: 'Bo' } },

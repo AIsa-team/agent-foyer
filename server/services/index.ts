@@ -4,6 +4,10 @@
  * hub runs as an MCP client: discovery, dynamic registration, PKCE, refresh) and their agents then list and call
  * the service's tools through the hub's two tools, as that person. Tokens are kept encrypted per person; the
  * service decides what each person may do. Admins can switch off tools they do not want reached this way.
+ *
+ * A service can instead be tied to a data connection whose system has its own MCP server (Metabase): it is then
+ * reached with that connection's key for everyone, nobody connects an account, and the hub's audience decides who
+ * may use it.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -13,9 +17,10 @@ import { config } from '../config.ts';
 import { decrypt, encrypt, randomToken } from '../crypto.ts';
 import { all, get, now, run, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
+import { connectionConfig } from '../data/connectors/index.ts';
 
 export type Audience = { company?: boolean; people?: string[]; departments?: string[] };
-interface ServiceRow { id: string; name: string; url: string; audience: string; disabled_tools: string; client_enc: string | null; created_by: string; created_at: number; updated_at: number }
+interface ServiceRow { id: string; name: string; url: string; audience: string; disabled_tools: string; client_enc: string | null; connection_id: string | null; created_by: string; created_at: number; updated_at: number }
 interface ConnRow { service_id: string; user_id: string; tokens_enc: string | null; verifier_enc: string | null; state: string | null; state_at: number | null; connected_at: number | null }
 
 const CALLBACK = () => `${config.hubUrl}/auth/services/callback`;
@@ -39,33 +44,43 @@ export function mayUse(user: User, s: ServiceRow): boolean {
 
 const requireAdmin = (u: User) => { if (u.role !== 'admin') throw new UserError('err.noPermission'); };
 
-export function saveService(user: User, input: { id: string; name: string; url: string; audience?: Audience; disabledTools?: string[]; create?: boolean }) {
+/** The address and headers of a service tied to a data connection, from that connection's current settings. */
+function sharedAccess(connectionId: string) {
+  const { connector, cfg } = connectionConfig(connectionId);
+  if (!connector.mcp) throw new UserError('err.services.noMcp', { type: connector.label });
+  return connector.mcp(cfg);
+}
+
+export function saveService(user: User, input: { id: string; name: string; url?: string; connection?: string | null; audience?: Audience; disabledTools?: string[]; create?: boolean }) {
   requireAdmin(user);
   const id = input.id.trim().toLowerCase();
   if (!/^[a-z][a-z0-9-]{1,30}$/.test(id)) throw new UserError('err.services.badId');
+  const old = serviceRow(id);
+  const connection = input.connection === undefined ? old?.connection_id ?? null : input.connection || null;
   let url: URL;
   try {
-    url = new URL(input.url.trim());
-  } catch {
+    url = new URL(connection ? sharedAccess(connection).url : (input.url ?? '').trim());
+  } catch (e) {
+    if (e instanceof UserError) throw e;
     throw new UserError('err.services.badUrl');
   }
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && /^(localhost|127\.0\.0\.1)$/.test(url.hostname))) throw new UserError('err.services.badUrl');
   // the hub's own pages (e.g. the callback address given to the service) are never a service's MCP endpoint
   if (url.origin === new URL(config.hubUrl).origin && url.pathname !== '/mcp') throw new UserError('err.services.ownAddress');
   const name = input.name.trim().slice(0, 60) || id;
-  const old = serviceRow(id);
   // adding never replaces a service by accident; changing one goes through its settings
   if (input.create && old) throw new UserError('err.services.exists', { id });
   const audience = JSON.stringify(input.audience ?? (old ? audienceOf(old) : { company: true }));
   const disabled = JSON.stringify([...new Set(input.disabledTools ?? (old ? disabledOf(old) : []))]);
-  if (old && old.url !== url.toString()) {
-    // another server: its registration and everyone's tokens no longer apply
+  if (old && (old.url !== url.toString() || old.connection_id !== connection)) {
+    // another server or another way in: its registration and everyone's tokens no longer apply
     run('UPDATE mcp_services SET client_enc = NULL WHERE id = ?', id);
     run('DELETE FROM mcp_connections WHERE service_id = ?', id);
   }
-  run(`INSERT INTO mcp_services (id, name, url, audience, disabled_tools, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-       ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, audience = excluded.audience, disabled_tools = excluded.disabled_tools, updated_at = excluded.updated_at`,
-  id, name, url.toString(), audience, disabled, user.id, now(), now());
+  run(`INSERT INTO mcp_services (id, name, url, audience, disabled_tools, connection_id, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(id) DO UPDATE SET name = excluded.name, url = excluded.url, audience = excluded.audience, disabled_tools = excluded.disabled_tools,
+         connection_id = excluded.connection_id, updated_at = excluded.updated_at`,
+  id, name, url.toString(), audience, disabled, connection, user.id, now(), now());
   forgetTools(id);
   return describeService(user, serviceRow(id)!);
 }
@@ -79,10 +94,10 @@ export function deleteService(user: User, id: string) {
 function describeService(user: User, s: ServiceRow) {
   const conn = get<ConnRow>('SELECT * FROM mcp_connections WHERE service_id = ? AND user_id = ?', s.id, user.id);
   return {
-    id: s.id, name: s.name, url: s.url, connected: !!conn?.tokens_enc, connectUrl: serviceConnectUrl(s.id),
+    id: s.id, name: s.name, url: s.url, shared: !!s.connection_id, connected: !!s.connection_id || !!conn?.tokens_enc, connectUrl: serviceConnectUrl(s.id),
     ...(user.role === 'admin' ? {
-      audience: audienceOf(s), disabledTools: disabledOf(s),
-      people: get<{ n: number }>('SELECT COUNT(*) AS n FROM mcp_connections WHERE service_id = ? AND tokens_enc IS NOT NULL', s.id)!.n,
+      audience: audienceOf(s), disabledTools: disabledOf(s), connection: s.connection_id,
+      people: s.connection_id ? 0 : get<{ n: number }>('SELECT COUNT(*) AS n FROM mcp_connections WHERE service_id = ? AND tokens_enc IS NOT NULL', s.id)!.n,
     } : {}),
   };
 }
@@ -151,6 +166,7 @@ class Provider implements OAuthClientProvider {
 /** Starts connecting: the address of the service's consent page, or null when the person is connected already. */
 export async function startConnect(user: User, id: string): Promise<string | null> {
   const s = usable(user, id);
+  if (s.connection_id) return null;
   const state = randomToken(16);
   run('INSERT OR IGNORE INTO mcp_connections (service_id, user_id) VALUES (?, ?)', s.id, user.id);
   run('UPDATE mcp_connections SET state = ?, state_at = ? WHERE service_id = ? AND user_id = ?', state, now(), s.id, user.id);
@@ -183,6 +199,7 @@ export function disconnect(user: User, id: string) {
 
 // ---------------------------------------------------------------- tools, as the person
 async function withClient<T>(user: User, s: ServiceRow, fn: (c: Client) => Promise<T>): Promise<T> {
+  if (s.connection_id) return withSharedClient(s, s.connection_id, fn);
   const conn = get<ConnRow>('SELECT tokens_enc FROM mcp_connections WHERE service_id = ? AND user_id = ?', s.id, user.id);
   if (!conn?.tokens_enc) throw new UserError('err.services.notConnected', { name: s.name, url: serviceConnectUrl(s.id) });
   const client = new Client({ name: `${config.companyName} Hub`, version: '1.0.0' });
@@ -201,6 +218,22 @@ async function withClient<T>(user: User, s: ServiceRow, fn: (c: Client) => Promi
   }
 }
 
+/** A service tied to a data connection: its key, the same for everyone; a rejected key is for an admin to fix. */
+async function withSharedClient<T>(s: ServiceRow, connectionId: string, fn: (c: Client) => Promise<T>): Promise<T> {
+  const access = sharedAccess(connectionId);
+  const client = new Client({ name: `${config.companyName} Hub`, version: '1.0.0' });
+  const transport = new StreamableHTTPClientTransport(new URL(access.url), { requestInit: { headers: access.headers } });
+  try {
+    await client.connect(transport);
+    return await fn(client);
+  } catch (e) {
+    if (e instanceof UnauthorizedError || /\b401\b|unauthori[sz]ed/i.test((e as Error).message)) throw new UserError('err.services.sharedKey', { name: s.name });
+    throw e;
+  } finally {
+    await client.close().catch(() => undefined);
+  }
+}
+
 interface ToolInfo { name: string; description?: string; inputSchema: unknown; annotations?: { readOnlyHint?: boolean; destructiveHint?: boolean; title?: string } }
 const toolCache = new Map<string, { at: number; tools: ToolInfo[] }>();
 function forgetTools(id: string, userId?: string) {
@@ -208,7 +241,8 @@ function forgetTools(id: string, userId?: string) {
 }
 
 async function toolsOf(user: User, s: ServiceRow): Promise<ToolInfo[]> {
-  const key = `${s.id}|${user.id}`;
+  // one identity for everyone: one list
+  const key = `${s.id}|${s.connection_id ? '*' : user.id}`;
   const hit = toolCache.get(key);
   if (hit && Date.now() - hit.at < 10 * 60_000) return hit.tools;
   const tools: ToolInfo[] = [];
@@ -227,7 +261,7 @@ async function toolsOf(user: User, s: ServiceRow): Promise<ToolInfo[]> {
 
 /** Services the person may use; with `id`, that service's tools (minus those an admin switched off) and their arguments. */
 export async function listTools(user: User, id?: string) {
-  if (!id) return servicesFor(user).map(({ id: sid, name, connected, connectUrl }) => ({ service: sid, name, connected, ...(connected ? {} : { connectUrl }) }));
+  if (!id) return servicesFor(user).map(({ id: sid, name, shared, connected, connectUrl }) => ({ service: sid, name, ...(shared ? { shared } : {}), connected, ...(connected ? {} : { connectUrl }) }));
   const s = usable(user, id);
   const off = new Set(disabledOf(s));
   const tools = (await toolsOf(user, s)).filter((t) => !off.has(t.name));

@@ -51,6 +51,8 @@ export const metabase: Connector = {
     { name: 'url', placeholder: 'https://metabase.example.com' },
     { name: 'apiKey', secret: true, placeholder: 'mb_…' },
   ],
+  // Metabase's built-in MCP server (Admin → AI → MCP); it takes the API key like the rest of its API
+  mcp: (cfg) => ({ url: `${base(cfg)}/api/metabase-mcp`, headers: { 'x-api-key': cfg.apiKey ?? '' } }),
   async test(cfg) {
     const me = await mb<{ common_name?: string; email?: string; is_superuser?: boolean }>(cfg, '/api/user/current');
     if (me.is_superuser) throw new UserError('err.conn.adminKey');
