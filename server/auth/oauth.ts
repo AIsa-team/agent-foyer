@@ -6,6 +6,7 @@
 import { Hono } from 'hono';
 import { getCookie } from 'hono/cookie';
 import { config } from '../config.ts';
+import { agentVersionOf, deviceOf } from './device.ts';
 import { randomToken, sha256, sha256b64url, signToken, verifyToken } from '../crypto.ts';
 import { get, now, run, tx, type User } from '../db.ts';
 import { HUB_COOKIE, sessionUser } from './session.ts';
@@ -155,9 +156,10 @@ oauth.post('/oauth/authorize', async (c) => {
     return c.redirect(back.toString());
   }
   const code = randomToken();
+  // the browser the person allows it in is usually on the device the agent runs on
   run(
-    'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at) VALUES (?, ?, ?, ?, ?, ?)',
-    sha256(code), p.client.client_id, user.id, p.redirectUri, p.challenge, now() + 5 * 60 * 1000,
+    'INSERT INTO oauth_codes (code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at, device) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    sha256(code), p.client.client_id, user.id, p.redirectUri, p.challenge, now() + 5 * 60 * 1000, deviceOf(c.req.header('user-agent')),
   );
   back.searchParams.set('code', code);
   return c.redirect(back.toString(), 302);
@@ -165,15 +167,15 @@ oauth.post('/oauth/authorize', async (c) => {
 
 const consentToken = (userId: string, clientId: string) => signToken(`consent:${userId}:${clientId}`, 15 * 60 * 1000);
 
-function issueTokens(userId: string, clientId: string, clientName: string) {
+function issueTokens(userId: string, clientId: string, clientName: string, device?: string | null) {
   const access = 'hub_at_' + randomToken();
   const refresh = 'hub_rt_' + randomToken();
   run('INSERT INTO tokens (token_hash, kind, user_id, client_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)', sha256(access), 'access', userId, clientId, now() + ACCESS_TTL, now());
   run('INSERT INTO tokens (token_hash, kind, user_id, client_id, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)', sha256(refresh), 'refresh', userId, clientId, now() + REFRESH_TTL, now());
   run(
-    `INSERT INTO agent_connections (user_id, client_id, client_name, connected_at, last_used_at) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(user_id, client_id) DO UPDATE SET last_used_at = excluded.last_used_at`,
-    userId, clientId, clientName, now(), now(),
+    `INSERT INTO agent_connections (user_id, client_id, client_name, connected_at, last_used_at, device) VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, client_id) DO UPDATE SET last_used_at = excluded.last_used_at, device = COALESCE(excluded.device, agent_connections.device)`,
+    userId, clientId, clientName, now(), now(), device ?? null,
   );
   return { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL / 1000, refresh_token: refresh, scope: 'hub' };
 }
@@ -186,14 +188,14 @@ oauth.post('/oauth/token', async (c) => {
   if (!client) return err('invalid_client', 'unknown client_id');
 
   if (body.grant_type === 'authorization_code') {
-    const row = get<{ user_id: string; redirect_uri: string; code_challenge: string; expires_at: number; client_id: string }>(
+    const row = get<{ user_id: string; redirect_uri: string; code_challenge: string; expires_at: number; client_id: string; device: string | null }>(
       'SELECT * FROM oauth_codes WHERE code_hash = ?', sha256(body.code ?? ''),
     );
     run('DELETE FROM oauth_codes WHERE code_hash = ?', sha256(body.code ?? ''));
     if (!row || row.expires_at < now() || row.client_id !== client.client_id) return err('invalid_grant', 'code invalid or expired');
     if (row.redirect_uri !== body.redirect_uri) return err('invalid_grant', 'redirect_uri mismatch');
     if (!body.code_verifier || sha256b64url(body.code_verifier) !== row.code_challenge) return err('invalid_grant', 'PKCE verification failed');
-    return c.json(issueTokens(row.user_id, client.client_id, client.client_name));
+    return c.json(issueTokens(row.user_id, client.client_id, client.client_name, row.device));
   }
 
   if (body.grant_type === 'refresh_token') {
@@ -209,11 +211,11 @@ oauth.post('/oauth/token', async (c) => {
 });
 
 /** Personal access token for agents that cannot do the browser OAuth flow. */
-export function createPersonalToken(userId: string, agentName: string): string {
+export function createPersonalToken(userId: string, agentName: string, device?: string | null): string {
   const token = 'hub_pat_' + randomToken();
   const clientId = 'pat:' + randomToken(6);
   run('INSERT INTO tokens (token_hash, kind, user_id, client_id, expires_at, created_at) VALUES (?, ?, ?, ?, NULL, ?)', sha256(token), 'pat', userId, clientId, now());
-  run('INSERT INTO agent_connections (user_id, client_id, client_name, connected_at, last_used_at) VALUES (?, ?, ?, ?, ?)', userId, clientId, agentName, now(), now());
+  run('INSERT INTO agent_connections (user_id, client_id, client_name, connected_at, last_used_at, device) VALUES (?, ?, ?, ?, ?, ?)', userId, clientId, agentName, now(), now(), device ?? null);
   return token;
 }
 
@@ -226,7 +228,8 @@ export function disconnectAgent(userId: string, clientId: string) {
 
 const lastTouched = new Map<string, number>();
 
-export function authenticateBearer(header: string | undefined | null): { user: User; clientId: string; token: string } | undefined {
+/** The person and agent behind a bearer token; `userAgent` keeps the agent's version up to date. */
+export function authenticateBearer(header: string | undefined | null, userAgent?: string | null): { user: User; clientId: string; token: string } | undefined {
   const m = /^Bearer\s+(\S+)$/i.exec(header ?? '');
   if (!m) return undefined;
   const row = get<{ user_id: string; client_id: string; expires_at: number | null }>(
@@ -238,7 +241,7 @@ export function authenticateBearer(header: string | undefined | null): { user: U
   const key = row.user_id + '|' + row.client_id;
   if ((lastTouched.get(key) ?? 0) < now() - 60_000) {
     lastTouched.set(key, now());
-    run('UPDATE agent_connections SET last_used_at = ? WHERE user_id = ? AND client_id = ?', now(), row.user_id, row.client_id);
+    run('UPDATE agent_connections SET last_used_at = ?, agent_version = COALESCE(?, agent_version) WHERE user_id = ? AND client_id = ?', now(), agentVersionOf(userAgent), row.user_id, row.client_id);
   }
   return { user, clientId: row.client_id, token: m[1] };
 }

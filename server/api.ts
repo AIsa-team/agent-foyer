@@ -15,6 +15,7 @@ import * as services from './services/index.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
+import { deviceOf } from './auth/device.ts';
 import * as apps from './apps/service.ts';
 import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
@@ -99,15 +100,15 @@ api.get('/profile', (c) => {
   const allApps = apps.listAppsFor(u, localeOf(c));
   // what they look after: their own and what they collaborate on
   const mySkills = skills.listSkills(u, localeOf(c)).filter((s) => s.myRole);
-  const agents = all<{ client_id: string; client_name: string; connected_at: number; last_used_at: number }>(
-    'SELECT client_id, client_name, connected_at, last_used_at FROM agent_connections WHERE user_id = ? ORDER BY last_used_at DESC', u.id,
+  const agents = all<{ client_id: string; client_name: string; connected_at: number; last_used_at: number; device: string | null; agent_version: string | null; label: string | null }>(
+    'SELECT client_id, client_name, connected_at, last_used_at, device, agent_version, label FROM agent_connections WHERE user_id = ? ORDER BY last_used_at DESC', u.id,
   );
   const installed = get<{ n: number }>('SELECT COUNT(*) AS n FROM skill_installs WHERE user_id = ?', u.id)!.n;
   return c.json({
     apps: allApps.filter((a) => a.myRole),
     skills: mySkills,
     installedSkills: installed,
-    agents: agents.map((a) => ({ id: a.client_id, name: a.client_name, connectedAt: a.connected_at, lastUsedAt: a.last_used_at })),
+    agents: agents.map((a) => ({ id: a.client_id, name: a.client_name, label: a.label, device: a.device, version: a.agent_version, connectedAt: a.connected_at, lastUsedAt: a.last_used_at })),
     radar: profileRadar(u.id),
   });
 });
@@ -428,7 +429,15 @@ api.delete('/skills/:slug', (c) => {
 api.post('/tokens', async (c) => {
   const b = await body<{ name?: string }>(c);
   const name = (b.name ?? '').trim().slice(0, 40) || 'Agent';
-  return c.json({ token: createPersonalToken(c.get('user').id, name) });
+  return c.json({ token: createPersonalToken(c.get('user').id, name, deviceOf(c.req.header('user-agent'))) });
+});
+
+/** A name of their own for one of their agents ("家里的 Mac"), to tell several of the same kind apart; empty clears it. */
+api.post('/agents/:id/label', async (c) => {
+  const b = await body<{ label?: string | null }>(c);
+  const label = String(b.label ?? '').replace(/\s+/g, ' ').trim().slice(0, 40) || null;
+  run('UPDATE agent_connections SET label = ? WHERE user_id = ? AND client_id = ?', label, c.get('user').id, c.req.param('id'));
+  return c.json({ ok: true, label });
 });
 
 api.delete('/agents/:id', (c) => {

@@ -153,7 +153,7 @@ code, pre, .mono { font-family: var(--aisa-font-mono); font-size: 12.5px; }
 .app-card .foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; color: var(--muted); }
 .conn-card { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
 .conn-card__head { display: flex; align-items: center; gap: 12px; }
-.conn-card__title { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.conn-card__title { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
 .conn-logo { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; background: #fff; border: 1px solid var(--line); }
 .conn-logo img { width: 20px; height: 20px; object-fit: contain; }
 .conn-card .app-icon { width: 32px; height: 32px; border-radius: 8px; font-size: 14px; }
@@ -620,6 +620,10 @@ h3 .count { color: var(--muted); font-weight: 400; font-size: 13px; margin-left:
 
 /* app detail: actions offered to agents */
 .agent-actions { display: flex; flex-direction: column; }
+.agent-title { display: inline-block; min-width: 0; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.agent-title__kind { font-weight: 400; font-size: 13px; margin-left: 6px; }
+.agent-rename { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.agent-rename .input { flex: 1 1 160px; min-width: 0; padding: 4px 8px; }
 .agent-action { padding: 8px 0; border-top: 1px solid var(--line); }
 .agent-action:first-child { border-top: 0; padding-top: 0; }
 .agent-action .mono { overflow-wrap: anywhere; }

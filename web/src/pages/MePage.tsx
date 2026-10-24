@@ -11,7 +11,7 @@ interface LarkStatus { connected: boolean; expired?: boolean; until?: number; co
 
 /** One thing connected to this person's hub account (a service or an agent), all drawn the same way. */
 function ConnectionCard({ logo, title, connected, detail, action, children }: {
-  logo: ReactNode; title: string; connected: boolean; detail?: ReactNode; action: ReactNode; children?: ReactNode;
+  logo: ReactNode; title: ReactNode; connected: boolean; detail?: ReactNode; action: ReactNode; children?: ReactNode;
 }) {
   const { t } = useI18n();
   return (
@@ -143,6 +143,40 @@ function ServiceCards({ services, reload, skip }: { services: Service[] | null; 
         </ConnectionCard>
       ))}
     </>
+  );
+}
+
+/**
+ * One of the person's connected agents. Several of the same kind (Codex on two computers) are told apart by the
+ * device they were allowed from, their version, and a name the person gives them.
+ */
+function AgentCard({ a, reload, onDisconnect }: { a: Agent; reload: () => void; onDisconnect: () => void }) {
+  const { t, ago, fmtDate } = useI18n();
+  const { busy, run } = useAction();
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(a.label ?? '');
+  const save = () => run(() => api.post(`/agents/${encodeURIComponent(a.id)}/label`, { label }), t('me.agentRenamed')).then(() => { setEditing(false); reload(); });
+  const where = [a.device, a.version && `v${a.version}`].filter(Boolean).join(' · ');
+  const when = `${t('common.usedAgo', { ago: ago(a.lastUsedAt) })} · ${t('me.connectedOn', { date: fmtDate(a.connectedAt) })}`;
+  return (
+    <ConnectionCard logo={<AgentLogo name={a.name} />} connected
+      title={<span className="agent-title">{a.label || a.name}{a.label && <span className="muted agent-title__kind">{a.name}</span>}</span>}
+      detail={where || when}
+      action={(
+        <span className="row" style={{ gap: 2 }}>
+          {!editing && <button className="btn sm ghost" type="button" onClick={() => { setLabel(a.label ?? ''); setEditing(true); }}>{t('me.agentRename')}</button>}
+          <button className="btn sm ghost danger" onClick={onDisconnect} type="button">{t('me.disconnect')}</button>
+        </span>
+      )}>
+      {editing ? (
+        <span className="agent-rename">
+          <input className="input" autoFocus value={label} maxLength={40} placeholder={t('me.agentLabelPlaceholder')} onChange={(e) => setLabel(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void save(); if (e.key === 'Escape') setEditing(false); }} />
+          <button className="btn sm primary" type="button" disabled={busy} onClick={() => void save()}>{t('common.save')}</button>
+          <button className="btn sm ghost" type="button" onClick={() => setEditing(false)}>{t('common.cancel')}</button>
+        </span>
+      ) : <>{where && <>{when}<br /></>}{t('me.agentBody')}</>}
+    </ConnectionCard>
   );
 }
 
@@ -284,13 +318,7 @@ export function MePage() {
         <LinearCard services={services.data?.services ?? null} reload={services.reload} />
         {/* Linear's MCP server shares the Linear card when the 项目 page is on */}
         <ServiceCards services={services.data?.services ?? null} reload={services.reload} skip={me.hub.features.linear ? ['linear'] : []} />
-        {data.agents.map((a) => (
-          <ConnectionCard key={a.id} logo={<AgentLogo name={a.name} />} title={a.name} connected
-            detail={<>{t('common.usedAgo', { ago: ago(a.lastUsedAt) })} · {t('me.connectedOn', { date: fmtDate(a.connectedAt) })}</>}
-            action={<button className="btn sm ghost danger" onClick={() => disconnect(a)} type="button">{t('me.disconnect')}</button>}>
-            {t('me.agentBody')}
-          </ConnectionCard>
-        ))}
+        {data.agents.map((a) => <AgentCard key={a.id} a={a} reload={reload} onDisconnect={() => disconnect(a)} />)}
       </div>
 
       <div className="section">

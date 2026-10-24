@@ -74,7 +74,7 @@ export interface SkillInfo {
 
 export interface LarkLink { id: number; name: string; description: string; url: string; icon: string; in_sidebar?: number }
 
-export interface Agent { id: string; name: string; connectedAt: number; lastUsedAt: number }
+export interface Agent { id: string; name: string; label?: string | null; device?: string | null; version?: string | null; connectedAt: number; lastUsedAt: number }
 
 export interface Me {
   user: { id: string; name: string; email: string | null; avatar: string | null; role: 'admin' | 'member'; locale: string | null };

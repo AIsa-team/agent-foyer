@@ -38,7 +38,7 @@ app.route('/', githubHook);
 app.route('/api', api);
 
 app.all(MCP_PATH, async (c) => {
-  const auth = authenticateBearer(c.req.header('authorization'));
+  const auth = authenticateBearer(c.req.header('authorization'), c.req.header('user-agent'));
   if (!auth) {
     const L = requestLocale((h) => c.req.header(h));
     return c.json({ error: 'unauthorized', error_description: tr(L, 'err.mcpUnauthorized') }, 401, { 'WWW-Authenticate': wwwAuthenticate() });

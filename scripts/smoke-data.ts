@@ -2239,9 +2239,11 @@ try {
     const consentAt = go.headers.get('location') ?? '';
     const consentHtml = await (await fetch(consentAt, { headers: { cookie: bob.jar.header() } })).text();
     check(consentAt.includes('/oauth/authorize') && consentAt.includes('code_challenge='), 'connecting registers the hub with the service and asks for consent with PKCE');
-    const allow = await fetch(consentAt, { method: 'POST', redirect: 'manual', headers: { cookie: bob.jar.header() }, body: new URLSearchParams({ decision: 'allow', csrf: /name="csrf" value="([^"]+)"/.exec(consentHtml)![1] }) });
+    // allowed in a browser on Windows: that is the device the hub remembers for this agent
+    const allow = await fetch(consentAt, { method: 'POST', redirect: 'manual', headers: { cookie: bob.jar.header(), 'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0' }, body: new URLSearchParams({ decision: 'allow', csrf: /name="csrf" value="([^"]+)"/.exec(consentHtml)![1] }) });
     const back = await fetch(allow.headers.get('location')!, { redirect: 'manual', headers: { cookie: bob.jar.header() } });
     check(back.status === 302 && back.headers.get('location') === '/me', 'and comes back connected');
+    check(((await api(bob.jar, 'GET', '/profile')).body.agents as { device: string | null }[]).some((a) => a.device === 'Windows · Edge'), 'an agent allowed in a browser shows the device it was allowed from');
     check(((await api(bob.jar, 'GET', '/services')).body.services as { id: string; connected: boolean }[]).find((x) => x.id === 'selfhub')?.connected === true, 'the Me page shows the service connected');
     const listed = await tool(bob.token, 'list_connected_tools', { service: 'selfhub' }) as { tools: { name: string; input: unknown }[] };
     check(listed.tools.some((x) => x.name === 'whoami') && listed.tools.length > 20, "the service's own tools are listed with their input schemas");
@@ -2312,6 +2314,30 @@ try {
     check(lark.scopesAsked.split(' ').includes('calendar:calendar:readonly'), 'reconnecting Lark keeps calendar reading');
     check(!(await tool(alex.token, 'save_homepage', { scope: 'me', layout: { modules: [{ type: 'agenda', width: 'half' }, { type: 'apps' }] } })).error, 'an agenda module can be put on a home page');
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
+  }
+
+  // ---------------------------------------------------------------- telling one person's agents apart
+  {
+    const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
+    const win = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0';
+    const make = async (ua: string) => (await (await fetch(`${HUB}/api/tokens`, { method: 'POST', headers: { cookie: bob.jar.header(), 'content-type': 'application/json', 'user-agent': ua }, body: '{"name":"Codex"}' })).json() as { token: string }).token;
+    const t1 = await make(mac), t2 = await make(win);
+    await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${t2}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': 'codex-mcp-client/0.163.0' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'whoami', arguments: {} } }) });
+    type A = { id: string; name: string; label: string | null; device: string | null; version: string | null };
+    const agents = () => api(bob.jar, 'GET', '/profile').then((r) => (r.body.agents as A[]).filter((a) => a.name === 'Codex'));
+    const two = await agents();
+    check(two.length === 2 && two.some((a) => a.device === 'macOS · Chrome') && two.some((a) => a.device === 'Windows · Edge'), 'two agents of the same kind show the device each was added from');
+    check(two.find((a) => a.device === 'Windows · Edge')?.version === '0.163.0' && two.find((a) => a.device === 'macOS · Chrome')?.version === null, 'and the version each agent reports when it calls');
+    const winId = two.find((a) => a.device === 'Windows · Edge')!.id;
+    check((await api(bob.jar, 'POST', `/agents/${encodeURIComponent(winId)}/label`, { label: '  公司   台式机 ' })).body.label === '公司 台式机'
+      && (await agents()).find((a) => a.id === winId)?.label === '公司 台式机', 'the person names one of them');
+    await api(alice.jar, 'POST', `/agents/${encodeURIComponent(winId)}/label`, { label: 'mine' });
+    check((await agents()).find((a) => a.id === winId)?.label === '公司 台式机', "nobody else can rename someone's agent");
+    await api(bob.jar, 'POST', `/agents/${encodeURIComponent(winId)}/label`, { label: '' });
+    check((await agents()).find((a) => a.id === winId)?.label === null, 'an empty name goes back to the agent\'s own');
+    for (const a of await agents()) await api(bob.jar, 'DELETE', `/agents/${encodeURIComponent(a.id)}`);
+    void t1;
   }
 
   // ---------------------------------------------------------------- imported dashboards and their data stay in step
@@ -2463,6 +2489,12 @@ try {
     await connect(alex.jar);
     const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
     await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true, disabledTools: ['question_write'] });
+    for (const [ua, label] of [['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0', '公司台式机'], ['Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36', '']]) {
+      const tok = (await (await fetch(`${HUB}/api/tokens`, { method: 'POST', headers: { cookie: alex.jar.header(), 'content-type': 'application/json', 'user-agent': ua }, body: '{"name":"Codex"}' })).json() as { token: string }).token;
+      await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': 'codex-mcp-client/0.163.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'whoami', arguments: {} } }) });
+      const id = ((await api(alex.jar, 'GET', '/profile')).body.agents as { id: string; name: string }[]).find((a) => a.name === 'Codex')!.id;
+      if (label) await api(alex.jar, 'POST', `/agents/${encodeURIComponent(id)}/label`, { label });
+    }
     await tool(bob.token, 'save_data_source', { id: 'bob-joined', title: { 'zh-CN': '订单和客户分级', en: 'Orders with tiers' }, combine: { sources: ['bob-orders', 'bob-tiers'], mode: 'join', on: [{ left: 'customer', right: 'customer' }] } });
     await tool(bob.token, 'save_board', { id: 'bob-board', title: { 'zh-CN': '我的客户', en: 'My customers' }, scope: 'me', layout: { modules: [
       { type: 'stats', items: [{ label: { 'zh-CN': '订单金额', en: 'Amount' }, source: { data: 'bob-orders', query: { measure: { op: 'sum', field: 'amount' } } } }, { label: { 'zh-CN': '客户数', en: 'Customers' }, source: { data: 'bob-joined', query: { measure: { op: 'count' } } } }] },

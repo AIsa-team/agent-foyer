@@ -586,6 +586,12 @@ const MIGRATIONS: string[] = [
   `
   ALTER TABLE boards ADD COLUMN owner_id TEXT REFERENCES users(id) ON DELETE CASCADE;
   ALTER TABLE boards ADD COLUMN audience TEXT;
+  `,  // telling one person's agents apart: the device they were allowed from, the agent's version, a name they give it
+  `
+  ALTER TABLE agent_connections ADD COLUMN device TEXT;
+  ALTER TABLE agent_connections ADD COLUMN agent_version TEXT;
+  ALTER TABLE agent_connections ADD COLUMN label TEXT;
+  ALTER TABLE oauth_codes ADD COLUMN device TEXT;
   `,
 ];
 
