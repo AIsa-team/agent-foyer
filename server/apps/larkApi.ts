@@ -198,7 +198,8 @@ export function issueTicket(slug: string, userId: string): string {
   return `${payload}.${mac(payload)}`;
 }
 
-function readTicket(slug: string, ticket: string | undefined): string | undefined {
+/** Whom a ticket from this app's server stands for (undefined when it is missing, forged or expired). */
+export function readTicket(slug: string, ticket: string | undefined): string | undefined {
   if (!ticket) return undefined;
   const [payload, sig] = ticket.split('.');
   if (!payload || !sig || !safeEqual(sig, mac(payload))) return undefined;

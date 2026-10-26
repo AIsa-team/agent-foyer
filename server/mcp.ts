@@ -23,6 +23,7 @@ import { createUpload, type UploadPurpose } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
 import { localeCodes, type LocalizedMap } from './localized.ts';
 import { appGuide } from './appGuide.ts';
+import { aiStatus } from './ai.ts';
 import { sourceDownload } from './apps/source.ts';
 import * as agentActions from './apps/agentActions.ts';
 import * as appRequests from './requests.ts';
@@ -42,7 +43,8 @@ Whenever you publish or update an app or a Skill, pass \`localized\` with a shor
 
 Building or changing an app (e.g. "make an app that…", "publish this project to the company server"): call app_guide first and follow it; it has the steps, the hub SDK and the report format. The core of it:
 - Look before building: if one of the user's apps (list_my_apps) already does this, improve it, starting from its feedback (list_feedback) and the code of its live version (get_app_source).
-- Decide the defaults yourself (name in every hub language, subdomain, icon) and keep a new app private to the user unless they said who should use it. Ask only what you cannot decide; if you work unattended, write open questions into your report instead of stopping.
+- Decide the defaults yourself (name in every hub language, subdomain, icon) and keep a new app private to the user unless they said who should use it.
+- AI models and data APIs come from the hub (/__hub/ai, no key in the app) when an admin set a provider; ai_resources says what is there. Ask only what you cannot decide; if you work unattended, write open questions into your report instead of stopping.
 ${LARK ? `- Business data lives in Lark, never only in the app: a table the user named, or a Base you create (create_lark_base, typed columns). Documents the app produces are Lark documents. The app's own storage is for technical state only.
 - The app reaches Lark only through the hub SDK as the person using it (/__hub/sdk.js, declared with set_app_lark). No Lark tokens, no own login.
 ` : `- Business records live in the app's own server storage ($DATA_DIR in a container app), never only in the browser. No own login: the hub signs people in.
@@ -175,6 +177,14 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     `SELECT id, name, en_name, email FROM users WHERE name LIKE ? OR en_name LIKE ? OR email LIKE ? ORDER BY name LIMIT 20`,
     `%${query}%`, `%${query}%`, `%${query}%`,
   )));
+
+  server.registerTool('ai_resources', {
+    description: 'Whether apps on this hub can use AI models (and data APIs) through /__hub/ai without a key of their own: the provider, every model it offers, whether data APIs are there, the daily limits, and how to call it. See app_guide for using it in an app.',
+  }, guard(() => {
+    const s = aiStatus();
+    return s.configured ? { ...s, models: s.models, call: { models: '/__hub/ai/v1/chat/completions (OpenAI-compatible)', ...(s.dataApis ? { dataApis: '/__hub/ai/apis/v1/<provider>/<endpoint>' } : {}) } }
+      : { configured: false, hint: 'An admin sets an AI provider on the admin page (AI resources).' };
+  }));
 
   server.registerTool('app_guide', {
     description: 'How to build, publish and report on an app on this hub, step by step (data, interface, hub SDK, checks, report). Call it before building or changing an app.',

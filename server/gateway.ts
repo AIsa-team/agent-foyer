@@ -9,14 +9,15 @@ import type { Duplex } from 'node:stream';
 import path from 'node:path';
 import { createProxyServer } from 'http-proxy-3';
 import { appUrl, config } from './config.ts';
-import type { App, User } from './db.ts';
+import { get, type App, type User } from './db.ts';
 import { UserError } from './i18n/index.ts';
 import { escapeHtml, page } from './html.ts';
 import { requestLocale, tr, trHtml, type MessageKey } from './i18n/index.ts';
 import { localize } from './localized.ts';
 import { canAccessApp } from './apps/access.ts';
 import { getApp, staticRoot } from './apps/service.ts';
-import { handleAppLark, issueTicket } from './apps/larkApi.ts';
+import { handleAppLark, issueTicket, readTicket } from './apps/larkApi.ts';
+import { handleAppAi } from './ai.ts';
 import { recordVisit } from './apps/visits.ts';
 import { SDK_JS } from './apps/sdk.ts';
 import { injectWidget, widgetJs } from './apps/feedbackWidget.ts';
@@ -229,6 +230,19 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
     if (user && !canAccessApp(app, user)) return send(res, 403, 'forbidden');
     void handleAppLark(app, user, req, res, localeOf(req)).catch((e) => {
       console.error('[app-lark]', e);
+      if (!res.headersSent) send(res, 500, 'error');
+    });
+    return;
+  }
+  if (url.pathname.startsWith('/__hub/ai/')) {
+    const app = getApp(slug);
+    if (!app) return send(res, 404, 'not found');
+    // the app's server forwards the ticket it got with the person's request; a browser has the app's session
+    const ticketUser = readTicket(slug, req.headers['x-hub-ticket'] as string | undefined);
+    const user = ticketUser ? get<User>('SELECT * FROM users WHERE id = ?', ticketUser) : sessionUser(cookies[APP_COOKIE], slug);
+    if (user && !canAccessApp(app, user)) return send(res, 403, 'forbidden');
+    void handleAppAi(app, user, !ticketUser, req, res).catch((e) => {
+      console.error('[app-ai]', e);
       if (!res.headersSent) send(res, 500, 'error');
     });
     return;

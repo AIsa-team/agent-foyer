@@ -138,6 +138,8 @@ export const config = {
   maxUploadBytes: Number(env('MAX_UPLOAD_MB', '200')) * 1024 * 1024,
   /** how old rows read through a data connection (Metabase…) may get before a page view refreshes them in the background;
    *  those queries often run on a production database, so not too often */
+  /** AIsa's API, the ready-made AI provider (server/ai.ts); changed only for tests */
+  aisaApiBase: env('AISA_API_BASE', 'https://api.aisa.one').replace(/\/+$/, ''),
   connectorRefreshMs: Math.max(1, Number(env('CONNECTOR_REFRESH_MINUTES', '30'))) * 60_000,
 };
 

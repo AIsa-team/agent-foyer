@@ -12,6 +12,7 @@ import { contributions } from './github/contributions.ts';
 import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
 import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, myIssues, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
+import * as ai from './ai.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { HUB_COOKIE, sessionUser } from './auth/session.ts';
 import { createPersonalToken, disconnectAgent, MCP_PATH } from './auth/oauth.ts';
@@ -473,6 +474,21 @@ api.get('/admin', (c) => {
 });
 
 // ---- data connections (Metabase…) and the sources read through them; admins only
+// ---- AI resources: the provider apps use through /__hub/ai (admins) ----
+api.get('/admin/ai', (c) => {
+  requireAdmin(c.get('user'));
+  return c.json({ ...ai.aiSettings(), usage: ai.aiUsage(c.get('user')) });
+});
+api.post('/admin/ai', async (c) => {
+  const b = await body<{ preset?: string; baseUrl?: string; key?: string }>(c);
+  return c.json(await ai.saveAiProvider(c.get('user'), { preset: String(b.preset ?? ''), baseUrl: b.baseUrl, key: b.key }));
+});
+api.delete('/admin/ai', (c) => c.json(ai.removeAiProvider(c.get('user'))));
+api.post('/admin/ai/limits', async (c) => {
+  const b = await body<{ limits?: Partial<ai.Limits>; disabledApps?: string[] }>(c);
+  return c.json(ai.saveAiLimits(c.get('user'), b));
+});
+
 /** Update now (admins): sync imported dashboards that changed there, and read again every connector source in use. */
 api.post('/admin/connections/sync', async (c) => {
   requireAdmin(c.get('user'));

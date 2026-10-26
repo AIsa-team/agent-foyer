@@ -4,6 +4,7 @@ import { api, type AppInfo, type LarkLink } from '../api';
 import { useI18n } from '../i18n';
 import { LOCALES } from '../i18n/locales';
 import { ConnectionsSection } from '../connections';
+import { AiSection } from '../ai';
 import { ServicesSection } from '../services';
 import { AppIcon, Avatar, Icon, LinkIcon, Loading, useAction, useApi, useMe, useToast } from '../ui';
 
@@ -278,6 +279,11 @@ export function AdminPage() {
       <div className="section" id="services">
         <div className="section-title">{t('admin.services')} <span className="count">{t('admin.servicesHint')}</span></div>
         <ServicesSection />
+      </div>
+
+      <div className="section" id="ai">
+        <div className="section-title">{t('admin.ai')} <span className="count">{t('admin.aiHint')}</span></div>
+        <AiSection />
       </div>
 
       <div className="section" id="connections">

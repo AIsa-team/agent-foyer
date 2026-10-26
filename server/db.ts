@@ -592,6 +592,22 @@ const MIGRATIONS: string[] = [
   ALTER TABLE agent_connections ADD COLUMN agent_version TEXT;
   ALTER TABLE agent_connections ADD COLUMN label TEXT;
   ALTER TABLE oauth_codes ADD COLUMN device TEXT;
+  `,  // apps' calls to AI models and data APIs through the hub (server/ai.ts)
+  `
+  CREATE TABLE ai_usage (
+    id INTEGER PRIMARY KEY,
+    at INTEGER NOT NULL,
+    app_slug TEXT NOT NULL,
+    user_id TEXT NOT NULL,
+    path TEXT NOT NULL,
+    model TEXT,
+    status INTEGER NOT NULL,
+    ms INTEGER NOT NULL,
+    prompt_tokens INTEGER,
+    completion_tokens INTEGER
+  );
+  CREATE INDEX ai_usage_app ON ai_usage (app_slug, at);
+  CREATE INDEX ai_usage_user ON ai_usage (user_id, at);
   `,
 ];
 

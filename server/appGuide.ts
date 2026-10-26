@@ -6,11 +6,13 @@
 import { config } from './config.ts';
 import { localeCodes } from './localized.ts';
 import { mailboxName } from './mail.ts';
+import { aiStatus } from './ai.ts';
 
 export function appGuide(): string {
   const lark = config.lark.enabled;
   const mailbox = mailboxName() || 'mailbox';
   const design = config.designSkills[0];
+  const ai = aiStatus();
   return `# Building an app on the ${config.companyName} hub
 
 Work through these steps in order. Decide what you can yourself and say what you decided in the report; only ask the user when you cannot go on without an answer (if you work unattended, put the question in the report instead).
@@ -56,8 +58,12 @@ ${lark ? `- Everything in Lark goes through the hub SDK, as the person using the
 ${lark ? `  - tables (any app, static too): for each table alias from set_app_lark, what agents may do with it. {"tables": {"leads": {"description": "Sales leads", "find": true, "add": {"fields": ["Company", "Contact", "Stage"], "required": ["Company"], "unique": ["Company"], "defaults": {"Stage": "New", "Owner": "$me", "Created": "$now"}}, "update": {"fields": ["Stage", "Next step"]}}}}. The hub runs these itself and checks values against the real columns (a select only takes its options). find: true returns all columns ({"fields": [...]} limits them). List in add / update only columns a person may set; defaults fill in the rest ($me = the person, or their name in a text column; $me.id = their id, as hub.me() gives it; $now = the time); unique lists columns no two records may share (an email, a profile link, a company), checked by the hub before adding, ignoring case and, for links, https / www / query / trailing slash, so put the checks the app does before saving here. Declare add / update only where writing the record is all the app does: if the app also creates a document, notifies someone or keeps tables in step when it saves, that is a container action instead, or leave writing to the app.
 ` : ''}  - actions (container apps): requests to the app's own server for what needs its logic, e.g. {"actions": [{"name": "request_quote", "description": "Create a quote for a lead and its Lark document; returns the link", "method": "POST", "path": "/api/quotes", "input": {"type": "object", "properties": {"lead_id": {"type": "string"}, "amount": {"type": "number"}}, "required": ["lead_id"]}}]}. The hub sends the request as the person, with the same X-Hub-User-* and X-Hub-Ticket headers as a browser, plus X-Hub-Agent (the agent's name, URI-encoded). {name} in a path comes from the arguments; the others go in the query string (GET, DELETE) or as a JSON body. Answer with JSON, and with a 4xx and {"error": "<message for people>"} when the input is wrong. Mark actions that change nothing with method GET (or "write": false); reuse the routes the UI calls.
   - Cover what people do most. Pure content sites (docs, slides, brand pages) need none.
+${ai.configured ? `- AI models${ai.dataApis ? ' and data APIs' : ''} (${ai.provider}), with no key in the app: the hub adds the company's key and counts the calls.
+  - Models, OpenAI-compatible: fetch('/__hub/ai/v1/chat/completions', {method: 'POST', headers: {'content-type': 'application/json'}, body: JSON.stringify({model, messages, stream})}); also /__hub/ai/v1/embeddings and /__hub/ai/v1/models.${ai.models.length ? ` Models here include ${ai.models.slice(0, 12).join(', ')}${ai.models.length > 12 ? '…' : ''} (ai_resources lists them all).` : ''}
+${ai.dataApis ? `  - Data APIs (web search, scraping, social, finance, SEO…): /__hub/ai/apis/v1/<provider>/<endpoint>, the paths and parameters of ${ai.docs ?? 'the provider docs'}; prefer them to scraping or a service of your own.
+` : ''}  - Container app servers call $HUB_APP_URL/__hub/ai/… with the X-Hub-Ticket header from the incoming request. Only signed-in colleagues get answers (a public visitor gets 401), and each app and person has a daily limit (${ai.limits.perAppPerDay} / ${ai.limits.perPersonPerDay} calls): a 429 or 401 carries {error, message}; show people what it means.` : '- This hub has no AI provider yet: if the app needs models or data APIs, tell the user an admin sets one on the admin page (AI resources); never put a provider key in the app.'}
 - Side effects can time out after they happened (a document made, a draft saved, a row added): do not retry blindly; mark them to check and let the person confirm.
-- Never put secrets in the upload; use set_app_env for API keys.
+- Never put secrets in the upload; use set_app_env for API keys (for AI models and data APIs, /__hub/ai needs none).
 
 ## 5. Check it locally
 - Run the main flow against a fake hub object (stub /__hub/* or window.hub) and look at screenshots at desktop and 390 px, light and dark, in each language.

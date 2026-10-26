@@ -79,6 +79,8 @@ const lark = {
   mbMcp: [] as { tool: string; args: unknown; key: string }[],
   /** the fake dashboard 100: when it last changed there, and the changes made since */
   mbDash: { changedAt: '2026-01-01T00:00:00Z', extraCard: false, dropDetail: false },
+  /** calls the fake AIsa got: path, key and body */
+  aiCalls: [] as { path: string; auth: string; body: string; cookie: boolean }[],
   /** SQL the fake Metabase was asked to run */
   mbSql: [] as string[],
   calendarTokens: new Set<string>(),
@@ -543,6 +545,25 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       : send({ code: 99991668, msg: 'user access token not support' });
   }
   // everything below reads documents as the user
+  // a fake AIsa: OpenAI-compatible models at /aisa/v1, data APIs at /aisa/apis/v1, key sk-good
+  if (p.startsWith('/aisa/')) {
+    const auth = String(req.headers.authorization ?? '');
+    lark.aiCalls.push({ path: p + url.search, auth, body: raw, cookie: !!req.headers.cookie });
+    if (auth !== 'Bearer sk-good') return send({ error: { message: 'invalid key' } }, 401);
+    if (p === '/aisa/v1/models') return send({ data: [{ id: 'gpt-x' }, { id: 'claude-y' }] });
+    if (p === '/aisa/v1/chat/completions' && req.method === 'POST') {
+      const b = JSON.parse(raw) as { model: string; stream?: boolean };
+      if (b.stream) {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.write(`data: ${JSON.stringify({ model: b.model, choices: [{ delta: { content: '你' } }] })}\n\n`);
+        res.write(`data: ${JSON.stringify({ model: b.model, choices: [{ delta: { content: '好' } }], usage: { prompt_tokens: 7, completion_tokens: 2 } })}\n\n`);
+        return res.end('data: [DONE]\n\n');
+      }
+      return send({ model: b.model, choices: [{ message: { role: 'assistant', content: 'hi' } }], usage: { prompt_tokens: 11, completion_tokens: 3 } });
+    }
+    if (p === '/aisa/apis/v1/twitter/user/info') return send({ data: { userName: url.searchParams.get('userName'), followers: 4200 } });
+    return send({ error: 'not found' }, 404);
+  }
   // the company directory (contact range: one department tree plus one person granted on their own)
   if (p.startsWith('/contact/v3/') && bearer === 't-app') {
     const person = (id: string, name: string) => ({ open_id: id, name, enterprise_email: `${id}@acme.example` });
@@ -896,6 +917,7 @@ const hub = spawn(process.execPath, ['server/index.ts'], {
     ALERT_QUIET_HOURS: 'off', LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`,
     GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `http://localhost:${LARK_PORT}/google/auth`, GOOGLE_TOKEN_URL: `http://localhost:${LARK_PORT}/google/token`,
     GOOGLE_USERINFO_URL: `http://localhost:${LARK_PORT}/google/userinfo`, GOOGLE_GMAIL_BASE: `http://localhost:${LARK_PORT}`,
+    AISA_API_BASE: `http://localhost:${LARK_PORT}/aisa`,
     LINEAR_CLIENT_ID: 'lin-client', LINEAR_CLIENT_SECRET: 'lin-secret', LINEAR_AUTH_BASE: `http://localhost:${LARK_PORT}/linear`, LINEAR_API_BASE: `http://localhost:${LARK_PORT}/linear`,
     GITHUB_ORG: 'acme', GITHUB_APP_ID: '123', GITHUB_CLIENT_ID: 'Iv1.gh', GITHUB_CLIENT_SECRET: 'gh-secret', GITHUB_APP_PRIVATE_KEY: ghKeys.privateKey, GITHUB_WEBHOOK_SECRET: 'hook-secret',
     GITHUB_API_BASE: `http://localhost:${LARK_PORT}/gh`, GITHUB_WEB_BASE: `http://localhost:${LARK_PORT}/gh`,
@@ -2316,6 +2338,52 @@ try {
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
   }
 
+  // ---------------------------------------------------------------- AI models and data APIs for apps (the company's key)
+  {
+    const aiApp = await loginToApp('invoice', alex.jar);
+    const chat = (body: unknown, jar: Jar | null = aiApp, extra: Record<string, string> = {}) =>
+      appFetch('invoice', '/__hub/ai/v1/chat/completions', jar ?? undefined, { 'content-type': 'application/json', ...extra }, 'POST', JSON.stringify(body));
+    check((await chat({ model: 'gpt-x', messages: [] })).status === 404, 'with no provider set, apps are told AI is not configured');
+    check((await tool(bob.token, 'ai_resources')).configured === false, 'and agents too');
+    check((await api(bob.jar, 'POST', '/admin/ai', { preset: 'aisa', key: 'sk-good' })).status >= 400, 'only admins set the provider');
+    check(/key/i.test(String((await api(alex.jar, 'POST', '/admin/ai', { preset: 'aisa', key: 'sk-bad' })).body.error)), 'a key the provider refuses is not saved');
+    const saved = (await api(alex.jar, 'POST', '/admin/ai', { preset: 'aisa', key: 'sk-good' })).body as { provider: { models: string[]; apisUrl: string; keySet: boolean } };
+    check(saved.provider.keySet && saved.provider.models.join() === 'claude-y,gpt-x' && saved.provider.apisUrl.endsWith('/aisa/apis/v1'), 'AIsa is one key for models and data APIs, tried before it is saved');
+    check(!JSON.stringify((await api(alex.jar, 'GET', '/admin/ai')).body).includes('sk-good'), 'the key never comes back to the browser');
+    const res = await chat({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] });
+    const answer = await res.json() as { choices: { message: { content: string } }[] };
+    const sent = lark.aiCalls.at(-1)!;
+    check(res.status === 200 && answer.choices[0].message.content === 'hi' && sent.auth === 'Bearer sk-good' && !sent.cookie && sent.path === '/aisa/v1/chat/completions',
+      "an app calls a model with no key of its own: the hub adds the company's and passes nothing of the visitor's");
+    const streamed = await (await chat({ model: 'claude-y', stream: true, messages: [] })).text();
+    check(streamed.includes('"你"') && streamed.includes('[DONE]'), 'answers stream through');
+    const data = await appFetch('invoice', '/__hub/ai/apis/v1/twitter/user/info?userName=aisa', aiApp);
+    check(data.status === 200 && (await data.json() as { data: { followers: number } }).data.followers === 4200 && lark.aiCalls.at(-1)!.path === '/aisa/apis/v1/twitter/user/info?userName=aisa', "and AIsa's data APIs with their own paths");
+    check((await appFetch('invoice', '/__hub/ai/v1/chat/completions', undefined, { 'content-type': 'application/json', 'x-hub-ticket': issueTicket('invoice', 'ou_dev_alex') }, 'POST', JSON.stringify({ model: 'gpt-x', messages: [] }))).status === 200,
+      "an app's server calls it with the ticket of the person's request");
+    check((await chat({ model: 'gpt-x', messages: [] }, null)).status === 401, 'someone not signed in gets nothing (a public app cannot spend the credit for strangers)');
+    check((await chat({ model: 'gpt-x', messages: [] }, aiApp, { origin: 'https://evil.example' })).status === 403
+      && (await appFetch('invoice', '/__hub/ai/v1/chat/completions', aiApp, { 'content-type': 'text/plain' }, 'POST', '{}')).status === 415, 'other sites cannot spend through a colleague\'s browser');
+    const usage = (await api(alex.jar, 'GET', '/admin/ai')).body.usage as { apps: { app: string; calls: number; tokens: number; people: number }[] };
+    const inv = usage.apps.find((a) => a.app === 'invoice')!;
+    // a chat (11+3), a stream (7+2), a data API call (no tokens), a call from the app's server (11+3); refused calls are not counted
+    check(inv.calls === 4 && inv.tokens === 37 && inv.people === 1, 'every call is recorded by app and person, with tokens from answers and streams');
+    const status = await tool(bob.token, 'ai_resources') as { configured: boolean; provider: string; models: string[]; dataApis: boolean };
+    check(status.configured && status.provider === 'AIsa' && status.dataApis && status.models.includes('gpt-x'), 'agents see the provider, its models and the data APIs');
+    check(String((await tool(bob.token, 'app_guide')).guide).includes('/__hub/ai/v1/chat/completions'), 'and app_guide tells them how apps use it');
+    await api(alex.jar, 'POST', '/admin/ai/limits', { limits: { perAppPerDay: 500, perPersonPerDay: inv.calls } });
+    const limited = await chat({ model: 'gpt-x', messages: [] });
+    check(limited.status === 429 && (await limited.json() as { error: string }).error === 'person_daily_limit', 'past the daily limit a person gets a clear 429');
+    await api(alex.jar, 'POST', '/admin/ai/limits', { limits: { perPersonPerDay: 200 }, disabledApps: ['invoice'] });
+    check((await chat({ model: 'gpt-x', messages: [] })).status === 403, 'admins switch AI off for one app');
+    await api(alex.jar, 'POST', '/admin/ai/limits', { disabledApps: [] });
+    check((await api(alex.jar, 'POST', '/admin/ai', { preset: 'openai', baseUrl: `http://localhost:${LARK_PORT}/aisa/v1`, key: '' })).status === 200
+      && (await appFetch('invoice', '/__hub/ai/apis/v1/twitter/user/info', aiApp)).status === 404 && (await chat({ model: 'gpt-x', messages: [] })).status === 200,
+      'any OpenAI-compatible provider works for models (keeping the stored key); data APIs need AIsa');
+    await api(alex.jar, 'DELETE', '/admin/ai');
+    check((await chat({ model: 'gpt-x', messages: [] })).status === 404, 'removing the provider stops it');
+  }
+
   // ---------------------------------------------------------------- telling one person's agents apart
   {
     const mac = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36';
@@ -2489,6 +2557,10 @@ try {
     await connect(alex.jar);
     const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
     await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true, disabledTools: ['question_write'] });
+    await api(alex.jar, 'POST', '/admin/ai', { preset: 'aisa', key: 'sk-good' });
+    const demoApp = await loginToApp('invoice', alex.jar);
+    for (let i = 0; i < 3; i++) await appFetch('invoice', '/__hub/ai/v1/chat/completions', demoApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ model: 'gpt-x', messages: [] }));
+    await appFetch('invoice', '/__hub/ai/apis/v1/twitter/user/info?userName=aisa', demoApp);
     for (const [ua, label] of [['Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36 Edg/155.0.0.0', '公司台式机'], ['Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Safari/537.36', '']]) {
       const tok = (await (await fetch(`${HUB}/api/tokens`, { method: 'POST', headers: { cookie: alex.jar.header(), 'content-type': 'application/json', 'user-agent': ua }, body: '{"name":"Codex"}' })).json() as { token: string }).token;
       await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${tok}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream', 'user-agent': 'codex-mcp-client/0.163.0' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'whoami', arguments: {} } }) });
