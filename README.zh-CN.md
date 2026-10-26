@@ -20,7 +20,7 @@
   <a href="README.md">English</a>
 </p>
 
-**一个让 Agent 干活的地方。** 你的 Agent 用 MCP 接进来就行，Claude Code、Codex、Cursor、云端 Agent 都可以。要真正替人干活，Agent 需要五样东西：**身份、上下文、发布的地方、资源和护栏**，这里都给它准备好了。人来拍板，剩下的交给 Agent。
+**一个让 Agent 干活的地方。** 只要支持 MCP，你的 Agent 就能接进来，比如 Claude Code、Codex、Cursor，或者跑在云上的 Agent。要真正替人干活，Agent 需要五样东西：**身份、上下文、发布的地方、资源和护栏**，这里都给它准备好了。人来拍板，剩下的交给 Agent。
 
 不管是公司、团队、社区还是开源项目，只要大家一起干活、又都在用 Agent，就用得上。
 
@@ -50,12 +50,12 @@
 
 ### 身份：Agent 以你的名义做事
 - 登录可以用飞书/Lark，也可以用任何 OpenID Connect 服务，比如 Google Workspace、Microsoft Entra ID、Okta。Agent 走标准的 MCP OAuth 2.1 接入；不支持 OAuth 的 Agent 用个人令牌。
-- Agent 读写飞书/Lark、Linear、GitHub 和日历时，用的都是你自己的账号和权限，看到的永远不会比你多。应用帮你存邮件草稿，也是存进你自己的邮箱。
+- Agent 读写飞书/Lark、Linear、GitHub 这些工具时，用的都是你自己的账号和权限，看到的永远不会比你多。应用帮你存邮件草稿，也是存进你自己的邮箱。
 - 每个人都能看到自己的每个 Agent 是从哪台设备接进来的，可以给它起名字，也能随时断开。
 
 ### 上下文：Agent 该知道的事
-- **数据**：能接飞书/Lark 多维表格、Metabase 的问题或只读 SQL，以及应用提供的数据。管理员打开组合数据源之后，还能把两份数据关联或合并起来用。Agent 可以统计、画图，也能读具体的行，用的是 `query_data` 和 `read_data_rows`。
-- **文档**：飞书/Lark 文档和知识库页面，能搜、能读、能改，也能新建。
+- **数据**：数据放在哪都能接，比如飞书/Lark 多维表格、Metabase 的问题或只读 SQL；其他系统的数据，让 Agent 做个小应用提供出来就行。管理员打开组合数据源之后，还能把两份数据关联或合并起来用。Agent 可以统计、画图，也能读具体的行，用的是 `query_data` 和 `read_data_rows`。
+- **文档**：目前是飞书/Lark 的文档和知识库页面，能搜、能读、能改，也能新建。
 - **目标和时间**：OKR、你的日历、Linear 里的项目和任务，还有 GitHub 动态。
 - **把做法沉淀成 Skill**：有一个 Skill 市场，Skill 带版本，有更新会提醒。装不了 Skill 的 Agent 可以用 `read_skill` 直接读来照做；定时任务每次跑都用最新版。
 - **人**：通讯录、部门和部门主页，以及大家提的应用需求。
@@ -85,7 +85,7 @@
 
 ### 护栏：为什么敢让 Agent 动手
 - 每次读取都按本人的权限检查。打开应用时，每个请求都会重新检查，权限一收回就立刻生效。
-- 应用第一次以某人的身份操作飞书/Lark 之前，要先经过本人同意。中台还会要求 Agent 在调用会改东西的工具之前，先跟人确认。
+- 应用第一次以某人的身份读写飞书/Lark、存邮件草稿之前，要先经过本人同意。中台还会要求 Agent 在调用会改东西的工具之前，先跟人确认。
 - key 只在管理页填写，加密保存，填完就不再显示，也不会交给 Agent 或应用。
 - AI 调用按应用、按人设每日限额，并记录 token 用量。调用的人必须已登录，所以公开应用不会替陌生人花你的额度。Agent 写的 SQL 只能读。
 - 容器应用各自跑在自己的容器里，内存、CPU 和进程数都有上限，不给任何特权。管理员可以单独关掉某个工具或某个应用的 AI，也可以直接关掉整个服务。
@@ -112,7 +112,7 @@ flowchart LR
     gateway["应用网关<br/>登录 · 权限 · /__hub"]
   end
   gateway --> apps["应用<br/>静态文件或容器<br/>&lt;slug&gt;.你的应用域名"]
-  hub --> tools["飞书/Lark · Linear · GitHub<br/>Metabase · Gmail"]
+  hub --> tools["飞书/Lark · Linear · GitHub<br/>Metabase · Gmail …"]
   gateway --> ai["AI 服务商<br/>模型 · 数据 API"]
 ```
 

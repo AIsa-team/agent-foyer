@@ -20,8 +20,8 @@
   <a href="README.zh-CN.md">中文</a>
 </p>
 
-Your agents (Claude Code, Codex, Cursor, a hosted agent, …) connect over MCP and get the five things they need to do
-real work for the people they work with: **identity, context, a place to ship, resources and guardrails.** People
+Any agent that speaks MCP (Claude Code, Codex, Cursor, one running in the cloud, …) can connect and get the five
+things it needs to do real work for the people it works with: **identity, context, a place to ship, resources and guardrails.** People
 decide; agents do the rest.
 
 It is for anyone who works together and has agents: a company, a team, a community, an open-source project.
@@ -56,14 +56,15 @@ where people look and decide.
 ### Identity: every agent acts as its person
 - People sign in with Feishu/Lark or any OpenID Connect provider (Google Workspace, Microsoft Entra ID, Okta…). Agents
   connect with standard MCP OAuth 2.1, or a personal token when they cannot do OAuth.
-- Whatever an agent reads or changes (Feishu/Lark, Linear, GitHub, the calendar), it does with that person's own account and
+- Whatever an agent reads or changes in other tools (Feishu/Lark, Linear, GitHub, …), it does with that person's own account and
   access; apps save mail drafts in the person's own mailbox. An agent never sees more than its person could.
 - People see each of their agents with the device it was added from and a name they give it, and disconnect any of them.
 
 ### Context: what the agent needs to know
-- **Data**: Feishu/Lark Base tables, Metabase questions or read-only SQL, rows served by apps, and (when admins turn it on)
-  sources combined from two others; agents count, chart and read rows (`query_data`, `read_data_rows`).
-- **Documents**: search, read, edit and create Feishu/Lark documents and wiki pages.
+- **Data** from wherever it lives, such as Feishu/Lark Base tables or Metabase questions and read-only SQL; anything
+  else comes in through a small app an agent builds to serve its rows. When admins turn it on, two sources can be
+  combined into one. Agents count, chart and read rows (`query_data`, `read_data_rows`).
+- **Documents**: search, read, edit and create documents and wiki pages, in Feishu/Lark today.
 - **Goals and time**: OKRs, the person's calendar, Linear projects and issues, GitHub activity.
 - **Know-how as Skills**: a Skill market with versions and update notices; agents that cannot install Skills read and
   follow them (`read_skill`), so a scheduled task always uses the latest version.
@@ -102,7 +103,7 @@ where people look and decide.
 
 ### Guardrails: why it is safe to let agents act
 - Access is checked as the person on every read, and every app request is re-checked, so revoking access takes effect at once.
-- An app asks each person once before it acts in Feishu/Lark as them; agents are told to confirm before tools that change things.
+- An app asks each person once before it acts as them in Feishu/Lark or saves mail drafts; agents are told to confirm before tools that change things.
 - Keys are entered on the admin page only, kept encrypted and never shown again, never handed to agents or apps.
 - AI calls have daily limits per app and per person, are recorded with their tokens, and need a signed-in person:
   a public app cannot spend your credit for strangers. SQL from agents can only read.
@@ -131,7 +132,7 @@ flowchart LR
     gateway["App gateway<br/>sign-in · access · /__hub"]
   end
   gateway --> apps["Apps<br/>static files or containers<br/>&lt;slug&gt;.your-apps-domain"]
-  hub --> tools["Feishu/Lark · Linear · GitHub<br/>Metabase · Gmail"]
+  hub --> tools["Feishu/Lark · Linear · GitHub<br/>Metabase · Gmail …"]
   gateway --> ai["AI provider<br/>models · data APIs"]
 ```
 
