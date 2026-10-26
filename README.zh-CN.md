@@ -118,6 +118,29 @@ flowchart LR
 
 ## 快速开始
 
+### 让 agent 帮你装
+
+把下面这段发给你的 agent（Claude Code、Codex、Cursor……）：
+
+```text
+帮我在这台机器上装好 Agent Foyer：https://github.com/AIsa-team/agent-foyer
+
+1. 把仓库克隆下来。它需要 Node >= 22.18 和 pnpm，缺哪个告诉我。
+2. 运行 `pnpm install` 和 `pnpm build`，再在后台用 `pnpm dev` 启动，等 http://localhost:8080 能打开。
+   没配登录时是开发登录，带三个测试用户。
+3. 把它作为远程 MCP 服务器接到你这里，名字用 agent-foyer，地址 http://localhost:8080/mcp（HTTP，用 OAuth 登录）：
+   - Claude Code：运行 `claude mcp add --transport http --scope user agent-foyer http://localhost:8080/mcp`，
+     然后提醒我输入 /mcp，选 agent-foyer 完成登录。
+   - Codex：运行 `codex mcp add agent-foyer --url http://localhost:8080/mcp`，再运行 `codex mcp login agent-foyer`。
+   - 其他 agent：把地址按 HTTP / Streamable HTTP 类型加进去，按提示登录。
+   如果要重启才能看到它的工具，告诉我。
+4. 调用它的 whoami 工具，再用几句话告诉我可以让你用它做什么。
+```
+
+要给团队部署到服务器上，让 agent 带着你照 [docs/DEPLOY.zh-CN.md](docs/DEPLOY.zh-CN.md) 来做。
+
+### 或者手动
+
 需要 Node ≥ 22.18（直接运行 TypeScript，不用编译）和 pnpm。
 
 ```bash
@@ -132,6 +155,10 @@ pnpm dev:web        # 可选：Vite 热更新 http://localhost:5173 ，接口转
 ```bash
 claude mcp add --transport http agent-foyer http://localhost:8080/mcp
 ```
+
+### 然后
+
+其他人在中台里接入就行：「我的」页面有一句现成的话，带着中台地址和登录方式，复制给自己的 agent，它会自己接上。
 
 让应用能用模型和数据 API：管理页「AI 资源」里选一个服务商：AIsa（一个 key 同时有模型和数据 API，在 [console.aisa.one](https://console.aisa.one/api-keys) 申请），或者任意 OpenAI 兼容服务的地址和 key。
 

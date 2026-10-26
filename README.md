@@ -148,6 +148,29 @@ flowchart LR
 
 ## Quick start
 
+### Let your agent set it up
+
+Paste this into your agent (Claude Code, Codex, Cursor, …):
+
+```text
+Set up Agent Foyer for me on this machine: https://github.com/AIsa-team/agent-foyer
+
+1. Clone it. It needs Node >= 22.18 and pnpm; tell me if either is missing.
+2. Run `pnpm install` and `pnpm build`, then start it with `pnpm dev` in the background and wait until
+   http://localhost:8080 answers. With no sign-in settings it uses a dev login with three test users.
+3. Connect yourself to it as a remote MCP server named agent-foyer at http://localhost:8080/mcp (HTTP, with OAuth):
+   - Claude Code: `claude mcp add --transport http --scope user agent-foyer http://localhost:8080/mcp`,
+     then remind me to type /mcp, pick agent-foyer and sign in.
+   - Codex: `codex mcp add agent-foyer --url http://localhost:8080/mcp`, then `codex mcp login agent-foyer`.
+   - Other agents: add the URL as an HTTP / Streamable HTTP server and follow the sign-in.
+   If you need a restart to see its tools, tell me.
+4. Call its whoami tool, then tell me in a few lines what I can ask you to do with it.
+```
+
+To run it for your team on a server, ask your agent to follow [docs/DEPLOY.md](docs/DEPLOY.md) with you.
+
+### Or by hand
+
 Needs Node ≥ 22.18 (TypeScript runs directly, no compile step) and pnpm.
 
 ```bash
@@ -162,6 +185,11 @@ Connect an agent:
 ```bash
 claude mcp add --transport http agent-foyer http://localhost:8080/mcp
 ```
+
+### Then
+
+Everyone else connects from the hub itself: the **Me** page has a sentence to copy to their agent, with the hub's
+address and how to sign in, and the agent connects itself.
 
 Give apps models and data APIs: on the admin page, under **AI resources**, pick a provider: AIsa (one key for models
 and data APIs, from [console.aisa.one](https://console.aisa.one/api-keys)) or any OpenAI-compatible address and key.
