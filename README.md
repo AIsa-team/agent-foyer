@@ -32,12 +32,13 @@ It is for anyone who works together and has agents: a company, a team, a communi
 
 ## What that looks like
 
-> "Make a small tool for screening creators. Keep the list in our Lark table and look up their follower counts."
+> "Make a page that shows how our posts are doing. Keep a list of everything we post, pull in the latest views and
+> likes from each platform, and suggest three topics for next week."
 
-A few minutes later the agent has published it at `creators.<your apps domain>`, with sign-in and only the people you
-chose let in. It looks the numbers up through the hub's AI resources, with no API key in the app. Colleagues' agents
-can add creators to it (`call_app`), your home page shows this week's new ones, and the person a messy record belongs
-to is told to fix it.
+A few minutes later the agent has published it at `content.<your apps domain>`, behind sign-in and open only to the
+people you chose. The numbers and topic ideas come through the hub's AI resources, so the app holds no API key.
+Whoever you make content with has their agent log each new post as it goes out (`call_app`). Your home page shows how
+the week is going, and whoever posted something without a link is asked to add it.
 
 Nobody filled in a form or clicked through an admin page. Each step was a sentence to an agent, and the web pages are
 where people look and decide.
@@ -53,25 +54,25 @@ where people look and decide.
 | **Guardrails** | Checked as the person every time, consent, limits, keys agents never see | [↓](#guardrails-why-it-is-safe-to-let-agents-act) |
 
 ### Identity: every agent acts as its person
-- People sign in with Lark or any OpenID Connect provider (Google Workspace, Microsoft Entra ID, Okta…). Agents
+- People sign in with Feishu/Lark or any OpenID Connect provider (Google Workspace, Microsoft Entra ID, Okta…). Agents
   connect with standard MCP OAuth 2.1, or a personal token when they cannot do OAuth.
-- Whatever an agent reads or changes (Lark, Linear, GitHub, the calendar), it does with that person's own account and
+- Whatever an agent reads or changes (Feishu/Lark, Linear, GitHub, the calendar), it does with that person's own account and
   access; apps save mail drafts in the person's own mailbox. An agent never sees more than its person could.
 - People see each of their agents with the device it was added from and a name they give it, and disconnect any of them.
 
 ### Context: what the agent needs to know
-- **Data**: Lark Base tables, Metabase questions or read-only SQL, rows served by apps, and (when admins turn it on)
+- **Data**: Feishu/Lark Base tables, Metabase questions or read-only SQL, rows served by apps, and (when admins turn it on)
   sources combined from two others; agents count, chart and read rows (`query_data`, `read_data_rows`).
-- **Documents**: search, read, edit and create Lark documents and wiki pages.
+- **Documents**: search, read, edit and create Feishu/Lark documents and wiki pages.
 - **Goals and time**: OKRs, the person's calendar, Linear projects and issues, GitHub activity.
 - **Know-how as Skills**: a Skill market with versions and update notices; agents that cannot install Skills read and
   follow them (`read_skill`), so a scheduled task always uses the latest version.
-- **People**: the directory, departments and their pages, app requests from colleagues.
+- **People**: the directory, departments and their pages, app requests from the people you work with.
 
 ### A place to ship: what agents build, people and agents use
 - **Apps**: "publish this" deploys a static site or a container to its own subdomain, behind sign-in, visible to
-  only you, chosen people, everyone signed in, or the public (an admin approves). Apps keep their records in Lark
-  tables the people using them can see and edit.
+  only you, chosen people, everyone signed in, or the public (an admin approves). With Feishu/Lark, apps keep their records
+  in Feishu/Lark tables the people using them can see and edit.
 - **Apps for agents too**: an app says in `hub-agent.json` what other agents may do in it (find, add and change
   records, call its own actions); they find it with `list_apps` and act as their person with `call_app`.
 - **Pages**: agents build home pages (personal, per department, for everyone) and data boards (your own, shared,
@@ -101,16 +102,16 @@ where people look and decide.
 
 ### Guardrails: why it is safe to let agents act
 - Access is checked as the person on every read, and every app request is re-checked, so revoking access takes effect at once.
-- An app asks each person once before it acts in Lark as them; agents are told to confirm before tools that change things.
+- An app asks each person once before it acts in Feishu/Lark as them; agents are told to confirm before tools that change things.
 - Keys are entered on the admin page only, kept encrypted and never shown again, never handed to agents or apps.
 - AI calls have daily limits per app and per person, are recorded with their tokens, and need a signed-in person:
   a public app cannot spend your credit for strangers. SQL from agents can only read.
-- Apps run in their own containers with memory, CPU and process limits and no capabilities. Admins can switch
+- Container apps run in their own containers with memory, CPU and process limits and no capabilities. Admins can switch
   tools, apps' AI use and whole services off.
 
 ## Works with what you already use
 
-Platforms come in as **channels** (`server/channels.ts`). Lark is the first: sign-in, directory, Base tables, OKRs,
+Platforms come in as **channels** (`server/channels.ts`). Feishu/Lark is the first: sign-in, directory, Base tables, OKRs,
 documents, calendar and bot messages. Without it, sign in with OpenID Connect and you keep the core: apps, Skills,
 agents, pages, data apps and connections, checks, alerts and AI resources
 ([docs/OIDC_SETUP.md](docs/OIDC_SETUP.md)). A new platform is a new channel: its directory and its kinds of data
@@ -130,7 +131,7 @@ flowchart LR
     gateway["App gateway<br/>sign-in · access · /__hub"]
   end
   gateway --> apps["Apps<br/>static files or containers<br/>&lt;slug&gt;.your-apps-domain"]
-  hub --> tools["Lark · Linear · GitHub<br/>Metabase · Gmail"]
+  hub --> tools["Feishu/Lark · Linear · GitHub<br/>Metabase · Gmail"]
   gateway --> ai["AI provider<br/>models · data APIs"]
 ```
 
@@ -142,8 +143,8 @@ flowchart LR
   `X-Hub-User-*` headers, or `fetch('/__hub/me')` in the browser; an app's server calls the hub with the
   `X-Hub-Ticket` of the person's request.
 - **Two kinds of app**: `static` (built files, SPA routing supported) and `container` (its own Dockerfile, or one
-  generated for Node and Python projects), each on a private Docker network only the hub can reach, with a persistent
-  `/data` and encrypted environment variables.
+  generated for Node and Python projects). Each container app is on a private Docker network only the hub can reach,
+  with a persistent `/data` and encrypted environment variables.
 - **Agents** get the hub's tools and instructions over MCP and are told when the hub changed since they connected.
 
 ## Quick start
@@ -199,7 +200,7 @@ Apps run at `http://<slug>.apps.localhost:8080` (Chrome and curl resolve `*.loca
 ## Tests
 
 ```bash
-pnpm test           # typecheck + end-to-end tests against a fake Lark, Metabase, Linear, AIsa and OIDC provider
+pnpm test           # typecheck + end-to-end tests against a fake Feishu/Lark, Metabase, Linear, AIsa and OIDC provider
 pnpm smoke          # core end-to-end test against a running hub: pnpm smoke http://localhost:8080 [--docker]
 ```
 
@@ -233,9 +234,9 @@ pages and apps. Recolour it with `HUB_ACCENT` and put your own marks in `HUB_BRA
 server/
   index.ts            entry: HTTP server, routing by Host, uploads, downloads, background jobs
   config.ts, db.ts    configuration, SQLite schema and migrations
-  channels.ts         the platforms a hub works with (Lark: lark/channel.ts)
-  auth/               sign-in (Lark, OIDC, dev), people, sessions, the OAuth server for agents
-  apps/               publishing, access, Docker runtime, hub-agent.json, apps calling Lark
+  channels.ts         the platforms a hub works with (Feishu/Lark: lark/channel.ts)
+  auth/               sign-in (Feishu/Lark, OIDC, dev), people, sessions, the OAuth server for agents
+  apps/               publishing, access, Docker runtime, hub-agent.json, apps calling Feishu/Lark
   skills/             Skill publishing, installs, update checks, reading a Skill
   data/               data sources and their kinds, connectors (Metabase), queries, alerts, checks, boards import
   ai.ts               AI resources: the provider, the /__hub/ai proxy, limits and usage
@@ -249,14 +250,14 @@ web/src/              React UI; i18n/locales/ holds the UI catalogues
 scripts/              admin CLI and end-to-end tests
 skills/               Skills that go with the hub (e.g. daily-report), to publish to its Skill market
 deploy/               docker-compose.yml, nginx.conf, Caddyfile
-docs/                 deployment, Lark or OIDC setup, data apps, GitHub, Gmail; assets/ holds the README images
+docs/                 deployment, Feishu/Lark or OIDC setup, data apps, GitHub, Gmail; assets/ holds the README images
 ```
 
 ## Acknowledgements
 
 The idea comes from [数字生命卡兹克 (Khazix)](https://x.com/Khazix0918/status/2108800048050106751) and the article
 「我花了5天时间，对公司进行了一场AI化改造」, about the hub built for 虚实传媒: a hub native to agents, built on the
-company's own Lark data, where everyone vibe-codes tools for themselves and their colleagues. Agent Foyer is our own
+company's own Feishu/Lark data, where everyone vibe-codes tools for themselves and their colleagues. Agent Foyer is our own
 take on that idea, written from scratch and opened up for anyone who works with agents.
 
 ## License
