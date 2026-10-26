@@ -36,7 +36,8 @@ It is for anyone who works together and has agents: a company, a team, a communi
 > likes from each platform, and suggest three topics for next week."
 
 A few minutes later the agent has published it at `content.<your apps domain>`, behind sign-in and open only to the
-people you chose. The numbers and topic ideas come through the hub's AI resources, so the app holds no API key.
+people you chose. Views and likes come from data APIs and the topic ideas from a model, both through the hub, so the agent writes no
+scraper and the app holds no API key.
 Whoever you make content with has their agent log each new post as it goes out (`call_app`). Your home page shows how
 the week is going, and whoever posted something without a link is asked to add it.
 
@@ -50,7 +51,7 @@ where people look and decide.
 | **Identity** | Every agent acts as its person, with that person's own accounts and access | [↓](#identity-every-agent-acts-as-its-person) |
 | **Context** | Data, documents, goals, calendar, projects, know-how as Skills, people | [↓](#context-what-the-agent-needs-to-know) |
 | **A place to ship** | Apps on their own subdomain, pages and boards, checks and alerts | [↓](#a-place-to-ship-what-agents-build-people-and-agents-use) |
-| **Resources** | Models and data APIs for apps, other tools' MCP servers, data connections | [↓](#resources-models-data-apis-and-tools) |
+| **Resources** | Models and data APIs that apps call instead of rebuilding, other tools' MCP servers, data connections | [↓](#resources-call-it-dont-rebuild-it) |
 | **Guardrails** | Checked as the person every time, consent, limits, keys agents never see | [↓](#guardrails-why-it-is-safe-to-let-agents-act) |
 
 ### Identity: every agent acts as its person
@@ -92,11 +93,18 @@ where people look and decide.
   </tr>
 </table>
 
-### Resources: models, data APIs and tools
-- **AI for apps**: apps call models (`/__hub/ai/v1/…`, OpenAI-compatible, streaming included) through the hub, on the
-  provider and key you choose: any OpenAI-compatible service (OpenAI, OpenRouter, your own gateway…) or an AI resource
-  platform such as [AIsa](https://aisa.one), whose same key also covers data APIs (`/__hub/ai/apis/v1/…`: web search,
-  scraping, social, finance, SEO…). Each provider is a small preset in `server/ai.ts`, so others like it are easy to add.
+### Resources: call it, don't rebuild it
+Much of the data a team needs already exists as an API: posts and trends on X, website traffic, search results, market
+data, papers. When an agent builds an app that needs it, the app calls that API through the hub: nobody writes a scraper
+or rebuilds the data, and nobody signs up with each provider one by one. So the hub gives what agents build a resource
+layer:
+- **Models and data APIs on one key.** Pick a provider on the admin page: an AI resource platform such as
+  [AIsa](https://aisa.one), where one key covers 100+ models and thousands of data APIs (search, X, Similarweb,
+  finance, papers, scraping…), or, for models only, any OpenAI-compatible service (OpenAI, OpenRouter, your own
+  gateway…). Each provider is a small preset in `server/ai.ts`, so others like it are easy to add.
+- **Ready for what agents build.** Apps call models at `/__hub/ai/v1/…` (OpenAI-compatible, streaming included) and data
+  APIs at `/__hub/ai/apis/v1/…`, as the person using them, without holding a key. Agents see what is there with
+  `ai_resources`.
 - **Other tools' MCP servers** (Linear, Metabase, …): each person connects their own account, or a shared key is
   used for everyone, and agents reach them through the hub (`list_connected_tools`, `call_connected_tool`).
 - **Data connections** (Metabase today): read with one key, shared only as admins decide.
