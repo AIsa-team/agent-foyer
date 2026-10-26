@@ -2,14 +2,18 @@ import { config } from '../config.ts';
 import { all, get, now, run, tx, type User } from '../db.ts';
 
 /** Who signed in, as the sign-in provider (Lark, OIDC, dev) describes them. `id` is the provider's stable id. */
-export interface Identity { id: string; name: string; enName?: string; email?: string; avatar?: string }
+export interface Identity {
+  id: string; name: string; enName?: string; email?: string; avatar?: string;
+  /** false when the provider did not say the email was verified: it then cannot make someone an admin */
+  emailVerified?: boolean;
+}
 
 /** Creates or refreshes a person. The first person ever, and anyone listed in HUB_ADMINS, is an admin. */
 export function upsertUser(info: Identity, touch = true): User {
   const email = info.email || null;
   return tx(() => {
     const isFirst = !get('SELECT 1 FROM users LIMIT 1');
-    const isConfiguredAdmin = config.admins.includes(info.id) || (!!email && config.admins.includes(email));
+    const isConfiguredAdmin = config.admins.includes(info.id) || (!!email && info.emailVerified !== false && config.admins.includes(email));
     run(
       `INSERT INTO users (id, name, en_name, email, avatar, role, created_at, last_seen_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)

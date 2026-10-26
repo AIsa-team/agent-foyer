@@ -31,10 +31,13 @@ import { createRecord, fetchRecords, listFields, parseBaseUrl, pickTable, resolv
 import { plainText, type Condition } from '../data/fields.ts';
 
 // ---------------------------------------------------------------- declaration
+/** A link on Lark's own sites: these end up as links on the hub's consent page, so nothing else (javascript:…) is taken. */
+const larkLink = z.string().trim().regex(/^https:\/\/([a-z0-9-]+\.)*(larksuite\.com|feishu\.cn|larkoffice\.com)\//i, 'an https link on Lark (…larksuite.com/…, …feishu.cn/…)');
+
 export const manifestSchema = z.object({
   tables: z.array(z.object({
     name: z.string().regex(/^[a-z][a-z0-9_-]{0,30}$/).describe('alias the app code uses, e.g. "projects"'),
-    url: z.string().describe('Lark Base link including ?table=…, or a Lark spreadsheet link including ?sheet=… (row 1 = column names); wiki links work for both'),
+    url: larkLink.describe('Lark Base link including ?table=…, or a Lark spreadsheet link including ?sheet=… (row 1 = column names); wiki links work for both'),
     access: z.enum(['read', 'write']).describe('write = may add and change records'),
   })).max(10),
   notify: z.object({
@@ -45,7 +48,7 @@ export const manifestSchema = z.object({
   }).optional(),
   mail_drafts: z.boolean().optional().describe('may save email drafts in the person\'s own mailbox (Gmail or Lark Mail, as the hub is set up; it never sends; they review and send)'),
   docs: z.object({
-    parent: z.string().optional().describe('wiki page or Drive folder link the documents go under; default: the person\'s own space'),
+    parent: larkLink.optional().describe('wiki page or Drive folder link the documents go under; default: the person\'s own space'),
     share: z.enum(['view', 'edit', 'none']).optional().describe('what whoever may open the app can do with each new document: view (default), edit, or none (only its author, e.g. letters to clients). Documents under a wiki page follow the wiki\'s access instead'),
   }).optional().describe('may create Lark documents as the person (hub.lark.createDoc), e.g. a confirmation letter or a brief; put each document\'s link back on its record'),
 });

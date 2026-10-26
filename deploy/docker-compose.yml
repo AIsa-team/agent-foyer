@@ -2,14 +2,14 @@
 services:
   hub:
     build: ..
-    image: ${HUB_IMAGE:-agent-hub}:latest
-    container_name: ${HUB_CONTAINER:-agent-hub}
+    image: ${HUB_IMAGE:-agent-foyer}:latest
+    container_name: ${HUB_CONTAINER:-agent-foyer}
     restart: unless-stopped
     env_file: ../.env
     environment:
       DATA_DIR: /data
       APP_UPSTREAM_MODE: network
-      HUB_CONTAINER: ${HUB_CONTAINER:-agent-hub}
+      HUB_CONTAINER: ${HUB_CONTAINER:-agent-foyer}
     volumes:
       - ${HOST_DATA_DIR:?set HOST_DATA_DIR in .env}:/data
       # The hub builds and runs app containers through the host's Docker. This is root-equivalent; see SECURITY.md.

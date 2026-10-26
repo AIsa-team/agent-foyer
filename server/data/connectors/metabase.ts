@@ -168,24 +168,36 @@ export function readOnlySql(sql: string): string {
   const text = String(sql ?? '').trim().replace(/;\s*$/, '');
   if (!text) throw new UserError('err.conn.sqlEmpty');
   if (text.length > 20_000) throw new UserError('err.conn.sqlTooLong');
-  // what is left once comments and quoted text are taken out is what the database would act on
-  const bare = withoutQuotesAndComments(text).toLowerCase();
-  if (bare.includes(';')) throw new UserError('err.conn.sqlOneStatement');
-  if (!/^\s*\(*\s*(select|with)\b/.test(bare)) throw new UserError('err.conn.sqlSelectOnly');
-  const bad = /\b(insert|update|delete|merge|upsert|drop|alter|create|truncate|rename|grant|revoke|call|exec|execute|handler|load|lock|unlock|attach|detach|copy|vacuum|analyze|optimize|kill|shutdown|set|use|into|outfile|dumpfile)\b|\breplace\s+into\b|\bfor\s+(update|share)\b|\bpg_sleep\b|\bsleep\s*\(|\bbenchmark\s*\(/.exec(bare);
-  if (bad) throw new UserError('err.conn.sqlReadOnly', { word: bad[0].trim() });
+  // a second statement needs a semicolon: none is accepted anywhere, not even inside quotes
+  if (text.includes(';')) throw new UserError('err.conn.sqlOneStatement');
+  // What is left once comments and quoted text are taken out is what the database acts on. Databases disagree on
+  // what quotes and comments are (MySQL: backslash escapes, # comments; PostgreSQL: backslash is plain text,
+  // $tag$ … $tag$ quotes, # is an operator), so the SQL must pass when read either way.
+  for (const dialect of ['mysql', 'standard'] as const) {
+    const bare = withoutQuotesAndComments(text, dialect).toLowerCase();
+    if (!/^\s*\(*\s*(select|with)\b/.test(bare)) throw new UserError('err.conn.sqlSelectOnly');
+    const bad = /\b(insert|update|delete|merge|upsert|drop|alter|create|truncate|rename|grant|revoke|call|exec|execute|handler|load|lock|unlock|attach|detach|copy|vacuum|analyze|optimize|kill|shutdown|set|use|into|outfile|dumpfile|listen|notify|prepare|deallocate|reindex|cluster|refresh)\b|\breplace\s+into\b|\bfor\s+(update|share|no\s+key\s+update|key\s+share)\b|\bpg_\w+\s*\(|\bdblink\w*\s*\(|\bset_config\s*\(|\blo_\w+\s*\(|\bsleep\s*\(|\bbenchmark\s*\(|\bload_file\s*\(|\bsys_exec\s*\(/.exec(bare);
+    if (bad) throw new UserError('err.conn.sqlReadOnly', { word: bad[0].replace(/\s*\($/, '').trim() });
+  }
   return text;
 }
 
-/** The SQL with quoted text and comments blanked, read in one pass so neither can hide the other. */
-function withoutQuotesAndComments(sql: string): string {
+/** The SQL with quoted text and comments blanked, read in one pass so neither can hide the other, as `dialect` reads it. */
+function withoutQuotesAndComments(sql: string, dialect: 'mysql' | 'standard'): string {
   let out = '';
   for (let i = 0; i < sql.length;) {
     const c = sql[i], two = sql.slice(i, i + 2);
-    if (c === "'" || c === '"' || c === '`') {
+    const dollar = dialect === 'standard' && c === '$' ? /^\$([A-Za-z_][A-Za-z0-9_]*)?\$/.exec(sql.slice(i)) : null;
+    if (dollar) {
+      // PostgreSQL dollar quoting: $$ … $$ or $tag$ … $tag$
+      const end = sql.indexOf(dollar[0], i + dollar[0].length);
+      if (end < 0) throw new UserError('err.conn.sqlReadOnly', { word: dollar[0] });
+      out += " '' ";
+      i = end + dollar[0].length;
+    } else if (c === "'" || c === '"' || c === '`') {
       let j = i + 1;
       while (j < sql.length) {
-        if (sql[j] === '\\' && c !== '`') { j += 2; continue; }
+        if (dialect === 'mysql' && sql[j] === '\\' && c !== '`') { j += 2; continue; }
         if (sql[j] === c) { if (sql[j + 1] === c) { j += 2; continue; } break; }
         j++;
       }
@@ -193,7 +205,7 @@ function withoutQuotesAndComments(sql: string): string {
       if (j >= sql.length) throw new UserError('err.conn.sqlReadOnly', { word: c });
       out += c === '`' ? ' x ' : " '' ";
       i = j + 1;
-    } else if (two === '--' || c === '#') {
+    } else if (two === '--' || (dialect === 'mysql' && c === '#')) {
       const j = sql.indexOf('\n', i);
       out += ' ';
       i = j < 0 ? sql.length : j;

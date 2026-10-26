@@ -299,6 +299,7 @@ const zhCN = {
   'err.ai.badKey': 'AI 服务不接受这个 key。',
   'err.ai.badPreset': '不认识的 AI 服务类型。',
   'err.ai.keyRequired': '请填 AI 服务的 API key。',
+  'err.app.badPath': '这不是应用自己的路径：{path}',
   'err.docs.denied': '你在 Lark 里没有这个文档或位置的权限。',
   'err.docs.badLink': '看不懂这个链接：{url}。请给 Lark 文档、知识库页面或云空间文件夹的链接。',
   'err.docs.notDoc': '这个链接不是文档（是 {type}），表格和多维表格请用对应的工具。',

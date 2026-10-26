@@ -37,6 +37,6 @@ export function signToken(payload: string, ttlMs: number): string {
 
 export function verifyToken(payload: string, token: string): boolean {
   const [exp, mac] = token.split('.');
-  if (!exp || !mac || Number(exp) < Date.now()) return false;
+  if (!exp || !mac || !Number.isFinite(Number(exp)) || Number(exp) < Date.now()) return false;
   return safeEqual(mac, createHmac('sha256', config.secret).update(`${payload}|${exp}`).digest('base64url'));
 }

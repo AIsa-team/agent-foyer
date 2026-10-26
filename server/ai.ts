@@ -196,8 +196,13 @@ export async function handleAppAi(app: App, user: User | undefined, fromBrowser:
   if (!user) return send(res, 401, { error: 'unauthenticated', message: 'AI is for signed-in colleagues.' });
   if (disabledApps().has(app.slug)) return send(res, 403, { error: 'ai_off_for_app', message: 'Admins switched AI off for this app.' });
   const rest = url.pathname.slice('/__hub/ai'.length);
-  const target = rest.startsWith('/v1/') ? `${s.baseUrl}${rest.slice(3)}` : rest.startsWith('/apis/v1/') && s.apisUrl ? `${s.apisUrl}${rest.slice(8)}` : null;
-  if (!target || rest.includes('..')) return send(res, 404, { error: 'not_found', message: s.apisUrl ? 'Use /__hub/ai/v1/… for models or /__hub/ai/apis/v1/… for data APIs.' : 'Use /__hub/ai/v1/… for models (this provider has no data APIs).' });
+  // models: only what apps call (not the provider's files, batches or account); data APIs: any endpoint, read or call
+  const modelPath = /^\/v1\/(chat\/completions|completions|embeddings|models|responses|images\/generations|audio\/(transcriptions|translations|speech)|moderations|rerank)$/.test(rest);
+  const target = modelPath ? `${s.baseUrl}${rest.slice(3)}` : rest.startsWith('/apis/v1/') && s.apisUrl ? `${s.apisUrl}${rest.slice(8)}` : null;
+  // nothing that could climb out of the path on the provider's side (checked on the path as sent, before any decoding)
+  const climbs = /\.\.|%2e|%2f|%5c|\\|\/\//i.test((req.url ?? '').split('?')[0]);
+  if (req.method !== 'GET' && req.method !== 'POST') return send(res, 405, { error: 'method_not_allowed' });
+  if (!target || climbs) return send(res, 404, { error: 'not_found', message: s.apisUrl ? 'Use /__hub/ai/v1/chat/completions (and the other model endpoints) or /__hub/ai/apis/v1/… for data APIs.' : 'Use /__hub/ai/v1/chat/completions and the other model endpoints (this provider has no data APIs).' });
   if (req.method !== 'GET' && fromBrowser) {
     // browsers: same-origin JSON only, so another site cannot spend through a colleague's browser
     const origin = req.headers.origin;
@@ -208,7 +213,7 @@ export async function handleAppAi(app: App, user: User | undefined, fromBrowser:
   if (callsToday('app_slug', app.slug) >= limits.perAppPerDay) return send(res, 429, { error: 'app_daily_limit', limit: limits.perAppPerDay });
   if (callsToday('user_id', user.id) >= limits.perPersonPerDay) return send(res, 429, { error: 'person_daily_limit', limit: limits.perPersonPerDay });
 
-  const body = req.method === 'GET' || req.method === 'HEAD' ? undefined : await readBody(req);
+  const body = req.method === 'GET' ? undefined : await readBody(req);
   if (body === null) return send(res, 413, { error: 'too_large', limit: MAX_BODY });
   const started = now();
   const record = (status: number, u: { model?: string; prompt?: number; completion?: number }) =>

@@ -63,5 +63,6 @@ export async function oidcExchange(code: string, redirectUri: string, verifier: 
     throw new UserError('err.login.domainNotAllowed', { email: info.email ?? '—' });
   }
   const name = info.name || [info.given_name, info.family_name].filter(Boolean).join(' ') || info.preferred_username || email || info.sub;
-  return { id: info.sub, name, email, avatar: info.picture };
+  // some providers leave email_verified out; such an address still signs in, but only a verified one makes an admin
+  return { id: info.sub, name, email, avatar: info.picture, emailVerified: info.email_verified === true || info.email_verified === 'true' };
 }

@@ -37,7 +37,7 @@ export class GitHubError extends Error {
 async function call<T>(token: string, p: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(p.startsWith('http') ? p : `${config.github.apiBase}${p}`, {
     ...init,
-    headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}`, 'user-agent': 'agent-hub', ...(init.headers ?? {}) },
+    headers: { accept: 'application/vnd.github+json', 'x-github-api-version': '2022-11-28', authorization: `Bearer ${token}`, 'user-agent': 'agent-foyer', ...(init.headers ?? {}) },
   });
   const body = (await res.json().catch(() => ({}))) as T & { message?: string };
   if (!res.ok) throw new GitHubError(res.status, `GitHub ${p.split('?')[0]}: ${res.status} ${body.message ?? ''}`.trim());

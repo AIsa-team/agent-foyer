@@ -8,9 +8,9 @@ import { appUrl, config } from '../config.ts';
 export const containerName = (slug: string) => `hub-app-${slug}`;
 
 /** Runs a command, streaming combined output into onLog. Rejects on non-zero exit. */
-export function sh(cmd: string, args: string[], onLog: (s: string) => void = () => {}, timeoutMs = 15 * 60 * 1000): Promise<string> {
+export function sh(cmd: string, args: string[], onLog: (s: string) => void = () => {}, timeoutMs = 15 * 60 * 1000, env?: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
-    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const p = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'], ...(env ? { env: { ...process.env, ...env } } : {}) });
     let out = '';
     const onData = (d: Buffer) => {
       out += d.toString();
@@ -88,13 +88,16 @@ export async function startCandidate(slug: string, image: string, port: number, 
     '-v', `${dataDir}:/data`,
     '-e', `PORT=${port}`, '-e', 'HOST=0.0.0.0', '-e', 'DATA_DIR=/data', '-e', `HUB_APP_URL=${appUrl(slug)}`,
   ];
-  for (const [k, v] of Object.entries(env)) args.push('-e', `${k}=${v}`);
+  // the app's own variables (often secrets) go by name only: docker reads the values from its own environment, so they
+  // never show in the host's process list
+  for (const k of Object.keys(env)) args.push('-e', k);
   // A fixed host port (not `127.0.0.1::port`) so the mapping survives container and daemon restarts.
   const hostPort = config.docker.mode === 'port' ? await freePort() : 0;
-  if (config.docker.mode === 'network') args.push('--network', await ensureAppNetwork(slug));
-  else args.push('-p', `127.0.0.1:${hostPort}:${port}`);
+  // its own network in both modes, so apps never share one and cannot reach each other directly
+  args.push('--network', await ensureAppNetwork(slug));
+  if (config.docker.mode === 'port') args.push('-p', `127.0.0.1:${hostPort}:${port}`);
   args.push(image);
-  await sh('docker', args, onLog);
+  await sh('docker', args, onLog, undefined, env);
   return config.docker.mode === 'network' ? `http://${name}:${port}` : `http://127.0.0.1:${hostPort}`;
 }
 
@@ -119,6 +122,8 @@ async function ensureAppNetwork(slug: string): Promise<string> {
   await sh('docker', ['network', 'create', '--label', 'hub.app=' + slug, net]).catch((e: Error) => {
     if (!/already exists/.test(e.message)) throw e;
   });
+  // a hub on the host (port mode) reaches the app through its published port instead
+  if (config.docker.mode !== 'network') return net;
   const alreadyConnected = (e: Error) => {
     if (!/already exists|already attached|endpoint with name/i.test(e.message)) throw e;
   };
@@ -135,8 +140,7 @@ async function ensureAppNetwork(slug: string): Promise<string> {
 }
 
 async function removeAppNetwork(slug: string) {
-  if (config.docker.mode !== 'network') return;
-  await sh('docker', ['network', 'disconnect', '-f', networkName(slug), config.docker.hubContainer]).catch(() => '');
+  if (config.docker.mode === 'network') await sh('docker', ['network', 'disconnect', '-f', networkName(slug), config.docker.hubContainer]).catch(() => '');
   await sh('docker', ['network', 'rm', networkName(slug)]).catch(() => '');
 }
 

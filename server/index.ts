@@ -32,6 +32,16 @@ reconcileInterruptedBuilds();
 
 const app = new Hono();
 
+// The hub's pages are never shown inside another page: an app on a sibling domain could otherwise frame the consent
+// page and trick someone into clicking "Allow". (Images and files that set their own policy keep it.)
+app.use('*', async (c, next) => {
+  await next();
+  try {
+    c.res.headers.set('x-frame-options', 'DENY');
+    if (!c.res.headers.has('content-security-policy')) c.res.headers.set('content-security-policy', "frame-ancestors 'none'");
+  } catch { /* a response whose headers cannot change */ }
+});
+
 app.route('/', oauth);
 app.route('/', authRoutes);
 app.route('/', githubHook);

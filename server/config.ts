@@ -35,7 +35,7 @@ export const config = {
   secret: env('HUB_SECRET', authProvider === 'dev' ? 'dev-only-secret-change-me' : undefined),
   companyName: env('COMPANY_NAME', 'Acme'),
   /** Name agents register the hub's MCP server under (shown in the "connect your agent" prompt) */
-  mcpName: env('HUB_MCP_NAME', 'agent-hub'),
+  mcpName: env('HUB_MCP_NAME', 'agent-foyer'),
   /** Folder with the company's own logo.svg / app-icon.svg / motif.svg; built-in neutral ones are used otherwise */
   brandDir: process.env.HUB_BRAND_DIR ? path.resolve(process.env.HUB_BRAND_DIR) : '',
   /** Brand colour for buttons and highlights (hex), e.g. #F76918; empty keeps the default theme */
@@ -129,7 +129,7 @@ export const config = {
      *  "port": hub runs on the host (local dev) and reaches containers through a published 127.0.0.1 port. */
     mode: env('APP_UPSTREAM_MODE', 'port') as 'network' | 'port',
     /** Name of the hub's own container, attached to every app network in "network" mode */
-    hubContainer: env('HUB_CONTAINER', 'agent-hub'),
+    hubContainer: env('HUB_CONTAINER', 'agent-foyer'),
     memory: env('APP_MEMORY_LIMIT', '512m'),
     cpus: env('APP_CPU_LIMIT', '1'),
     /** Host path that maps to dataDir, needed when the hub itself runs in docker and mounts volumes for apps */

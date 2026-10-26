@@ -45,8 +45,8 @@ printf 'dns_cloudflare_api_token = <token>\n' > /etc/letsencrypt/cloudflare.ini 
 certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
   -d hub.example.com -d example.net -d '*.example.net' \
   --deploy-hook 'systemctl reload nginx'
-cp deploy/nginx.conf /etc/nginx/sites-available/agent-hub   # edit the names, then:
-ln -s /etc/nginx/sites-available/agent-hub /etc/nginx/sites-enabled/
+cp deploy/nginx.conf /etc/nginx/sites-available/agent-foyer   # edit the names, then:
+ln -s /etc/nginx/sites-available/agent-foyer /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 ```
 
@@ -60,7 +60,7 @@ its environment.
 ## 4. The hub
 
 ```bash
-git clone <repository> /srv/agent-hub && cd /srv/agent-hub
+git clone <repository> /srv/agent-foyer && cd /srv/agent-foyer
 cp .env.example .env
 # edit .env:
 #   HUB_URL=https://hub.example.com
@@ -68,7 +68,7 @@ cp .env.example .env
 #   HUB_SECRET=<openssl rand -base64 48>     never change it later: stored secrets would become unreadable
 #   LARK_APP_ID / LARK_APP_SECRET            see docs/LARK_SETUP.md (or OIDC_*, see docs/OIDC_SETUP.md)
 #   HUB_ADMINS=you@example.com
-#   HOST_DATA_DIR=/srv/agent-hub/data
+#   HOST_DATA_DIR=/srv/agent-foyer/data
 #   COMPANY_NAME, HUB_ACCENT, HUB_BRAND_DIR … to make it yours
 mkdir -p data
 docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
@@ -85,8 +85,8 @@ Open `https://hub.example.com` and sign in. The first person to sign in becomes 
 On your own machine:
 
 ```bash
-claude mcp add --transport http --scope user agent-hub https://hub.example.com/mcp
-# in Claude Code run /mcp, pick agent-hub, sign in in the browser and allow
+claude mcp add --transport http --scope user agent-foyer https://hub.example.com/mcp
+# in Claude Code run /mcp, pick agent-foyer, sign in in the browser and allow
 ```
 
 Then take a small project and say "publish this project to the company hub".
@@ -94,10 +94,10 @@ Then take a small project and say "publish this project to the company hub".
 ## Operations
 
 - **Backups**: the whole `data/` folder. An online copy of the database:
-  `docker exec agent-hub node -e "new (require('node:sqlite').DatabaseSync)('/data/hub.db').exec(\"VACUUM INTO '/data/backup.db'\")"`
+  `docker exec agent-foyer node -e "new (require('node:sqlite').DatabaseSync)('/data/hub.db').exec(\"VACUUM INTO '/data/backup.db'\")"`
 - **Upgrades**: `git pull && docker compose --env-file .env -f deploy/docker-compose.yml up -d --build`. Running app
   containers are not affected. Back up `data/hub.db` first; migrations run on start.
-- **Logs**: `docker logs -f agent-hub`; one app: `docker logs hub-app-<slug>`, or ask the agent to call
+- **Logs**: `docker logs -f agent-foyer`; one app: `docker logs hub-app-<slug>`, or ask the agent to call
   `get_app_status`.
 - **Old images**: each app keeps its current and previous image; older ones are removed. Prune the build cache now
   and then with `docker builder prune`.

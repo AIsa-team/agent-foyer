@@ -13,6 +13,7 @@
 import http from 'node:http';
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import path from 'node:path';
+import { upstreamUrl } from '../gateway.ts';
 import { z } from 'zod';
 import { config, appUrl } from '../config.ts';
 import { all, get, now, run, type App, type User } from '../db.ts';
@@ -37,7 +38,7 @@ const action = z.object({
   name: z.string().regex(/^[a-z][a-z0-9_]{0,63}$/, 'lowercase letters, digits and _, starting with a letter'),
   description: z.string().min(1).max(1000),
   method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
-  path: z.string().max(500).regex(/^\/(?!__hub(\/|$))[^?#\s]*$/, 'starts with /, no query string, not under /__hub'),
+  path: z.string().max(500).regex(/^\/(?!\/)(?!__hub(\/|$))[^?#\s\\]*$/, 'starts with a single /, no query string or backslash, not under /__hub'),
   /** JSON Schema of the arguments: {type: "object", properties, required} */
   input: z.object({
     type: z.literal('object').default('object'),
@@ -399,7 +400,8 @@ async function httpCall(user: User, app: App, act: Action, input: Record<string,
     if (typeof v !== 'string' && typeof v !== 'number') throw new UserError('err.agent.missing', { fields: k });
     return encodeURIComponent(String(v));
   });
-  const url = new URL(target, app.upstream);
+  // the app's own host whatever the path says (see upstreamUrl)
+  const url = upstreamUrl(app.upstream, target);
   let body: Buffer | undefined;
   if (act.method === 'GET' || act.method === 'DELETE') {
     for (const [k, v] of Object.entries(rest)) {

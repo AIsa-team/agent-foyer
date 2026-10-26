@@ -39,8 +39,8 @@ printf 'dns_cloudflare_api_token = <token>\n' > /etc/letsencrypt/cloudflare.ini 
 certbot certonly --dns-cloudflare --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
   -d hub.example.com -d example.net -d '*.example.net' \
   --deploy-hook 'systemctl reload nginx'
-cp deploy/nginx.conf /etc/nginx/sites-available/agent-hub   # 改好域名，然后：
-ln -s /etc/nginx/sites-available/agent-hub /etc/nginx/sites-enabled/
+cp deploy/nginx.conf /etc/nginx/sites-available/agent-foyer   # 改好域名，然后：
+ln -s /etc/nginx/sites-available/agent-foyer /etc/nginx/sites-enabled/
 nginx -t && systemctl reload nginx
 ```
 
@@ -51,7 +51,7 @@ nginx -t && systemctl reload nginx
 ## 4. 中台
 
 ```bash
-git clone <仓库地址> /srv/agent-hub && cd /srv/agent-hub
+git clone <仓库地址> /srv/agent-foyer && cd /srv/agent-foyer
 cp .env.example .env
 # 编辑 .env：
 #   HUB_URL=https://hub.example.com
@@ -59,7 +59,7 @@ cp .env.example .env
 #   HUB_SECRET=<openssl rand -base64 48>     定下后不要改，改了已保存的密钥就解不开了
 #   LARK_APP_ID / LARK_APP_SECRET            见 docs/LARK_SETUP.zh-CN.md（或 OIDC_*，见 docs/OIDC_SETUP.zh-CN.md）
 #   HUB_ADMINS=you@example.com
-#   HOST_DATA_DIR=/srv/agent-hub/data
+#   HOST_DATA_DIR=/srv/agent-foyer/data
 #   COMPANY_NAME、HUB_ACCENT、HUB_BRAND_DIR 等，换成自己公司的
 mkdir -p data
 docker compose --env-file .env -f deploy/docker-compose.yml up -d --build
@@ -75,8 +75,8 @@ curl -s localhost:8090/healthz      # {"ok":true}
 在自己电脑上：
 
 ```bash
-claude mcp add --transport http --scope user agent-hub https://hub.example.com/mcp
-# 进入 Claude Code，输入 /mcp，选 agent-hub，在浏览器里登录后点「允许」
+claude mcp add --transport http --scope user agent-foyer https://hub.example.com/mcp
+# 进入 Claude Code，输入 /mcp，选 agent-foyer，在浏览器里登录后点「允许」
 ```
 
 然后找个小项目，说「把这个项目发布到公司中台」，跑通一遍。
@@ -84,7 +84,7 @@ claude mcp add --transport http --scope user agent-hub https://hub.example.com/m
 ## 运维
 
 - **备份**：整个 `data/` 目录。数据库在线备份：
-  `docker exec agent-hub node -e "new (require('node:sqlite').DatabaseSync)('/data/hub.db').exec(\"VACUUM INTO '/data/backup.db'\")"`
+  `docker exec agent-foyer node -e "new (require('node:sqlite').DatabaseSync)('/data/hub.db').exec(\"VACUUM INTO '/data/backup.db'\")"`
 - **升级**：`git pull && docker compose --env-file .env -f deploy/docker-compose.yml up -d --build`。已经在跑的应用容器不受影响。先备份 `data/hub.db`，启动时会自动迁移。
-- **看日志**：`docker logs -f agent-hub`；单个应用：`docker logs hub-app-<slug>`，或者让 Agent 调 `get_app_status`。
+- **看日志**：`docker logs -f agent-foyer`；单个应用：`docker logs hub-app-<slug>`，或者让 Agent 调 `get_app_status`。
 - **旧镜像**：每个应用只保留当前和上一个版本的镜像，更早的自动删除。构建缓存可以定期 `docker builder prune` 清理。

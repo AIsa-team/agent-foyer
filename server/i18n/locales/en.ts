@@ -301,6 +301,7 @@ const en: Record<MessageKey, string> = {
   'err.ai.badKey': 'The AI provider did not accept the key.',
   'err.ai.badPreset': 'Unknown kind of AI provider.',
   'err.ai.keyRequired': 'Enter the API key of the AI provider.',
+  'err.app.badPath': 'Not a path on the app itself: {path}',
   'err.docs.denied': 'You do not have access to this document or place in Lark.',
   'err.docs.badLink': 'Cannot read this link: {url}. Give the link of a Lark document, wiki page or Drive folder.',
   'err.docs.notDoc': 'This link is not a document (it is a {type}); use the tools for sheets and Bases instead.',

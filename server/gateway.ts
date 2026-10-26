@@ -275,6 +275,7 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
     case 'ok':
       if (r.user) recordVisit(slug, r.user.id);
       if (r.app.kind === 'static') return serveStatic(r.app, req, res, wantsWidget(r.app, r.user, req));
+      if (fromOtherSite(req, slug)) return send(res, 403, 'cross-site request refused');
       prepareForwardHeaders(req, r.user, slug);
       if (wantsWidget(r.app, r.user, req)) {
         // plain text back from the app, so the script tag can go in
@@ -285,14 +286,43 @@ export function handleAppRequest(slug: string, req: IncomingMessage, res: Server
   }
 }
 
+/**
+ * A browser request that changes something (or opens a WebSocket) from another site, another app included: all apps
+ * share the visitor's cookie scope, so without this one app's page could act in another app as the visitor. Requests
+ * without an Origin (other servers, webhooks) are not browsers acting for someone and pass.
+ */
+function fromOtherSite(req: IncomingMessage, slug: string, always = false): boolean {
+  const origin = req.headers.origin;
+  if (!origin || (!always && (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS'))) return false;
+  return origin !== appUrl(slug);
+}
+
 export function handleAppUpgrade(slug: string, req: IncomingMessage, socket: Duplex, head: Buffer) {
   const r = resolve(slug, req);
-  if (r.kind !== 'ok' || r.app.kind !== 'container') {
+  if (r.kind !== 'ok' || r.app.kind !== 'container' || fromOtherSite(req, slug, true)) {
     socket.end('HTTP/1.1 403 Forbidden\r\n\r\n');
     return;
   }
   prepareForwardHeaders(req, r.user, slug);
   proxy.ws(req, socket, head, { target: r.app.upstream! });
+}
+
+/**
+ * The address of `pathAndQuery` on an app's own server. Only the path and query come from the caller: the host is the
+ * app's, so a path like //other-app:3000/x or /.//other/x (which URL parsing turns into a different host) cannot
+ * send the person's identity to another app or an internal address.
+ */
+export function upstreamUrl(upstream: string, pathAndQuery: string): URL {
+  const base = new URL(upstream);
+  if (pathAndQuery.includes('\\')) throw new UserError('err.app.badPath', { path: pathAndQuery });
+  const parsed = new URL(pathAndQuery, 'http://x');
+  // a path that names a host of its own (//host/…) is not a path on the app
+  if (parsed.origin !== 'http://x' || !parsed.pathname.startsWith('/') || parsed.pathname.startsWith('//')) throw new UserError('err.app.badPath', { path: pathAndQuery });
+  const target = new URL(base.origin);
+  target.pathname = parsed.pathname;
+  target.search = parsed.search;
+  if (target.origin !== base.origin) throw new UserError('err.app.badPath', { path: pathAndQuery });
+  return target;
 }
 
 /**
@@ -310,7 +340,7 @@ export async function fetchFromApp(app: App, appPath: string, user: User, opts: 
     if (statSync(file).size > LIMIT) throw new UserError('err.home.sourceTooLarge');
     return JSON.parse(readFileSync(file, 'utf8'));
   }
-  const target = new URL(url.pathname + url.search, app.upstream!);
+  const target = upstreamUrl(app.upstream!, appPath);
   return new Promise((resolve, reject) => {
     const req = http.get(target, {
       timeout: opts.timeoutMs ?? 5000,

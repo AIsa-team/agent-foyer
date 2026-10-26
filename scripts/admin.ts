@@ -2,9 +2,9 @@
  * Admin CLI for the hub operator: publish an app or a Skill from a folder on the server, as a given user.
  * Runs inside the hub container (it uses the same database and publishing code as the MCP tools):
  *
- *   docker exec agent-hub node scripts/admin.ts publish-app /tmp/site --owner you@example.com --slug brand \
+ *   docker exec agent-foyer node scripts/admin.ts publish-app /tmp/site --owner you@example.com --slug brand \
  *     --kind static --visibility company --localized '{"zh-CN":{"name":"…","description":"…"},"en":{…}}' [--icon icon.svg]
- *   docker exec agent-hub node scripts/admin.ts publish-skill /tmp/skill --owner you@example.com --localized '{…}' [--notes "…"] [--icon i.svg] [--related-app slug]
+ *   docker exec agent-foyer node scripts/admin.ts publish-skill /tmp/skill --owner you@example.com --localized '{…}' [--notes "…"] [--icon i.svg] [--related-app slug]
  * publish-app also takes [--related-skill slug].
  */
 import { readFileSync } from 'node:fs';

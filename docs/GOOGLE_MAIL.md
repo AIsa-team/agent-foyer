@@ -14,7 +14,7 @@ needs it.
 
 In the [Google Cloud console](https://console.cloud.google.com/), signed in with a Workspace admin account:
 
-1. Create a project (e.g. "Agent Hub") or pick an existing one.
+1. Create a project (e.g. "Agent Foyer") or pick an existing one.
 2. **APIs & Services → Library**: enable the **Gmail API**.
 3. **APIs & Services → OAuth consent screen** (Google Auth Platform → Branding / Audience):
    - User type **Internal**: only accounts in your Workspace can use it, and Google does not need to review the app.

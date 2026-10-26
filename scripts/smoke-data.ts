@@ -1433,6 +1433,20 @@ try {
     && proxied.headers.get('content-length') === String(Buffer.byteLength(proxiedHtml)), "a container app's page comes back with the button and its own headers, uncompressed");
   const api2 = await appFetch('invoice', '/data', aliceInvoice, { 'sec-fetch-dest': 'empty' });
   check((await api2.text()) === '{"ok":true}', 'its API responses pass through untouched');
+  {
+    // a path that URL parsing would turn into another host must not take the person's identity there
+    const before = lark.aiCalls.length;
+    const escape = await api(alice.jar, 'GET', `/home/source?app=invoice&path=${encodeURIComponent(`/.//127.0.0.1:${LARK_PORT}/aisa/v1/models`)}`);
+    const escape2 = await api(alice.jar, 'GET', `/home/source?app=invoice&path=${encodeURIComponent(`//127.0.0.1:${LARK_PORT}/aisa/v1/models`)}`);
+    check(escape.status >= 400 && escape2.status >= 400 && lark.aiCalls.length === before, "an app's data path cannot point at another host");
+    // another app's page (or any other site) cannot act in this app as the visitor; the app's own pages and servers can
+    const own = `http://invoice.apps.localhost:${HUB_PORT}`;
+    check((await appFetch('invoice', '/data', aliceInvoice, { origin: `http://other.apps.localhost:${HUB_PORT}`, 'content-type': 'application/json' }, 'POST', '{}')).status === 403
+      && (await appFetch('invoice', '/data', aliceInvoice, { origin: own, 'content-type': 'application/json' }, 'POST', '{}')).status === 200
+      && (await appFetch('invoice', '/data', aliceInvoice, { 'content-type': 'application/json' }, 'POST', '{}')).status === 200, 'cross-site writes to an app are refused, its own and server-to-server ones pass');
+  }
+  check((await fetch(`${HUB}/`)).headers.get('x-frame-options') === 'DENY' && /frame-ancestors 'none'/.test((await fetch(`${HUB}/auth/login`, { redirect: 'manual' })).headers.get('content-security-policy') ?? ''),
+    "the hub's pages cannot be framed by an app or any other site");
 
   {
     // agents use the app through the actions it declares (hub-agent.json), as the person behind them
@@ -1467,6 +1481,14 @@ try {
     check(found.ok && found.result.q === 'Tether' && found.result.tags.join() === 'a,b' && seen.at(-1)?.user && seen.at(-1)?.ticket, 'call_app sends a GET with the arguments as the person, with a ticket');
     const byId = await tool(bob.token, 'call_app', { app: 'invoice', action: 'get_invoice', input: { id: 'a/b' } });
     check(byId.result.path === '/api/invoices/a%2Fb', 'path arguments are filled in and escaped');
+    {
+      // an action path that would leave the app (stored without the manifest check) is refused at call time too
+      const before = lark.aiCalls.length;
+      db.prepare("UPDATE app_releases SET agent_manifest = ? WHERE app_slug = 'invoice' AND version = (SELECT current_release FROM apps WHERE slug = 'invoice')")
+        .run(JSON.stringify({ actions: [...manifest, { name: 'escape', description: 'x', method: 'GET', path: `//127.0.0.1:${LARK_PORT}/aisa/v1/models`, input: { type: 'object', properties: {} }, write: false }] }));
+      check(!!(await tool(bob.token, 'call_app', { app: 'invoice', action: 'escape', input: {} })).error && lark.aiCalls.length === before, "an action cannot send the person's identity to another host");
+      db.prepare("UPDATE app_releases SET agent_manifest = ? WHERE app_slug = 'invoice' AND version = (SELECT current_release FROM apps WHERE slug = 'invoice')").run(JSON.stringify({ actions: manifest }));
+    }
     const made = await tool(bob.token, 'call_app', { app: 'invoice', action: 'request_invoice', input: { company: 'Circle', amount: 5 } });
     check(made.ok && made.write && made.result.id === 'inv-9' && seen.at(-1)?.method === 'POST' && JSON.parse(seen.at(-1)!.body).company === 'Circle', 'a write action posts the arguments as JSON');
     const bad = await tool(bob.token, 'call_app', { app: 'invoice', action: 'get_invoice', input: { id: 'bad' } });
@@ -2383,6 +2405,8 @@ try {
     check(data.status === 200 && (await data.json() as { data: { followers: number } }).data.followers === 4200 && lark.aiCalls.at(-1)!.path === '/aisa/apis/v1/twitter/user/info?userName=aisa', "and AIsa's data APIs with their own paths");
     check((await appFetch('invoice', '/__hub/ai/v1/chat/completions', undefined, { 'content-type': 'application/json', 'x-hub-ticket': issueTicket('invoice', 'ou_dev_alex') }, 'POST', JSON.stringify({ model: 'gpt-x', messages: [] }))).status === 200,
       "an app's server calls it with the ticket of the person's request");
+    check((await appFetch('invoice', '/__hub/ai/v1/files', aiApp)).status === 404 && (await appFetch('invoice', '/__hub/ai/apis/v1/twitter/%2e%2e/admin', aiApp)).status === 404
+      && lark.aiCalls.every((x) => !x.path.includes('/files') && !x.path.includes('admin')), "apps reach only the model endpoints they need, and nothing climbs out of a data API's path");
     check((await chat({ model: 'gpt-x', messages: [] }, null)).status === 401, 'someone not signed in gets nothing (a public app cannot spend the credit for strangers)');
     check((await chat({ model: 'gpt-x', messages: [] }, aiApp, { origin: 'https://evil.example' })).status === 403
       && (await appFetch('invoice', '/__hub/ai/v1/chat/completions', aiApp, { 'content-type': 'text/plain' }, 'POST', '{}')).status === 415, 'other sites cannot spend through a colleague\'s browser');
@@ -2512,6 +2536,8 @@ try {
     const sqlBad = await tool(bob.token, 'save_data_source', { id: 'bob-bad', title: { en: 'x' }, connection: 'metabase', database: '2', sql: "select 1; delete from orders" });
     check(String(sqlBad.error).length > 0 && !lark.mbSql.some((q) => /delete/i.test(q)), 'SQL that is more than one SELECT is refused before Metabase sees it');
     check(String((await tool(bob.token, 'save_data_source', { id: 'bob-bad', title: { en: 'x' }, connection: 'metabase', database: '2', sql: 'update orders set amount = 0' })).error).length > 0, 'and so is SQL that writes');
+    check(String((await tool(bob.token, 'save_data_source', { id: 'bob-bad', title: { en: 'x' }, connection: 'metabase', database: '2', sql: "select $$'$$, x from (with d as (delete from orders returning 1) select 1) z --'" })).error).length > 0
+      && !lark.mbSql.some((q) => /delete/i.test(q)), 'quoting that one database reads differently cannot hide a write');
     check((await tool(bob.token, 'save_data_source', { id: 'bob-orders', title: { 'zh-CN': '我的订单', en: 'My orders' }, connection: 'metabase', database: '2', sql: 'select customer, amount from orders' })).saved === true,
       'a read-only SELECT becomes a data source');
     const sum = await tool(bob.token, 'query_data', { source: 'bob-orders', query: { measure: { op: 'sum', field: 'amount' } } }) as { stat: { value: number } };

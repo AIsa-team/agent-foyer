@@ -10,7 +10,7 @@
 
 用 Workspace 管理员账号登录 [Google Cloud 控制台](https://console.cloud.google.com/)：
 
-1. 新建一个项目（比如「Agent Hub」），或者用已有的。
+1. 新建一个项目（比如「Agent Foyer」），或者用已有的。
 2. **API 和服务 → 库**：启用 **Gmail API**。
 3. **API 和服务 → OAuth 同意屏幕**（Google Auth Platform → 品牌 / 目标对象）：
    - 用户类型选 **内部**：只有你们 Workspace 里的账号能用，也不需要 Google 审核。
