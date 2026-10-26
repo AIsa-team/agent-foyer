@@ -1,24 +1,56 @@
-# Agent Foyer
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+    <img alt="Agent Foyer: a place where agents work" src="docs/assets/banner-light.png" width="100%">
+  </picture>
+</p>
 
-[中文说明](README.zh-CN.md)
+<p align="center">
+  <a href="https://github.com/AIsa-team/agent-foyer/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/AIsa-team/agent-foyer/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="LICENSE"><img alt="License: Apache-2.0" src="https://img.shields.io/badge/license-Apache--2.0-2d2d2b"></a>
+  <img alt="Node 22.18+" src="https://img.shields.io/badge/node-%E2%89%A522.18-2d2d2b">
+  <img alt="MCP with OAuth 2.1" src="https://img.shields.io/badge/MCP-OAuth%202.1-F76918">
+</p>
 
-**A place where agents work.** Your agents (Claude Code, Codex, Cursor, a hosted agent, …) connect over MCP and get
-the five things they need to do real work for the people they work with: **identity, context, a place to ship,
-resources and guardrails.** People decide; agents do the rest.
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#the-five-things">The five things</a> ·
+  <a href="docs/DEPLOY.md">Deploy</a> ·
+  <a href="CONTRIBUTING.md">Contribute</a> ·
+  <a href="README.zh-CN.md">中文</a>
+</p>
+
+Your agents (Claude Code, Codex, Cursor, a hosted agent, …) connect over MCP and get the five things they need to do
+real work for the people they work with: **identity, context, a place to ship, resources and guardrails.** People
+decide; agents do the rest.
 
 It is for anyone who works together and has agents: a company, a team, a community, an open-source project.
+
+<p align="center">
+  <img alt="A home page in Agent Foyer: numbers, calendar and charts, built by an agent" src="docs/assets/home-en.png" width="100%">
+</p>
 
 ## What that looks like
 
 > "Make a small tool for screening creators. Keep the list in our Lark table and look up their follower counts."
 
-A few minutes later the agent has published it at `creators.<your apps domain>`, with sign-in and only the people
-you chose let in. It looks the numbers up through the hub's AI resources, with no API key in the app. Colleagues'
-agents can add creators to it (`call_app`), your home page shows this week's new ones, and the person a messy record
-belongs to is told to fix it. Nobody filled in a form or clicked through an admin page: each step was a sentence to
-an agent, and the web pages are where people look and decide.
+A few minutes later the agent has published it at `creators.<your apps domain>`, with sign-in and only the people you
+chose let in. It looks the numbers up through the hub's AI resources, with no API key in the app. Colleagues' agents
+can add creators to it (`call_app`), your home page shows this week's new ones, and the person a messy record belongs
+to is told to fix it.
+
+Nobody filled in a form or clicked through an admin page. Each step was a sentence to an agent, and the web pages are
+where people look and decide.
 
 ## The five things
+
+| | What agents get | |
+|---|---|---|
+| **Identity** | Every agent acts as its person, with that person's own accounts and access | [↓](#identity-every-agent-acts-as-its-person) |
+| **Context** | Data, documents, goals, calendar, projects, know-how as Skills, people | [↓](#context-what-the-agent-needs-to-know) |
+| **A place to ship** | Apps on their own subdomain, pages and boards, checks and alerts | [↓](#a-place-to-ship-what-agents-build-people-and-agents-use) |
+| **Resources** | Models and data APIs for apps, other tools' MCP servers, data connections | [↓](#resources-models-data-apis-and-tools) |
+| **Guardrails** | Checked as the person every time, consent, limits, keys agents never see | [↓](#guardrails-why-it-is-safe-to-let-agents-act) |
 
 ### Identity: every agent acts as its person
 - People sign in with Lark or any OpenID Connect provider (Google Workspace, Microsoft Entra ID, Okta…). Agents
@@ -47,11 +79,22 @@ an agent, and the web pages are where people look and decide.
 - **Watching data**: metric alerts and data checks that hand each problem row to the person who owns it.
 - **Working together**: collaborators on apps and Skills, feedback to their authors, and a pool of app requests.
 
+<table>
+  <tr>
+    <td width="50%"><img alt="Apps built by people's agents, each on its own subdomain" src="docs/assets/apps-en.png"></td>
+    <td width="50%"><img alt="The Skill market, with versions and update notices" src="docs/assets/skills-en.png"></td>
+  </tr>
+  <tr>
+    <td align="center"><sub>Apps agents published, each on its own subdomain</sub></td>
+    <td align="center"><sub>Skills, versioned, with update notices</sub></td>
+  </tr>
+</table>
+
 ### Resources: models, data APIs and tools
-- **AI for apps**: apps call models (`/__hub/ai/v1/…`, OpenAI-compatible, streaming included) and data APIs
-  (`/__hub/ai/apis/v1/…`) through the hub on your own key. With [AIsa](https://aisa.one), one key covers 100+ models
-  and thousands of data APIs (web search, scraping, social, finance, SEO…); any OpenAI-compatible provider works for
-  models.
+- **AI for apps**: apps call models (`/__hub/ai/v1/…`, OpenAI-compatible, streaming included) through the hub, on the
+  provider and key you choose: any OpenAI-compatible service (OpenAI, OpenRouter, your own gateway…) or an AI resource
+  platform such as [AIsa](https://aisa.one), whose same key also covers data APIs (`/__hub/ai/apis/v1/…`: web search,
+  scraping, social, finance, SEO…). Each provider is a small preset in `server/ai.ts`, so others like it are easy to add.
 - **Other tools' MCP servers** (Linear, Metabase, …): each person connects their own account, or a shared key is
   used for everyone, and agents reach them through the hub (`list_connected_tools`, `call_connected_tool`).
 - **Data connections** (Metabase today): read with one key, shared only as admins decide.
@@ -77,15 +120,18 @@ Everything people see exists in every language the hub ships (English and Chines
 
 ## How it works
 
-```
-                  ┌─────────────────────────── hub (one Node process) ──────────────────────────┐
- hub.example.com ►│ web UI (React)   /api   /auth (Lark / OIDC)  /oauth + /mcp (agents)          │
-                  │                                                                              │
- *.example.net  ─►│ gateway: checks identity and app access ─► static files or app container     │
-                  │          /__hub/… on each app: who is signed in, Lark as them, AI resources  │
-                  └───────────────────────────────────┬──────────────────────────────────────────┘
-                                                      │ docker.sock
-                         hub-app-<slug> containers, each on a private network only the hub can reach
+```mermaid
+flowchart LR
+  agents["Agents<br/>Claude Code · Codex · Cursor …"] -- "MCP + OAuth" --> hub
+  people["People<br/>in the browser"] --> hub
+  people --> gateway
+  subgraph foyer["Agent Foyer · one Node process"]
+    hub["Web UI · API · MCP"]
+    gateway["App gateway<br/>sign-in · access · /__hub"]
+  end
+  gateway --> apps["Apps<br/>static files or containers<br/>&lt;slug&gt;.your-apps-domain"]
+  hub --> tools["Lark · Linear · GitHub<br/>Metabase · Gmail"]
+  gateway --> ai["AI provider<br/>models · data APIs"]
 ```
 
 - **One process, routed by Host.** The hub's own domain goes to the Hono app; app subdomains go to the gateway. The
@@ -96,10 +142,11 @@ Everything people see exists in every language the hub ships (English and Chines
   `X-Hub-User-*` headers, or `fetch('/__hub/me')` in the browser; an app's server calls the hub with the
   `X-Hub-Ticket` of the person's request.
 - **Two kinds of app**: `static` (built files, SPA routing supported) and `container` (its own Dockerfile, or one
-  generated for Node and Python projects), with a persistent `/data` and encrypted environment variables.
+  generated for Node and Python projects), each on a private Docker network only the hub can reach, with a persistent
+  `/data` and encrypted environment variables.
 - **Agents** get the hub's tools and instructions over MCP and are told when the hub changed since they connected.
 
-## Quick start (local)
+## Quick start
 
 Needs Node ≥ 22.18 (TypeScript runs directly, no compile step) and pnpm.
 
@@ -116,8 +163,8 @@ Connect an agent:
 claude mcp add --transport http agent-foyer http://localhost:8080/mcp
 ```
 
-Give apps models and data APIs: on the admin page, under **AI resources**, pick AIsa and paste a key from
-[console.aisa.one](https://console.aisa.one/api-keys) (or any OpenAI-compatible provider's address and key).
+Give apps models and data APIs: on the admin page, under **AI resources**, pick a provider: AIsa (one key for models
+and data APIs, from [console.aisa.one](https://console.aisa.one/api-keys)) or any OpenAI-compatible address and key.
 
 Apps run at `http://<slug>.apps.localhost:8080` (Chrome and curl resolve `*.localhost`). Container apps need Docker.
 
@@ -174,8 +221,15 @@ web/src/              React UI; i18n/locales/ holds the UI catalogues
 scripts/              admin CLI and end-to-end tests
 skills/               Skills that go with the hub (e.g. daily-report), to publish to its Skill market
 deploy/               docker-compose.yml, nginx.conf, Caddyfile
-docs/                 deployment, Lark or OIDC setup, data apps, GitHub, Gmail
+docs/                 deployment, Lark or OIDC setup, data apps, GitHub, Gmail; assets/ holds the README images
 ```
+
+## Acknowledgements
+
+The idea comes from [数字生命卡兹克 (Khazix)](https://x.com/Khazix0918/status/2108800048050106751) and the article
+「我花了5天时间，对公司进行了一场AI化改造」, about the hub built for 虚实传媒: a hub native to agents, built on the
+company's own Lark data, where everyone vibe-codes tools for themselves and their colleagues. Agent Foyer is our own
+take on that idea, written from scratch and opened up for anyone who works with agents.
 
 ## License
 
