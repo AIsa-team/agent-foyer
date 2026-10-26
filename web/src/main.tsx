@@ -20,6 +20,7 @@ const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default:
 const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.DataPage })));
 const DataSourcePage = lazy(() => import('./pages/DataSource').then((m) => ({ default: m.DataSourcePage })));
 const OrgPage = lazy(() => import('./pages/Org').then((m) => ({ default: m.OrgPage })));
+const DepartmentPage = lazy(() => import('./pages/Department').then((m) => ({ default: m.DepartmentPage })));
 const OkrPage = lazy(() => import('./pages/Okr').then((m) => ({ default: m.OkrPage })));
 const ProjectsPage = lazy(() => import('./pages/Projects').then((m) => ({ default: m.ProjectsPage })));
 const ProjectDetailPage = lazy(() => import('./pages/Projects').then((m) => ({ default: m.ProjectDetailPage })));
@@ -110,6 +111,7 @@ function Shell() {
           {me.hub.features.linear && <Route path="/projects" element={<ProjectsPage />} />}
           {me.hub.features.linear && <Route path="/projects/:id" element={<ProjectDetailPage />} />}
           <Route path="/org" element={<OrgPage />} />
+          <Route path="/org/:id" element={<DepartmentPage />} />
           {me.hub.features.lark && <Route path="/okr" element={<OkrPage />} />}
           <Route path="/apps" element={<AppsPage />} />
           <Route path="/apps/:slug" element={<AppDetailPage />} />

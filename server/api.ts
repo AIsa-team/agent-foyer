@@ -36,7 +36,7 @@ import { describeActions } from './apps/agentActions.ts';
 import { publicDecided } from './apps/approvals.ts';
 import * as requests from './requests.ts';
 import * as boards from './boards.ts';
-import { directoryProvider, organisation, search, syncDirectory } from './directory.ts';
+import { departmentPage, directoryProvider, organisation, search, syncDirectory } from './directory.ts';
 import { isSupportedLocale, tr, UserError } from './i18n/index.ts';
 import { body, localeOf, requireAdmin, type HubEnv } from './http.ts';
 import { LARK_ONLY, larkAdminSettings, larkApi, larkLinks } from './lark/routes.ts';
@@ -274,6 +274,7 @@ api.post('/admin/sync-directory', async (c) => {
   if (!directoryProvider()) throw new UserError('err.directory.none');
   return c.json({ synced: await syncDirectory() });
 });
+api.get('/org/departments/:id', (c) => c.json(departmentPage(c.get('user'), c.req.param('id'), localeOf(c))));
 api.get('/org', (c) => c.json(organisation(localeOf(c))));
 api.get('/search', (c) => c.json(search(c.get('user'), c.req.query('q') ?? '', localeOf(c))));
 

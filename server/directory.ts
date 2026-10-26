@@ -12,6 +12,8 @@ import * as skills from './skills/service.ts';
 import * as lib from './library.ts';
 import { boardsFor } from './boards.ts';
 import { listRequests } from './requests.ts';
+import { canEditDepartment } from './homepage.ts';
+import { UserError } from './i18n/index.ts';
 
 interface DeptRow { id: string; name: string; name_i18n: string | null; parent_id: string | null; leader_ids: string | null }
 
@@ -52,6 +54,43 @@ export async function syncDirectory(): Promise<number> {
 }
 
 // ---------------------------------------------------------------- the organisation page
+/**
+ * One department's page: who is in it (leaders first), where it sits, the home page its members get, its boards, and
+ * what its members made that the viewer may open. Leaders and admins also learn they can change the home page and boards.
+ */
+export function departmentPage(viewer: User, id: string, locale: string) {
+  const d = get<DeptRow>('SELECT * FROM departments WHERE id = ?', id);
+  if (!d) throw new UserError('err.home.departmentNotFound', { id });
+  const nameOf = (x: DeptRow) => pick(x.name_i18n ? JSON.parse(x.name_i18n) : {}, locale) || x.name;
+  const person = (uid: string) => {
+    const u = get<{ id: string; name: string; en_name: string | null; email: string | null; avatar: string | null; last_seen_at: number | null }>('SELECT id, name, en_name, email, avatar, last_seen_at FROM users WHERE id = ?', uid);
+    return u ? { id: u.id, name: u.name, enName: u.en_name, email: u.email, avatar: u.avatar, joined: u.last_seen_at !== null } : null;
+  };
+  const leaders = (d.leader_ids ? (JSON.parse(d.leader_ids) as string[]) : []);
+  const memberIds = all<{ user_id: string }>('SELECT user_id FROM user_departments WHERE department_id = ?', id).map((r) => r.user_id);
+  const ordered = [...leaders.filter((x) => memberIds.includes(x) || get('SELECT 1 FROM users WHERE id = ?', x)), ...memberIds.filter((x) => !leaders.includes(x))];
+  const parent = d.parent_id ? get<DeptRow>('SELECT * FROM departments WHERE id = ?', d.parent_id) : undefined;
+  const children = all<DeptRow>('SELECT * FROM departments WHERE parent_id = ? ORDER BY name', id);
+  const home = get<{ layout: string; updated_at: number }>("SELECT layout, updated_at FROM homepages WHERE scope = 'department' AND owner_id = ?", id);
+  const homeModules = home ? (JSON.parse(home.layout) as { modules: { type: string; title?: Record<string, string> }[] }).modules : [];
+  const team = new Set(memberIds);
+  return {
+    department: {
+      id: d.id, name: nameOf(d),
+      parent: parent ? { id: parent.id, name: nameOf(parent) } : null,
+      children: children.map((c) => ({ id: c.id, name: nameOf(c), members: get<{ n: number }>('SELECT COUNT(*) AS n FROM user_departments WHERE department_id = ?', c.id)!.n })),
+      leaders,
+    },
+    people: ordered.map(person).filter((p): p is NonNullable<ReturnType<typeof person>> => !!p),
+    canEdit: canEditDepartment(viewer, { id: d.id, name: d.name, name_i18n: d.name_i18n, leader_ids: d.leader_ids }),
+    home: home ? { updatedAt: home.updated_at, modules: homeModules.map((m) => ({ type: m.type, title: m.title ? pick(m.title, locale) || null : null })) } : null,
+    boards: boardsFor(viewer, locale).filter((b) => b.department?.id === id).map((b) => ({ id: b.id, title: b.title, modules: b.layout.modules.length, updatedAt: b.updatedAt })),
+    apps: apps.listAppsFor(viewer, locale).filter((a) => a.owner && team.has(a.owner.id)).slice(0, 12),
+    skills: skills.listSkills(viewer, locale).filter((s) => s.listed && team.has(s.owner.id)).slice(0, 12),
+  };
+}
+
+
 export function organisation(locale: string) {
   const depts = all<DeptRow>('SELECT * FROM departments ORDER BY name');
   const members = all<{ user_id: string; department_id: string }>('SELECT * FROM user_departments');

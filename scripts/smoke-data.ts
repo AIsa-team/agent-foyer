@@ -2338,6 +2338,28 @@ try {
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
   }
 
+  // ---------------------------------------------------------------- a department's page
+  {
+    fsDb.prepare("INSERT OR REPLACE INTO departments (id, name, parent_id, leader_ids, updated_at) VALUES ('od-sea', '东南亚', 'od-growth', '[\"ou_dev_alice\"]', 0)").run();
+    for (const u of ['ou_dev_alice', 'ou_dev_bob']) fsDb.prepare("INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES (?, 'od-sea')").run(u);
+    type DP = { department: { name: string; parent: { name: string } | null; children: { id: string }[]; leaders: string[] }; people: { id: string }[]; canEdit: boolean; home: { modules: { type: string; title: string | null }[] } | null; boards: { id: string }[]; apps: { owner: { id: string } }[] };
+    const asBob = (await api(bob.jar, 'GET', '/org/departments/od-sea')).body as unknown as DP;
+    check(asBob.department.name === '东南亚' && asBob.department.parent?.name === '增长' && asBob.people.map((p) => p.id).join() === 'ou_dev_alice,ou_dev_bob' && !asBob.canEdit && asBob.home === null,
+      'a department page shows where it sits and its people, leaders first; a member cannot change it');
+    check(((await api(bob.jar, 'GET', '/org/departments/od-growth')).body as unknown as DP).department.children.some((c) => c.id === 'od-sea'), 'and the departments under it');
+    check(asBob.apps.every((a) => ['ou_dev_alice', 'ou_dev_bob'].includes(a.owner.id)), "only its members' apps, and only those the viewer may open");
+    check(((await api(alice.jar, 'GET', '/org/departments/od-sea')).body as unknown as DP).canEdit, 'its leader can');
+    await tool(alice.token, 'save_homepage', { scope: 'department', department_id: 'od-sea', layout: { modules: [{ type: 'note', title: { 'zh-CN': '本周重点', en: 'This week' }, body: { 'zh-CN': '……', en: '…' } }, { type: 'apps' }] } });
+    await tool(alice.token, 'save_board', { id: 'sea-weekly', title: { 'zh-CN': '东南亚周报', en: 'SEA weekly' }, scope: 'department', department_id: 'od-sea', layout: { modules: [{ type: 'note', body: { 'zh-CN': '……', en: '…' } }] } });
+    const after = (await api(bob.jar, 'GET', '/org/departments/od-sea')).body as unknown as DP;
+    check(after.home?.modules.map((m) => m.title ?? m.type).join() === 'This week,apps' && after.boards.map((b) => b.id).join() === 'sea-weekly', 'its home page (titles in the reader\'s language) and boards show up for its members');
+    check((await api(bob.jar, 'GET', '/org/departments/nope')).status === 400, 'a department that does not exist is refused');
+    await tool(alice.token, 'delete_board', { id: 'sea-weekly' });
+    await tool(alice.token, 'reset_homepage', { scope: 'department', department_id: 'od-sea' });
+    fsDb.prepare("DELETE FROM user_departments WHERE department_id = 'od-sea'").run();
+    fsDb.prepare("DELETE FROM departments WHERE id = 'od-sea'").run();
+  }
+
   // ---------------------------------------------------------------- AI models and data APIs for apps (the company's key)
   {
     const aiApp = await loginToApp('invoice', alex.jar);
@@ -2558,6 +2580,11 @@ try {
     const minutes = (n: number) => ({ timestamp: String(Math.floor(Date.now() / 1000) + n * 60), timezone: 'UTC' });
     await api(alex.jar, 'POST', '/admin/services', { id: 'metabase', name: 'Metabase', connection: 'metabase', create: true, disabledTools: ['question_write'] });
     await api(alex.jar, 'POST', '/admin/ai', { preset: 'aisa', key: 'sk-good' });
+    fsDb.prepare("UPDATE departments SET leader_ids = '[\"ou_dev_alex\"]' WHERE id = 'od-growth'").run();
+    fsDb.prepare("INSERT OR REPLACE INTO departments (id, name, parent_id, leader_ids, updated_at) VALUES ('od-sea', '东南亚', 'od-growth', '[]', 0)").run();
+    for (const [u, d] of [['ou_dev_alex', 'od-growth'], ['ou_dev_bob', 'od-growth'], ['ou_dev_bob', 'od-sea']]) fsDb.prepare('INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES (?, ?)').run(u, d);
+    await tool(alex.token, 'save_homepage', { scope: 'department', department_id: 'od-growth', layout: { modules: [{ type: 'note', title: { 'zh-CN': '本周重点', en: 'This week' }, body: { 'zh-CN': '……', en: '…' } }, { type: 'agenda' }, { type: 'apps' }, { type: 'requests' }] } });
+    await tool(alex.token, 'save_board', { id: 'growth-weekly', title: { 'zh-CN': '增长周报', en: 'Growth weekly' }, scope: 'department', department_id: 'od-growth', layout: { modules: [{ type: 'note', body: { 'zh-CN': '……', en: '…' } }] } });
     const demoApp = await loginToApp('invoice', alex.jar);
     for (let i = 0; i < 3; i++) await appFetch('invoice', '/__hub/ai/v1/chat/completions', demoApp, { 'content-type': 'application/json' }, 'POST', JSON.stringify({ model: 'gpt-x', messages: [] }));
     await appFetch('invoice', '/__hub/ai/apis/v1/twitter/user/info?userName=aisa', demoApp);

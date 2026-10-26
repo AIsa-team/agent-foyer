@@ -430,6 +430,15 @@ kbd { font: 11px/1 var(--aisa-font-mono, ui-monospace, monospace); padding: 3px 
 /* data boards */
 .data-tabs { margin-bottom: 16px; flex-wrap: wrap; }
 .conn-sql { display: inline-block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; font-family: var(--aisa-font-mono, monospace); font-size: 12px; }
+.dept-noleader { display: flex; gap: 6px; align-items: center; margin: -8px 0 14px; }
+.dept-children { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 16px; }
+.dept-chip { padding: 3px 10px; text-decoration: none; color: inherit; }
+.dept-modules { display: flex; flex-wrap: wrap; gap: 6px; }
+.dept-action { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.dept-action p { margin: 0 0 8px; }
+.dept-people .org-person { text-decoration: none; color: inherit; }
+.org-deptlink { display: flex; align-items: center; gap: 10px; padding: 12px 16px; text-decoration: none; color: inherit; }
+.org-deptlink:hover { border-color: var(--line-strong); }
 .data-tabs-row { display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-start; }
 .data-tabs__label { align-self: center; padding: 0 8px 0 10px; font-size: 12px; color: var(--muted); }
 /* organisation */

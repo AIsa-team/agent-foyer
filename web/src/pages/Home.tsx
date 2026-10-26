@@ -758,11 +758,15 @@ function CustomizeDialog({ data, onClose }: { data: HomeData; onClose: () => voi
   );
 }
 
+/** What kind of module it is, as people call it. */
+export const moduleKindName = (t: (k: MessageKey) => string, type: string) =>
+  ['skills', 'resources', 'alerts', 'issues', 'okr', 'github', 'requests', 'agenda'].includes(type) ? t(`home.module.${type}` as MessageKey) : t(`home.adjust.kind.${type}` as MessageKey);
+
 /** A module's name for lists: its title, or what kind of module it is. */
 function useModuleName() {
   const { t } = useI18n();
   const text = useText();
-  return (m: Module) => ('title' in m ? text(m.title) : '') || (['skills', 'resources', 'alerts', 'issues', 'okr', 'github', 'requests', 'agenda'].includes(m.type) ? t(`home.module.${m.type}` as MessageKey) : t(`home.adjust.kind.${m.type}` as MessageKey));
+  return (m: Module) => ('title' in m ? text(m.title) : '') || moduleKindName(t, m.type);
 }
 
 const WIDTHS: Width[] = ['full', 'half', 'third'];

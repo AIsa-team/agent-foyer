@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { useSearchParams } from 'react-router';
+import { Link, useSearchParams } from 'react-router';
 import { useI18n } from '../i18n';
 import { Avatar, Empty, Icon, Loading, useApi, useMe } from '../ui';
 
@@ -59,6 +59,12 @@ export function OrgPage() {
           </div>
           <div className="stack">
             <div className="search org-search"><Icon name="search" /><input className="input" placeholder={t('org.search')} value={q} onChange={(e) => setQ(e.target.value)} /></div>
+            {selected && !needle && (
+              <Link to={`/org/${encodeURIComponent(selected.id)}`} className="card org-deptlink">
+                <span className="grow"><b>{selected.name}</b> <span className="small muted">{t('dept.intro', { n: selected.members.length })}</span></span>
+                <span className="small">{t('org.deptPage')} →</span>
+              </Link>
+            )}
             <div className="card org-people">
               {list.length === 0 ? <Empty title={t('org.nobody')} /> : list.map((p) => (
                 <div key={p.id} className={`org-person ${focus === p.id ? 'on' : ''}`}>
