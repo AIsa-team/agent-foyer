@@ -80,7 +80,7 @@
 
 ### 资源：现成的直接调，不用重做
 团队要用的很多数据，早就有现成的 API 了，比如 X 上的帖子和趋势、网站流量、搜索结果、金融行情、论文。Agent 做应用的时候，让应用经过中台直接调这些 API 就行，不用自己写爬虫、攒数据，也不用每家服务都去注册、对接一遍。所以中台给 Agent 做的应用准备了一层资源：
-- **模型和数据 API，一个 key 就够。** 在管理页选一个服务商。可以是 [AIsa](https://aisa.one) 这类 AI 资源平台，一个 key 就能用上百个模型和几千个数据 API，比如搜索、X、Similarweb、金融、论文、抓取；只用模型的话，任何兼容 OpenAI 的服务也行，比如 OpenAI、OpenRouter 或自建网关。每个服务商在 `server/ai.ts` 里只是一小段预设，同类平台很容易加进来。
+- **模型和数据 API，一个 key 就够。** 在管理页选一个服务商。可以是 [AIsa](https://aisa.one/?utm_source=agent-foyer&utm_medium=readme) 这类 AI 资源平台，一个 key 就能用上百个模型和几千个数据 API，比如搜索、X、Similarweb、金融、论文、抓取；只用模型的话，任何兼容 OpenAI 的服务也行，比如 OpenAI、OpenRouter 或自建网关。每个服务商在 `server/ai.ts` 里只是一小段预设，同类平台很容易加进来。
 - **Agent 做的应用直接调。** 应用调模型走 `/__hub/ai/v1/…`，兼容 OpenAI，支持流式输出；调数据 API 走 `/__hub/ai/apis/v1/…`。调用时用的是使用者本人的身份，应用里不放 key。Agent 用 `ai_resources` 就能查到现在有哪些资源。
 - **其他工具的 MCP 服务**：比如 Linear、Metabase。可以每人连自己的账号，也可以大家共用一个 key。Agent 通过中台的 `list_connected_tools` 和 `call_connected_tool` 来用它们。
 - **数据连接**：目前支持 Metabase。用一个 key 读取，给谁看由管理员决定。
@@ -168,7 +168,7 @@ claude mcp add --transport http agent-foyer http://localhost:8080/mcp
 
 其他人直接在中台里接入就行。「我的」页面上有一段现成的话，写好了中台地址和登录方式，复制给自己的 Agent，它就会自己接上。
 
-想让应用用上模型和数据 API，就去管理页的「AI 资源」里选一个服务商。可以选 AIsa，一个 key 同时能用模型和数据 API，在 [console.aisa.one](https://console.aisa.one/api-keys) 申请；也可以填任意 OpenAI 兼容服务的地址和 key。
+想让应用用上模型和数据 API，就去管理页的「AI 资源」里选一个服务商。可以选 AIsa，一个 key 同时能用模型和数据 API，在 [console.aisa.one](https://console.aisa.one/api-keys?utm_source=agent-foyer&utm_medium=readme) 申请；也可以填任意 OpenAI 兼容服务的地址和 key。发给服务商的请求会带上 `User-Agent: agent-foyer/<版本号>`。
 
 应用的地址是 `http://<slug>.apps.localhost:8080`。容器应用需要装 Docker。
 
@@ -197,7 +197,7 @@ pnpm smoke          # 对正在运行的中台跑核心端到端测试：pnpm sm
 | `HUB_TIMEZONE` | 时区，决定日期、免打扰时段、汇总消息，以及图表里周和月的分界 |
 | `DEFAULT_LOCALE` | 没选语言的人默认看到的语言 |
 
-默认主题来自 [AIsa](https://aisa.one) 的设计系统，设计变量、组件、图表和字体都在 `web/src/brand/` 里。开箱就是一整套完整的设计系统，Agent 做页面和应用时也照着它来。想换颜色就改 `HUB_ACCENT`，想换标志就把你自己的放进 `HUB_BRAND_DIR`。
+默认主题来自 [AIsa](https://aisa.one/?utm_source=agent-foyer&utm_medium=readme) 的设计系统，设计变量、组件、图表和字体都在 `web/src/brand/` 里。开箱就是一整套完整的设计系统，Agent 做页面和应用时也照着它来。想换颜色就改 `HUB_ACCENT`，想换标志就把你自己的放进 `HUB_BRAND_DIR`。
 
 ## 致谢
 

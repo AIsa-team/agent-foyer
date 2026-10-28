@@ -80,7 +80,7 @@ const lark = {
   /** the fake dashboard 100: when it last changed there, and the changes made since */
   mbDash: { changedAt: '2026-01-01T00:00:00Z', extraCard: false, dropDetail: false },
   /** calls the fake AIsa got: path, key and body */
-  aiCalls: [] as { path: string; auth: string; body: string; cookie: boolean }[],
+  aiCalls: [] as { path: string; auth: string; body: string; cookie: boolean; ua: string }[],
   /** SQL the fake Metabase was asked to run */
   mbSql: [] as string[],
   calendarTokens: new Set<string>(),
@@ -548,7 +548,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   // a fake AIsa: OpenAI-compatible models at /aisa/v1, data APIs at /aisa/apis/v1, key sk-good
   if (p.startsWith('/aisa/')) {
     const auth = String(req.headers.authorization ?? '');
-    lark.aiCalls.push({ path: p + url.search, auth, body: raw, cookie: !!req.headers.cookie });
+    lark.aiCalls.push({ path: p + url.search, auth, body: raw, cookie: !!req.headers.cookie, ua: String(req.headers['user-agent'] ?? '') });
     if (auth !== 'Bearer sk-good') return send({ error: { message: 'invalid key' } }, 401);
     if (p === '/aisa/v1/models') return send({ data: [{ id: 'gpt-x' }, { id: 'claude-y' }] });
     if (p === '/aisa/v1/chat/completions' && req.method === 'POST') {
@@ -2399,6 +2399,7 @@ try {
     const sent = lark.aiCalls.at(-1)!;
     check(res.status === 200 && answer.choices[0].message.content === 'hi' && sent.auth === 'Bearer sk-good' && !sent.cookie && sent.path === '/aisa/v1/chat/completions',
       "an app calls a model with no key of its own: the hub adds the company's and passes nothing of the visitor's");
+    check(/^agent-foyer\/\d+\.\d+\.\d+$/.test(sent.ua), 'the provider can tell the call comes through Agent Foyer');
     const streamed = await (await chat({ model: 'claude-y', stream: true, messages: [] })).text();
     check(streamed.includes('"你"') && streamed.includes('[DONE]'), 'answers stream through');
     const data = await appFetch('invoice', '/__hub/ai/apis/v1/twitter/user/info?userName=aisa', aiApp);

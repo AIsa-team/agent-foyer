@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 function env(name: string, fallback?: string): string {
@@ -156,6 +156,9 @@ if (config.mailDrafts === 'google' && !config.google.clientId) throw new Error('
 if (config.mailDrafts === 'lark' && !config.lark.enabled) throw new Error('MAIL_DRAFTS=lark needs Lark sign-in.');
 
 /** Name of the sign-in provider for people: "Lark", "Google"… */
+/** This hub's version, from package.json. */
+export const version = (JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }).version;
+
 export const loginName = config.auth.provider === 'lark' ? 'Lark' : config.auth.provider === 'oidc' ? config.oidc.name : config.companyName;
 
 export const paths = {

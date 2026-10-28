@@ -6,7 +6,7 @@
  * it. Only signed-in colleagues get through, so a public app cannot spend the company's credit for strangers.
  */
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { appUrl, config } from './config.ts';
+import { appUrl, config, version } from './config.ts';
 import { decrypt, encrypt } from './crypto.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
 import { UserError } from './i18n/index.ts';
@@ -16,11 +16,13 @@ import { UserError } from './i18n/index.ts';
 export const PRESETS = {
   aisa: {
     label: 'AIsa', baseUrl: `${config.aisaApiBase}/v1`, apisUrl: `${config.aisaApiBase}/apis/v1`,
-    keyUrl: 'https://console.aisa.one/api-keys', docsUrl: 'https://aisa.one/docs/api-reference',
+    keyUrl: 'https://console.aisa.one/api-keys?utm_source=agent-foyer&utm_medium=app', docsUrl: 'https://aisa.one/docs/api-reference',
   },
   openai: { label: 'OpenAI-compatible', baseUrl: '', apisUrl: null, keyUrl: null, docsUrl: null },
 } as const;
 export type Preset = keyof typeof PRESETS;
+/** Sent with every call to the provider, so it can tell that the calls come through Agent Foyer. */
+const USER_AGENT = `agent-foyer/${version}`;
 
 interface Stored { preset: Preset; baseUrl: string; apisUrl: string | null; status?: string; checkedAt?: number; models?: string[] }
 export interface Limits { perAppPerDay: number; perPersonPerDay: number }
@@ -78,7 +80,7 @@ const normaliseBase = (u: string) => {
 async function listModels(baseUrl: string, key: string): Promise<string[]> {
   let res: Response;
   try {
-    res = await fetch(`${baseUrl}/models`, { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(20_000) });
+    res = await fetch(`${baseUrl}/models`, { headers: { authorization: `Bearer ${key}`, 'user-agent': USER_AGENT }, signal: AbortSignal.timeout(20_000) });
   } catch (e) {
     throw new UserError('err.ai.unreachable', { detail: (e as Error).message });
   }
@@ -225,6 +227,7 @@ export async function handleAppAi(app: App, user: User | undefined, fromBrowser:
       method: req.method,
       headers: {
         authorization: `Bearer ${key}`,
+        'user-agent': USER_AGENT,
         ...(req.headers['content-type'] ? { 'content-type': String(req.headers['content-type']) } : {}),
         accept: String(req.headers.accept ?? '*/*'),
       },

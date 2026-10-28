@@ -99,7 +99,7 @@ data, papers. When an agent builds an app that needs it, the app calls that API 
 or rebuilds the data, and nobody signs up with each provider one by one. So the hub gives what agents build a resource
 layer:
 - **Models and data APIs on one key.** Pick a provider on the admin page: an AI resource platform such as
-  [AIsa](https://aisa.one), where one key covers 100+ models and thousands of data APIs (search, X, Similarweb,
+  [AIsa](https://aisa.one/?utm_source=agent-foyer&utm_medium=readme), where one key covers 100+ models and thousands of data APIs (search, X, Similarweb,
   finance, papers, scraping…), or, for models only, any OpenAI-compatible service (OpenAI, OpenRouter, your own
   gateway…). Each provider is a small preset in `server/ai.ts`, so others like it are easy to add.
 - **Ready for what agents build.** Apps call models at `/__hub/ai/v1/…` (OpenAI-compatible, streaming included) and data
@@ -202,7 +202,8 @@ Everyone else connects from the hub itself: the **Me** page has a sentence to co
 address and how to sign in, and the agent connects itself.
 
 Give apps models and data APIs: on the admin page, under **AI resources**, pick a provider: AIsa (one key for models
-and data APIs, from [console.aisa.one](https://console.aisa.one/api-keys)) or any OpenAI-compatible address and key.
+and data APIs, from [console.aisa.one](https://console.aisa.one/api-keys?utm_source=agent-foyer&utm_medium=readme)) or any OpenAI-compatible address and key.
+Calls to the provider carry `User-Agent: agent-foyer/<version>`.
 
 Apps run at `http://<slug>.apps.localhost:8080` (Chrome and curl resolve `*.localhost`). Container apps need Docker.
 
@@ -234,7 +235,7 @@ All in `.env` (see [.env.example](.env.example)); the AI provider and data conne
 | `DEFAULT_LOCALE` | the language for people who have not picked one |
 
 The default theme (tokens, components, charts and fonts in `web/src/brand/`) comes from the
-[AIsa](https://aisa.one) design system: a complete design system out of the box, which agents follow when they build
+[AIsa](https://aisa.one/?utm_source=agent-foyer&utm_medium=readme) design system: a complete design system out of the box, which agents follow when they build
 pages and apps. Recolour it with `HUB_ACCENT` and put your own marks in `HUB_BRAND_DIR`.
 
 ## Layout

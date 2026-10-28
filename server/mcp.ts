@@ -1,7 +1,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
 import { z } from 'zod';
-import { appUrl, config } from './config.ts';
+import { appUrl, config, version as hubVersion } from './config.ts';
 import { messenger } from './notify.ts';
 import { all, get, run, type User } from './db.ts';
 import { sha256 } from './crypto.ts';
@@ -98,7 +98,7 @@ const versions = new WeakMap<McpServer, string>();
 export const surfaceVersion = (server: McpServer) => versions.get(server) ?? '';
 
 export function buildMcpServer(user: User, clientId?: string): McpServer {
-  const server = new McpServer({ name: config.mcpName, version: '0.1.0' }, { instructions: INSTRUCTIONS });
+  const server = new McpServer({ name: config.mcpName, version: hubVersion }, { instructions: INSTRUCTIONS });
   const surface: string[] = [INSTRUCTIONS];
   const register = server.registerTool.bind(server);
   server.registerTool = ((name: string, def: { description?: string; inputSchema?: z.ZodRawShape }, cb: never) => {

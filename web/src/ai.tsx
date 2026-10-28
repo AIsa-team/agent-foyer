@@ -52,7 +52,7 @@ export function AiSection() {
         <button className="btn primary" type="button" disabled={busy || (!key.trim() && !(p?.keySet && p.preset === preset)) || (preset === 'openai' && !baseUrl.trim())} onClick={save}>{t('ai.test')}</button>
         {p && <button className="btn ghost" type="button" onClick={() => setEditing(false)}>{t('common.cancel')}</button>}
       </div>
-      {chosen.keyUrl && <p className="small muted" style={{ margin: 0 }}>{t('ai.getKey')} <a href={chosen.keyUrl} target="_blank" rel="noreferrer">{chosen.keyUrl.replace(/^https:\/\//, '')}</a></p>}
+      {chosen.keyUrl && <p className="small muted" style={{ margin: 0 }}>{t('ai.getKey')} <a href={chosen.keyUrl} target="_blank" rel="noreferrer">{chosen.keyUrl.replace(/^https:\/\/|\?.*$/g, '')}</a></p>}
     </div>
   );
   return (
