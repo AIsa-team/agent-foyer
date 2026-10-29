@@ -206,3 +206,7 @@ pnpm smoke          # 对正在运行的中台跑核心端到端测试：pnpm sm
 ## 许可证
 
 [Apache-2.0](LICENSE)。仓库附带的 Inter、JetBrains Mono 和 Plus Jakarta Sans 字体采用 SIL Open Font License 1.1，文件在 `web/src/brand/`。
+
+## Community
+
+感谢 [LINUX DO](https://linux.do) 社区提供开放友好的技术讨论平台。

@@ -274,3 +274,7 @@ take on that idea, written from scratch and opened up for anyone who works with 
 
 [Apache-2.0](LICENSE). Bundled fonts (Inter, JetBrains Mono, Plus Jakarta Sans) are under the SIL Open Font License
 1.1, see `web/src/brand/`.
+
+## Community
+
+Thanks to the [LINUX DO](https://linux.do) community for an open and friendly place to talk about technology.
