@@ -178,7 +178,7 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
   server.registerTool('send_lark_message', {
-    description: 'Sends a Lark text message as the user (colleagues see it from them), only if the user turned this on on their Me page. Two steps: call with to and text to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues, text only (links are fine).',
+    description: 'Sends a Lark text message as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Two steps: call with to and text to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues, text only (links are fine).',
     inputSchema: {
       to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
       text: z.string().optional(),

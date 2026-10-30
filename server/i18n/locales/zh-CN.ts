@@ -291,7 +291,7 @@ const zhCN = {
   'err.calendar.denied': 'Lark 不允许读取这个日历。',
   'err.calendar.none': '没有找到你的 Lark 日历。',
   'err.calendar.badRange': 'from 和 to 是日期（YYYY-MM-DD），to 不能早于 from，最多相隔 31 天。',
-  'err.messages.off': '你还没有开启「替我发消息」。在中台「我的」页面打开它，Agent 才能用你的身份发 Lark 消息：{url}',
+  'err.messages.off': '你还没有开启「替我发消息」。在中台「我的」页面的 Lark 数据卡片里打开它，Agent 才能用你的身份发 Lark 消息：{url}',
   'err.messages.scope': '要用你的身份发 Lark 消息，需要你在 Lark 里授权一次：{url}\n如果授权页没有这项权限，请管理员先在 Lark 开发者后台开通 im:message 和 im:message.send_as_user。{detail}',
   'err.messages.empty': '请给出收件人和消息内容。',
   'err.messages.tooLong': '一条消息最多 {text} 个字、最多发给 {to} 个人。',

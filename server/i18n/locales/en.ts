@@ -293,7 +293,7 @@ const en: Record<MessageKey, string> = {
   'err.calendar.denied': 'Lark did not allow reading this calendar.',
   'err.calendar.none': 'No Lark calendar found for you.',
   'err.calendar.badRange': 'from and to are dates (YYYY-MM-DD), to not before from, at most 31 days apart.',
-  'err.messages.off': 'Sending messages as you is off. Turn it on on your Me page in the hub so your agent can send Lark messages as you: {url}',
+  'err.messages.off': 'Sending messages as you is off. Turn it on in the Lark data card on your Me page in the hub so your agent can send Lark messages as you: {url}',
   'err.messages.scope': 'To send Lark messages as you, allow it once in Lark: {url}\nIf that page does not offer it, an admin first enables im:message and im:message.send_as_user in the Lark developer console. {detail}',
   'err.messages.empty': 'Give the recipients and the text.',
   'err.messages.tooLong': 'A message is at most {text} characters, to at most {to} people.',

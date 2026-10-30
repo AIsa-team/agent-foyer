@@ -156,6 +156,8 @@ code, pre, .mono { font-family: var(--aisa-font-mono); font-size: 12.5px; }
 .conn-card__title { display: flex; align-items: center; gap: 8px; font-weight: 600; min-width: 0; }
 .conn-logo { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px; background: #fff; border: 1px solid var(--line); }
 .conn-logo img { width: 20px; height: 20px; object-fit: contain; }
+.conn-card__feature { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
+.conn-card__feature .aisa-switch { font-size: 13px; font-weight: 500; }
 .conn-card .app-icon { width: 32px; height: 32px; border-radius: 8px; font-size: 14px; }
 .link-tile { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
 .link-tile .emoji { font-size: 20px; width: 28px; text-align: center; }
