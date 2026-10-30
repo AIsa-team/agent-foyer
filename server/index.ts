@@ -26,6 +26,7 @@ import { startConnectorRefresher } from './data/sources.ts';
 import { startBoardSync } from './data/importBoard.ts';
 import { run, now } from './db.ts';
 import { pruneReads } from './cache.ts';
+import { fetchMessageFile } from './lark/reading.ts';
 
 seedDevUsers();
 reconcileInterruptedBuilds();
@@ -61,6 +62,9 @@ app.put('/upload/:id', async (c) => {
   if (!r.ok) return c.json({ error: r.error }, r.status as 400);
   return c.json({ ok: true, upload_id: c.req.param('id'), bytes: r.size });
 });
+
+// a file from a Lark message, fetched as the person a read_lark_messages link was made for (lark/reading.ts)
+app.get('/lark-file/:message/:key', (c) => fetchMessageFile(c.req.param('message'), c.req.param('key'), new URL(c.req.url).searchParams));
 
 app.get('/skills/:slug/:file{v[0-9]+\\.tgz}', (c) => {
   const slug = c.req.param('slug');

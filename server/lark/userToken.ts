@@ -79,12 +79,24 @@ export async function userAccessToken(user: Pick<User, 'id'>, force = false): Pr
 }
 
 /**
+ * What a person's access may do in Lark's messaging API: send messages and the files in them (lark/messages.ts), and,
+ * only while they keep reading turned on (lark/reading.ts), read a conversation, find their chats and fetch files from
+ * messages. Everything else under /im/ is refused, whatever the person allowed in Lark.
+ */
+export function imAllowed(userId: string, path: string, method = 'GET'): boolean {
+  if (!path.startsWith('/im/')) return true;
+  if (method === 'POST' && (path.startsWith('/im/v1/messages?') || path === '/im/v1/files')) return true;
+  const read = (method === 'GET' && (/^\/im\/v1\/messages\?/.test(path) || /^\/im\/v1\/messages\/[^/?]+\/resources\/[^/?]+\?/.test(path) || path.startsWith('/im/v1/chats/search?')))
+    || (method === 'POST' && path.startsWith('/im/v1/chat_p2p/batch_query?'));
+  return read && !!get<{ read_as_me: number }>('SELECT read_as_me FROM users WHERE id = ?', userId)?.read_as_me;
+}
+
+/**
  * Calls Lark as the person. If Lark rejects the access token, it is refreshed once and the call retried; only when
  * that fails too is the connection dropped (the person is asked to connect again).
  */
 export async function asUser<T>(user: Pick<User, 'id'>, path: string, init: RequestInit = {}): Promise<T> {
-  // a person's access only ever sends messages (lark/messages.ts): the hub never reads anyone's chats with it
-  if (path.startsWith('/im/') && !(path.startsWith('/im/v1/messages?') && init.method === 'POST')) throw new Error(`refusing ${path.split('?')[0]} with a person's Lark access`);
+  if (!imAllowed(user.id, path, init.method ?? 'GET')) throw new Error(`refusing ${path.split('?')[0]} with a person's Lark access`);
   try {
     return await larkFetch<T>(path, { ...init, token: await userAccessToken(user) });
   } catch (e) {

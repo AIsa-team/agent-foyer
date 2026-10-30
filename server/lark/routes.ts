@@ -18,6 +18,7 @@ import * as okrBoard from './okrBoard.ts';
 import { botChats } from './chats.ts';
 import { calendarAppUrl, calendarEvents, today as calendarToday } from './calendar.ts';
 import { messagesStatus, setMessagesOn } from './messages.ts';
+import { readingStatus, setReadingOn } from './reading.ts';
 
 export const larkApi = new Hono<HubEnv>();
 
@@ -49,6 +50,13 @@ larkApi.post('/lark/messages', async (c) => {
   const b = await body<{ on?: boolean }>(c);
   setMessagesOn(c.get('user'), b.on === true);
   return c.json(messagesStatus(c.get('user')));
+});
+/** Reading Lark messages as the person, for their agent: also their own switch, off until they turn it on. */
+larkApi.get('/lark/reading', (c) => c.json(readingStatus(c.get('user'))));
+larkApi.post('/lark/reading', async (c) => {
+  const b = await body<{ on?: boolean }>(c);
+  setReadingOn(c.get('user'), b.on === true);
+  return c.json(readingStatus(c.get('user')));
 });
 
 /** The company OKR page: everyone's objectives for a period, how they align, and the team's pace. */

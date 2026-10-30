@@ -19,7 +19,8 @@ export const TOKEN_CODES = new Set([99991668, 99991663, 99991677, 20005, 20026, 
 
 export async function larkFetch<T>(path: string, init: RequestInit & { token?: string } = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  headers.set('Content-Type', 'application/json; charset=utf-8');
+  // a FormData body (file uploads) sets its own multipart content type
+  if (!(init.body instanceof FormData)) headers.set('Content-Type', 'application/json; charset=utf-8');
   if (init.token) headers.set('Authorization', `Bearer ${init.token}`);
   const res = await fetch(config.lark.apiBase + path, { ...init, headers, signal: init.signal ?? AbortSignal.timeout(20_000) });
   const body = (await res.json().catch(() => ({ code: res.status, msg: `HTTP ${res.status}` }))) as { code: number; msg?: string; error_description?: string } & T;

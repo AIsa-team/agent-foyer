@@ -9,7 +9,8 @@ import { all, get, now, run } from './db.ts';
 
 const UPLOAD_TTL = 30 * 60 * 1000;
 
-export type UploadPurpose = 'app' | 'skill' | 'source';
+/** file: one file as it is (not a tarball), sent in a Lark message (lark/messages.ts). */
+export type UploadPurpose = 'app' | 'skill' | 'source' | 'file';
 
 export function createUpload(userId: string, purpose: UploadPurpose) {
   const id = 'up_' + randomToken(9);
@@ -46,6 +47,15 @@ export async function receiveUpload(id: string, token: string, body: ReadableStr
   }
   run("UPDATE uploads SET status = 'received', size = ? WHERE id = ?", size, id);
   return { ok: true, size };
+}
+
+/** The size of a received upload that is not used yet, without using it (to check it before sending). */
+export function peekUpload(id: string, userId: string, purpose: UploadPurpose): number {
+  const row = get<{ user_id: string; status: string; purpose: string; size: number | null }>('SELECT * FROM uploads WHERE id = ?', id);
+  if (!row || row.user_id !== userId || row.purpose !== purpose) throw new Error(`upload ${id} not found`);
+  if (row.status === 'pending') throw new Error(`upload ${id} has not received any file yet — run the curl upload command first`);
+  if (row.status === 'used') throw new Error(`upload ${id} was already used — create a new upload`);
+  return row.size ?? 0;
 }
 
 /** Marks a received upload as used and returns its file path. */

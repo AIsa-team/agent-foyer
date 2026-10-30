@@ -52,7 +52,7 @@ function LarkDataCard() {
     if (confirm(t('me.lark.disconnectConfirm'))) run(() => api.post('/lark/disconnect'), t('me.lark.disconnected')).then(reload);
   };
   return (
-    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.lark.title')} connected={data.connected} extra={data.connected && <SendAsMe />}
+    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.lark.title')} connected={data.connected} extra={data.connected && <><LarkFeature path="/lark/messages" kind="messages" /><LarkFeature path="/lark/reading" kind="reading" /></>}
       action={data.connected
         ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.lark.disconnect')}</button>
         : <a className="btn sm primary" href={data.connectUrl}>{t('me.lark.connect')}</a>}>
@@ -61,26 +61,27 @@ function LarkDataCard() {
   );
 }
 
-/** A feature of the Lark connection: their agents sending Lark messages as them, off until they switch it on. */
-function SendAsMe() {
+/** Features of the Lark connection each person switches on themselves: their agents sending, and reading, Lark messages as them. */
+function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading' }) {
   const { t } = useI18n();
-  const { data, reload } = useApi<{ on: boolean; granted: boolean; connectUrl: string; sentThisWeek: number }>('/lark/messages');
+  const { data, reload } = useApi<{ on: boolean; granted: boolean; connectUrl: string; sentThisWeek?: number; readsThisWeek?: number }>(path);
   const { busy, run } = useAction();
   if (!data) return null;
+  const k = (key: string) => `me.${kind}.${key}` as MessageKey;
   const toggle = (on: boolean) => run(async () => {
-    const s = await api.post<{ granted: boolean; connectUrl: string }>('/lark/messages', { on });
+    const s = await api.post<{ granted: boolean; connectUrl: string }>(path, { on });
     if (on && !s.granted) location.href = s.connectUrl;
     else reload();
-  }, on ? undefined : t('me.messages.turnedOff'));
+  }, on ? undefined : t(k('turnedOff')));
   return (
     <div className="conn-card__feature">
       <label className="aisa-switch">
         <input type="checkbox" checked={data.on} disabled={busy} onChange={(e) => void toggle(e.target.checked)} />
-        <span>{t('me.messages.title')}</span>
+        <span>{t(k('title'))}</span>
       </label>
       <p className="small muted" style={{ margin: 0 }}>
-        {!data.on ? t('me.messages.body') : data.granted ? t('me.messages.onBody', { n: data.sentThisWeek })
-          : <>{t('me.messages.allowBody')} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>}
+        {!data.on ? t(k('body')) : data.granted ? t(k('onBody'), { n: data.sentThisWeek ?? data.readsThisWeek ?? 0 })
+          : <>{t(k('allowBody'))} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>}
       </p>
     </div>
   );

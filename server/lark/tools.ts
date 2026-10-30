@@ -18,7 +18,8 @@ import * as workspace from './workspace.ts';
 import { inspect } from './baseSource.ts';
 import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
-import { prepareMessage, sendPrepared } from './messages.ts';
+import { prepareMessage, sendPrepared, type FileRef } from './messages.ts';
+import { findChats, readMessages } from './reading.ts';
 
 /** What a group of tools needs from the server being built: the person, their language and the result wrapper. */
 export interface ToolKit {
@@ -178,11 +179,29 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
   server.registerTool('send_lark_message', {
-    description: 'Sends a Lark text message as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Two steps: call with to and text to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues, text only (links are fine).',
+    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Two steps: call with to, text and/or file to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues. For a file (at most 30 MB): create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}.',
     inputSchema: {
       to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
       text: z.string().optional(),
+      file: z.object({ upload_id: z.string(), name: z.string().describe('the file name the recipients see, e.g. 报价单.pdf') }).optional(),
       confirm: z.string().optional().describe('the code from the preview, once the user agreed'),
     },
-  }, guard((a: { to?: string[]; text?: string; confirm?: string }) => (a.confirm ? sendPrepared(user, a.confirm) : prepareMessage(user, resolveColleagues(a.to ?? []), a.text ?? ''))));
+  }, guard((a: { to?: string[]; text?: string; file?: FileRef; confirm?: string }) =>
+    (a.confirm ? sendPrepared(user, a.confirm) : prepareMessage(user, resolveColleagues(a.to ?? []), a.text ?? '', a.file ?? null, locale))));
+
+  server.registerTool('read_lark_messages', {
+    description: 'Reads one Lark conversation as the user, only if they turned reading on (Me page, Lark data card): their direct chat with a colleague (e.g. what they replied) or a group chat (chat_id from find_lark_chat). Recent messages, oldest first, with sender, time (company time zone) and text; files and images come with a download link valid 10 minutes. Read only the conversation the user asked about.',
+    inputSchema: {
+      colleague: z.string().optional().describe('the colleague of a direct chat: email, name or open_id'),
+      chat_id: z.string().optional().describe('a group chat, from find_lark_chat'),
+      hours: z.number().positive().max(24 * 90).optional().describe('only messages from the last this many hours'),
+      limit: z.number().int().min(1).max(100).optional().describe('most recent messages to read, default 30'),
+    },
+  }, guard((a: { colleague?: string; chat_id?: string; hours?: number; limit?: number }) =>
+    readMessages(user, { ...a, colleague: a.colleague ? resolveColleagues([a.colleague])[0] : undefined })));
+
+  server.registerTool('find_lark_chat', {
+    description: 'Finds Lark group chats the user is in (or may see) by a word in their name or a member\'s name, as the user, only if they turned reading on. Returns chat_id and name for read_lark_messages.',
+    inputSchema: { query: z.string().describe('part of the group name, or a member\'s name') },
+  }, guard((a: { query: string }) => findChats(user, a.query)));
 }

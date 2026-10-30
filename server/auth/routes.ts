@@ -16,7 +16,8 @@ import { MAIL_SCOPES } from '../lark/mail.ts';
 import { DOCS_SCOPES, SEARCH_SCOPE, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
 import { CALENDAR_SCOPE } from '../lark/calendar.ts';
 import { SHEETS_SCOPE } from '../lark/sheets.ts';
-import { MESSAGE_SCOPES, messagesOn } from '../lark/messages.ts';
+import { FILE_SCOPE, MESSAGE_SCOPES, messagesOn } from '../lark/messages.ts';
+import { READ_SCOPES, readingOn } from '../lark/reading.ts';
 import { mailboxName, mailConnectUrl } from '../mail.ts';
 import { finishGoogleConnect, googleAuthorize } from '../google/auth.ts';
 import { finishGitHubLink, githubAuthorizeUrl } from '../github/link.ts';
@@ -72,7 +73,7 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const state = randomToken(16);
   setCookie(c, STATE_COOKIE, `${state}|${encodeURIComponent(ret)}|connect`, { ...cookieOpts, maxAge: 600 });
   // keep write, document, wiki, mail, calendar and search access when reconnecting someone who already granted it,
-  // and sending messages as them while they keep it on
+  // and sending and reading messages as them while they keep those on
   const had = connection(user.id).scopes ?? [];
   const write = c.req.query('write') === '1' || had.includes(WRITE_SCOPE);
   const docs = c.req.query('docs') === '1' || DOCS_SCOPES.some((s) => had.includes(s));
@@ -82,7 +83,9 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const calendar = c.req.query('calendar') === '1' || had.includes(CALENDAR_SCOPE);
   const search = c.req.query('search') === '1' || had.includes(SEARCH_SCOPE);
   const messages = (c.req.query('messages') === '1' || MESSAGE_SCOPES.every((s) => had.includes(s))) && messagesOn(user.id);
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : []), ...(search ? [SEARCH_SCOPE] : []), ...(messages ? MESSAGE_SCOPES : [])];
+  const files = messages && (c.req.query('files') === '1' || had.includes(FILE_SCOPE));
+  const reading = (c.req.query('reading') === '1' || READ_SCOPES.every((s) => had.includes(s))) && readingOn(user.id);
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : []), ...(search ? [SEARCH_SCOPE] : []), ...(messages ? MESSAGE_SCOPES : []), ...(files ? [FILE_SCOPE] : []), ...(reading ? READ_SCOPES : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 

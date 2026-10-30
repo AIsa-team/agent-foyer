@@ -613,6 +613,11 @@ const MIGRATIONS: string[] = [
   ALTER TABLE users ADD COLUMN send_as_me INTEGER NOT NULL DEFAULT 0;
   CREATE TABLE lark_sent (user_id TEXT NOT NULL, to_id TEXT NOT NULL, at INTEGER NOT NULL);
   CREATE INDEX lark_sent_user ON lark_sent (user_id, at);
+  `,  // conversations people's agents read as them (lark/reading.ts): which one and when, never the messages
+  `
+  ALTER TABLE users ADD COLUMN read_as_me INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE lark_reads (user_id TEXT NOT NULL, chat_id TEXT NOT NULL, at INTEGER NOT NULL);
+  CREATE INDEX lark_reads_user ON lark_reads (user_id, at);
   `,
 ];
 

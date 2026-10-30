@@ -96,6 +96,10 @@ const lark = {
   refreshes: 0,
   messages: [] as { type: string; id: string; text: string; as?: 'bot' | 'user' }[],
   sendTokens: new Set<string>(),
+  fileTokens: new Set<string>(),
+  readTokens: new Set<string>(),
+  messageReads: [] as { chat: string; size: number }[],
+  uploads: [] as { name: string; key: string; as: 'bot' | 'user'; bytes: string }[],
   scopesAsked: '',
   drafts: [] as string[],
   gmail: [] as string[],
@@ -174,6 +178,8 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('search:docs:read')) lark.searchTokens.add(a);
   if (['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.sendTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('im:resource')) lark.fileTokens.add(a);
+  if (['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user', 'im:chat:read'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.readTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -480,7 +486,8 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     lark.gmail.push(Buffer.from((JSON.parse(raw) as { message: { raw: string } }).message.raw, 'base64url').toString('utf8'));
     return send({ id: `r-${lark.gmail.length}`, message: { id: `m-${lark.gmail.length}` } });
   }
-  const body = raw ? JSON.parse(raw) : {};
+  // file uploads are multipart, not JSON
+  const body = (req.headers['content-type'] ?? '').startsWith('multipart/') ? {} : raw ? JSON.parse(raw) : {};
   const bearer = (req.headers.authorization ?? '').replace('Bearer ', '');
   const userOk = () => lark.access.has(bearer);
 
@@ -504,11 +511,50 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   if (p === '/authen/v1/user_info') return userOk() ? send({ code: 0, data: { open_id: 'ou_dev_alex', name: 'Alex' } }) : send({ code: 99991668, msg: 'bad token' });
   if (p === '/auth/v3/tenant_access_token/internal') return send({ code: 0, tenant_access_token: 't-app', expire: 7200 });
   if (p === '/im/v1/chats') return bearer === 't-app' ? send({ code: 0, data: { items: [{ chat_id: 'oc_dev', name: '开发群' }, { chat_id: 'oc_finance', name: '财务' }], has_more: false } }) : send({ code: 99991663, msg: 'bad tenant token' });
+  // reading as the person, who allowed it: their direct chat with Bob, a group, and a file Bob sent
+  const readScope = () => send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.p2p_msg:get_as_user]' });
+  if (p === '/im/v1/chats/search' && req.method === 'GET') {
+    if (!lark.readTokens.has(bearer)) return readScope();
+    const q = url.searchParams.get('query') ?? '';
+    return send({ code: 0, data: { items: [{ chat_id: 'oc_dev', name: '开发群' }, { chat_id: 'oc_finance', name: '财务' }].filter((c) => c.name.includes(q)), has_more: false } });
+  }
+  if (p === '/im/v1/chat_p2p/batch_query' && req.method === 'POST') {
+    if (!lark.readTokens.has(bearer)) return readScope();
+    return send({ code: 0, data: { p2p_chats: (body.chatter_ids as string[]).includes('ou_dev_bob') ? [{ chat_id: 'oc_p2p_bob', chatter_id: 'ou_dev_bob' }] : [] } });
+  }
+  if (p === '/im/v1/messages' && req.method === 'GET') {
+    if (!lark.readTokens.has(bearer)) return readScope();
+    const chat = url.searchParams.get('container_id')!;
+    const size = Number(url.searchParams.get('page_size'));
+    lark.messageReads.push({ chat, size });
+    const msg = (id: string, at: number, type: string, content: object, extra = {}) =>
+      ({ message_id: id, msg_type: type, create_time: String(at), sender: { id: 'ou_dev_bob', id_type: 'open_id', sender_type: 'user' }, body: { content: JSON.stringify(content) }, ...extra });
+    const items = chat === 'oc_p2p_bob'
+      ? [msg('om_3', 1_790_000_300_000, 'file', { file_key: 'file_c1', file_name: '合同.pdf' }), msg('om_2', 1_790_000_200_000, 'text', { text: '@_user_1 周三见' }, { mentions: [{ key: '@_user_1', name: 'Alex' }] }),
+        msg('om_1', 1_790_000_100_000, 'text', { text: '报价单收到了' })]
+      : [1, 2, 3, 4, 5].map((i) => msg(`og_${i}`, 1_790_000_000_000 - i * 1000, 'text', { text: `群消息 ${i}` }));
+    return send({ code: 0, data: { items: items.slice(0, size), has_more: false } });
+  }
+  if (p === '/im/v1/messages/om_3/resources/file_c1' && req.method === 'GET') {
+    if (!lark.readTokens.has(bearer)) return readScope();
+    res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-disposition': "attachment; filename*=UTF-8''%E5%90%88%E5%90%8C.pdf" });
+    return res.end('CONTRACT');
+  }
+  // a file to send in a chat: as the person, who allowed uploading files
+  if (p === '/im/v1/files' && req.method === 'POST') {
+    if (!userOk()) return send({ code: 99991663, msg: 'bad token' });
+    if (!lark.fileTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:resource]' });
+    const field = (name: string) => raw.match(new RegExp(`name="${name}"(?:; filename="[^"]*")?\\r\\n(?:Content-Type: [^\\r]*\\r\\n)?\\r\\n([^\\r]*)`))?.[1] ?? '';
+    const key = `file_v3_${lark.uploads.length + 1}`;
+    lark.uploads.push({ name: field('file_name'), key, as: 'user', bytes: field('file') });
+    return send({ code: 0, data: { file_key: key } });
+  }
   if (p === '/im/v1/messages') {
     // the bot, or a person who allowed the hub to send as them
     if (bearer !== 't-app' && !userOk()) return send({ code: 99991663, msg: 'bad tenant token' });
     if (bearer !== 't-app' && !lark.sendTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.send_as_user]' });
-    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text, as: bearer === 't-app' ? 'bot' : 'user' });
+    const content = JSON.parse(body.content);
+    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: content.file_key ? `[file:${content.file_key}]` : content.text, as: bearer === 't-app' ? 'bot' : 'user' });
     return send({ code: 0, data: {} });
   }
   if (p.startsWith('/sheets/')) {
@@ -2375,19 +2421,68 @@ try {
     await connect(alex.jar, '&messages=1');
     check(['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'allowing it asks Lark to send as them');
     const preview = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
-    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === '会议改到三点' && !!preview.confirm && lark.messages.length === before, 'the first call only shows who gets what');
+    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n———— Sent by Alex's AI twin" && !!preview.confirm && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
+    const bobLocale = (fsDb.prepare("SELECT locale FROM users WHERE id = 'ou_dev_bob'").get() as { locale: string | null }).locale;
+    fsDb.prepare("UPDATE users SET locale = 'zh-CN' WHERE id = 'ou_dev_bob'").run();
     const sent = await tool(alex.token, 'send_lark_message', { confirm: preview.confirm });
     const m = lark.messages.at(-1)!;
-    check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text === '会议改到三点' && m.as === 'user', 'the code sends exactly that, as the person');
+    check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text.startsWith('会议改到三点\n') && m.as === 'user', 'the code sends exactly that, as the person');
+    check(m.text === '会议改到三点\n———— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language');
+    fsDb.prepare('UPDATE users SET locale = ? WHERE id = ?').run(bobLocale, 'ou_dev_bob');
     check(!!(await tool(alex.token, 'send_lark_message', { confirm: preview.confirm })).error && lark.messages.length === before + 1, 'a code sends once');
     check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
+    // a file, uploaded as it is, then sent before the text
+    const up = await tool(alex.token, 'create_upload', { purpose: 'file' });
+    check((await fetch(up.upload_url, { method: 'PUT', body: 'PDF-BYTES' })).ok && String(up.command).includes('--data-binary @<FILE>'), 'a file is uploaded as it is');
+    const quote = { upload_id: up.upload_id, name: '报价单.pdf' };
+    check(String((await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '报价单在这', file: quote })).error).includes('files=1'), 'the first file asks the person to allow uploading files');
+    await connect(alex.jar, '&files=1');
+    check(['im:resource', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'which is asked for on top of sending messages');
+    const withFile = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '报价单在这', file: quote });
+    check(withFile.preview?.file?.name === '报价单.pdf' && withFile.preview.file.bytes === 9 && String(withFile.preview.text).endsWith('AI twin'), 'the preview shows the file and the signed text');
+    const n = lark.messages.length;
+    const sentFile = await tool(alex.token, 'send_lark_message', { confirm: withFile.confirm });
+    const [f, t] = lark.messages.slice(n);
+    const upload = lark.uploads.at(-1)!;
+    check(sentFile.file === '报价单.pdf' && upload.name === '报价单.pdf' && upload.bytes === 'PDF-BYTES' && f?.text === `[file:${upload.key}]` && f.as === 'user' && t?.text.startsWith('报价单在这\n') && t.as === 'user',
+      'the file goes up to Lark as the person and arrives before the signed text');
+    check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: quote })).error, 'an uploaded file is sent once');
     await connect(alex.jar);
-    check(lark.scopesAsked.split(' ').includes('im:message.send_as_user'), 'reconnecting Lark keeps it while it is on');
+    check(['im:message.send_as_user', 'im:resource'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'reconnecting Lark keeps it while it is on');
     const pendingOne = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'hi' });
+    const count = lark.messages.length;
     await api(alex.jar, 'POST', '/lark/messages', { on: false });
-    check(!!(await tool(alex.token, 'send_lark_message', { confirm: pendingOne.confirm })).error && lark.messages.length === before + 1, 'turning it off stops a message that was waiting for the go-ahead');
+    check(!!(await tool(alex.token, 'send_lark_message', { confirm: pendingOne.confirm })).error && lark.messages.length === count, 'turning it off stops a message that was waiting for the go-ahead');
     await connect(alex.jar);
-    check(!lark.scopesAsked.split(' ').includes('im:message.send_as_user'), 'and reconnecting no longer asks for it');
+    check(!['im:message.send_as_user', 'im:resource'].some((s) => lark.scopesAsked.split(' ').includes(s)), 'and reconnecting no longer asks for it');
+  }
+
+  // ---------------------------------------------------------------- Lark messages read as the person, once they turn it on
+  {
+    check(String((await tool(alex.token, 'read_lark_messages', { colleague: 'ou_dev_bob' })).error).includes('/me'), 'reading messages is off until the person turns it on');
+    const on = await api(alex.jar, 'POST', '/lark/reading', { on: true });
+    check(on.body.on === true && on.body.granted === false && String(on.body.connectUrl).includes('reading=1'), 'turning it on sends them to allow it in Lark');
+    await connect(alex.jar, '&reading=1');
+    check(['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user', 'im:chat:read'].every((s) => lark.scopesAsked.split(' ').includes(s)),
+      'allowing it asks Lark to read messages and find chats as them');
+    type Read = { chat_id: string; messages: { from: string; text: string; time: string; file?: { name?: string; download: string } }[] };
+    const dm = await tool(alex.token, 'read_lark_messages', { colleague: 'ou_dev_bob' }) as Read;
+    check(dm.chat_id === 'oc_p2p_bob' && dm.messages.map((m) => m.text).join('|') === '报价单收到了|@Alex 周三见|[file: 合同.pdf]' && dm.messages[0].from === '周明' && /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/.test(dm.messages[0].time),
+      "a colleague's direct chat, oldest first, with who said what and when");
+    const link = dm.messages[2].file!.download;
+    const file = await fetch(link);
+    check(file.ok && (await file.text()) === 'CONTRACT' && String(file.headers.get('content-disposition')).includes('filename'), 'a file someone sent comes through a short-lived link, as it is');
+    check((await fetch(link.replace(/t=[^&]+/, 't=x'))).status === 403, 'and only with that link');
+    const groups = await tool(alex.token, 'find_lark_chat', { query: '开发' }) as { chats: { chat_id: string; name: string }[] };
+    check(groups.chats.length === 1 && groups.chats[0].chat_id === 'oc_dev', 'group chats are found by name');
+    const grp = await tool(alex.token, 'read_lark_messages', { chat_id: 'oc_dev', limit: 2 }) as Read;
+    check(grp.messages.length === 2 && lark.messageReads.at(-1)?.chat === 'oc_dev' && lark.messageReads.at(-1)?.size === 2, 'a group reads only as many recent messages as asked');
+    check((await api(alex.jar, 'GET', '/lark/reading')).body.readsThisWeek === 2 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_reads').all()).includes('周三'),
+      'the hub counts which conversation was read, never the messages');
+    await api(alex.jar, 'POST', '/lark/reading', { on: false });
+    check(!!(await tool(alex.token, 'read_lark_messages', { colleague: 'ou_dev_bob' })).error && (await fetch(link)).status === 403, 'turning it off stops reading, file links included');
+    await connect(alex.jar);
+    check(!lark.scopesAsked.split(' ').includes('im:message.p2p_msg:get_as_user'), 'and reconnecting no longer asks for it');
   }
 
   // ---------------------------------------------------------------- a department's page
