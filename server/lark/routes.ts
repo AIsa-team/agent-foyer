@@ -17,6 +17,7 @@ import { userOkrs } from './okr.ts';
 import * as okrBoard from './okrBoard.ts';
 import { botChats } from './chats.ts';
 import { calendarAppUrl, calendarEvents, today as calendarToday } from './calendar.ts';
+import { messagesStatus, setMessagesOn } from './messages.ts';
 
 export const larkApi = new Hono<HubEnv>();
 
@@ -40,6 +41,14 @@ larkApi.post('/lark/disconnect', (c) => {
   forgetReads(`okr-board|${c.get('user').id}|`);
   forgetReads(`calendar|${c.get('user').id}|`);
   return c.json({ ok: true });
+});
+
+/** Sending Lark messages as the person from their agent: their own switch on the Me page, off until they turn it on. */
+larkApi.get('/lark/messages', (c) => c.json(messagesStatus(c.get('user'))));
+larkApi.post('/lark/messages', async (c) => {
+  const b = await body<{ on?: boolean }>(c);
+  setMessagesOn(c.get('user'), b.on === true);
+  return c.json(messagesStatus(c.get('user')));
 });
 
 /** The company OKR page: everyone's objectives for a period, how they align, and the team's pace. */

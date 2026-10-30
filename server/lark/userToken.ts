@@ -83,6 +83,8 @@ export async function userAccessToken(user: Pick<User, 'id'>, force = false): Pr
  * that fails too is the connection dropped (the person is asked to connect again).
  */
 export async function asUser<T>(user: Pick<User, 'id'>, path: string, init: RequestInit = {}): Promise<T> {
+  // a person's access only ever sends messages (lark/messages.ts): the hub never reads anyone's chats with it
+  if (path.startsWith('/im/') && !(path.startsWith('/im/v1/messages?') && init.method === 'POST')) throw new Error(`refusing ${path.split('?')[0]} with a person's Lark access`);
   try {
     return await larkFetch<T>(path, { ...init, token: await userAccessToken(user) });
   } catch (e) {

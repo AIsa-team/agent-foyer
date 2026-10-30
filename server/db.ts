@@ -608,6 +608,11 @@ const MIGRATIONS: string[] = [
   );
   CREATE INDEX ai_usage_app ON ai_usage (app_slug, at);
   CREATE INDEX ai_usage_user ON ai_usage (user_id, at);
+  `,  // Lark messages people's agents sent as them (lark/messages.ts): who and when, never the text
+  `
+  ALTER TABLE users ADD COLUMN send_as_me INTEGER NOT NULL DEFAULT 0;
+  CREATE TABLE lark_sent (user_id TEXT NOT NULL, to_id TEXT NOT NULL, at INTEGER NOT NULL);
+  CREATE INDEX lark_sent_user ON lark_sent (user_id, at);
   `,
 ];
 

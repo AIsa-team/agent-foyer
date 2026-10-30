@@ -10,8 +10,8 @@ interface Profile { apps: AppInfo[]; skills: SkillInfo[]; installedSkills: numbe
 interface LarkStatus { connected: boolean; expired?: boolean; until?: number; connectUrl: string; available: boolean }
 
 /** One thing connected to this person's hub account (a service or an agent), all drawn the same way. */
-function ConnectionCard({ logo, title, connected, detail, action, children }: {
-  logo: ReactNode; title: ReactNode; connected: boolean; detail?: ReactNode; action: ReactNode; children?: ReactNode;
+function ConnectionCard({ logo, title, connected, badge, detail, action, children }: {
+  logo: ReactNode; title: ReactNode; connected: boolean; badge?: string; detail?: ReactNode; action: ReactNode; children?: ReactNode;
 }) {
   const { t } = useI18n();
   return (
@@ -19,7 +19,7 @@ function ConnectionCard({ logo, title, connected, detail, action, children }: {
       <div className="conn-card__head">
         {logo}
         <div className="grow" style={{ minWidth: 0 }}>
-          <div className="conn-card__title">{title}{connected && <span className="badge ok">{t('me.connected')}</span>}</div>
+          <div className="conn-card__title">{title}{connected && <span className="badge ok">{badge ?? t('me.connected')}</span>}</div>
           {detail && <div className="small muted ellipsis">{detail}</div>}
         </div>
         {action}
@@ -56,6 +56,34 @@ function LarkDataCard() {
         ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.lark.disconnect')}</button>
         : <a className="btn sm primary" href={data.connectUrl}>{t('me.lark.connect')}</a>}>
       {t(data.connected ? 'me.lark.connectedBody' : data.expired ? 'me.lark.expiredBody' : 'me.lark.body')}
+    </ConnectionCard>
+  );
+}
+
+/** Their agents sending Lark messages as them: off until they turn it on here, then allowed once in Lark. */
+function MessagesCard() {
+  const { t } = useI18n();
+  const { data, reload } = useApi<{ on: boolean; granted: boolean; connectUrl: string; sentThisWeek: number }>('/lark/messages');
+  const { busy, run } = useAction();
+  if (!data) return null;
+  const turnOn = () => run(async () => {
+    const s = await api.post<{ granted: boolean; connectUrl: string }>('/lark/messages', { on: true });
+    if (s.granted) reload();
+    else location.href = s.connectUrl;
+  });
+  const turnOff = () => run(() => api.post('/lark/messages', { on: false }), t('me.messages.turnedOff')).then(reload);
+  const ready = data.on && data.granted;
+  return (
+    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.messages.title')} connected={ready} badge={t('me.messages.on')}
+      action={!data.on
+        ? <button className="btn sm" disabled={busy} onClick={turnOn} type="button">{t('me.messages.turnOn')}</button>
+        : (
+          <span className="row" style={{ gap: 2 }}>
+            {!data.granted && <a className="btn sm primary" href={data.connectUrl}>{t('me.messages.allow')}</a>}
+            <button className="btn sm ghost danger" disabled={busy} onClick={turnOff} type="button">{t('me.messages.turnOff')}</button>
+          </span>
+        )}>
+      {ready ? t('me.messages.onBody', { n: data.sentThisWeek }) : data.on ? t('me.messages.allowBody') : t('me.messages.body')}
     </ConnectionCard>
   );
 }
@@ -313,6 +341,7 @@ export function MePage() {
       </div>
       <div className="grid wide" style={{ marginTop: 12 }}>
         {me.hub.features.lark && <LarkDataCard />}
+        {me.hub.features.lark && <MessagesCard />}
         {me.hub.mailbox === 'Gmail' && <GoogleCard />}
         <GitHubCard />
         <LinearCard services={services.data?.services ?? null} reload={services.reload} />

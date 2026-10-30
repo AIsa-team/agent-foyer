@@ -94,7 +94,8 @@ const lark = {
   access: new Set<string>(),
   refresh: new Set<string>(),
   refreshes: 0,
-  messages: [] as { type: string; id: string; text: string }[],
+  messages: [] as { type: string; id: string; text: string; as?: 'bot' | 'user' }[],
+  sendTokens: new Set<string>(),
   scopesAsked: '',
   drafts: [] as string[],
   gmail: [] as string[],
@@ -172,6 +173,7 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('search:docs:read')) lark.searchTokens.add(a);
+  if (['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.sendTokens.add(a);
   return { code: 0, access_token: a, expires_in: expiresIn, refresh_token: r, refresh_token_expires_in: 2_592_000, token_type: 'Bearer', scope: lark.scopesAsked };
 }
 
@@ -503,8 +505,10 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   if (p === '/auth/v3/tenant_access_token/internal') return send({ code: 0, tenant_access_token: 't-app', expire: 7200 });
   if (p === '/im/v1/chats') return bearer === 't-app' ? send({ code: 0, data: { items: [{ chat_id: 'oc_dev', name: '开发群' }, { chat_id: 'oc_finance', name: '财务' }], has_more: false } }) : send({ code: 99991663, msg: 'bad tenant token' });
   if (p === '/im/v1/messages') {
-    if (bearer !== 't-app') return send({ code: 99991663, msg: 'bad tenant token' });
-    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text });
+    // the bot, or a person who allowed the hub to send as them
+    if (bearer !== 't-app' && !userOk()) return send({ code: 99991663, msg: 'bad tenant token' });
+    if (bearer !== 't-app' && !lark.sendTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.send_as_user]' });
+    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: JSON.parse(body.content).text, as: bearer === 't-app' ? 'bot' : 'user' });
     return send({ code: 0, data: {} });
   }
   if (p.startsWith('/sheets/')) {
@@ -2358,6 +2362,32 @@ try {
     check(lark.scopesAsked.split(' ').includes('calendar:calendar:readonly'), 'reconnecting Lark keeps calendar reading');
     check(!(await tool(alex.token, 'save_homepage', { scope: 'me', layout: { modules: [{ type: 'agenda', width: 'half' }, { type: 'apps' }] } })).error, 'an agenda module can be put on a home page');
     check(!!(await tool(bob.token, 'list_calendar_events')).error && lark.calendarQueries.length === 4, 'someone else is asked for their own permission, never shown Alex\'s calendar');
+  }
+
+  // ---------------------------------------------------------------- Lark messages sent as the person, once they turn it on
+  {
+    const before = lark.messages.length;
+    const off = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
+    check(String(off.error).includes('/me') && lark.messages.length === before && (await api(alex.jar, 'GET', '/lark/messages')).body.on === false, 'sending as the person is off until they turn it on on their Me page');
+    const on = await api(alex.jar, 'POST', '/lark/messages', { on: true });
+    check(on.body.on === true && on.body.granted === false && String(on.body.connectUrl).includes('messages=1'), 'turning it on sends them to allow it in Lark');
+    check(String((await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'x' })).error).includes('messages=1'), 'until then the agent gets the same link');
+    await connect(alex.jar, '&messages=1');
+    check(['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'allowing it asks Lark to send as them');
+    const preview = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
+    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === '会议改到三点' && !!preview.confirm && lark.messages.length === before, 'the first call only shows who gets what');
+    const sent = await tool(alex.token, 'send_lark_message', { confirm: preview.confirm });
+    const m = lark.messages.at(-1)!;
+    check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text === '会议改到三点' && m.as === 'user', 'the code sends exactly that, as the person');
+    check(!!(await tool(alex.token, 'send_lark_message', { confirm: preview.confirm })).error && lark.messages.length === before + 1, 'a code sends once');
+    check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
+    await connect(alex.jar);
+    check(lark.scopesAsked.split(' ').includes('im:message.send_as_user'), 'reconnecting Lark keeps it while it is on');
+    const pendingOne = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'hi' });
+    await api(alex.jar, 'POST', '/lark/messages', { on: false });
+    check(!!(await tool(alex.token, 'send_lark_message', { confirm: pendingOne.confirm })).error && lark.messages.length === before + 1, 'turning it off stops a message that was waiting for the go-ahead');
+    await connect(alex.jar);
+    check(!lark.scopesAsked.split(' ').includes('im:message.send_as_user'), 'and reconnecting no longer asks for it');
   }
 
   // ---------------------------------------------------------------- a department's page

@@ -18,6 +18,7 @@ import * as workspace from './workspace.ts';
 import { inspect } from './baseSource.ts';
 import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
+import { prepareMessage, sendPrepared } from './messages.ts';
 
 /** What a group of tools needs from the server being built: the person, their language and the result wrapper. */
 export interface ToolKit {
@@ -176,4 +177,12 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
     },
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
+  server.registerTool('send_lark_message', {
+    description: 'Sends a Lark text message as the user (colleagues see it from them), only if the user turned this on on their Me page. Two steps: call with to and text to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues, text only (links are fine).',
+    inputSchema: {
+      to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
+      text: z.string().optional(),
+      confirm: z.string().optional().describe('the code from the preview, once the user agreed'),
+    },
+  }, guard((a: { to?: string[]; text?: string; confirm?: string }) => (a.confirm ? sendPrepared(user, a.confirm) : prepareMessage(user, resolveColleagues(a.to ?? []), a.text ?? ''))));
 }
