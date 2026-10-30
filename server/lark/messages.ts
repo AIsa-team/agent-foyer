@@ -9,7 +9,8 @@
 import { randomBytes } from 'node:crypto';
 import { readFileSync, rmSync } from 'node:fs';
 import { config } from '../config.ts';
-import { get, now, run, type User } from '../db.ts';
+import { all, get, now, run, type User } from '../db.ts';
+import { decrypt, encrypt } from '../crypto.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { peekUpload, takeUpload } from '../uploads.ts';
 import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
@@ -51,7 +52,7 @@ export function setMessagesOn(user: User, on: boolean) {
   run('UPDATE users SET send_as_me = ? WHERE id = ?', on ? 1 : 0, user.id);
   if (!on) {
     run('UPDATE users SET send_no_confirm = 0 WHERE id = ?', user.id);
-    for (const [code, p] of pending) if (p.userId === user.id) pending.delete(code);
+    run('DELETE FROM lark_pending WHERE user_id = ?', user.id);
   }
 }
 
@@ -65,8 +66,16 @@ function ready(user: User) {
 }
 
 export interface FileRef { upload_id: string; name: string }
-interface Pending { userId: string; to: string[]; text: string; file: FileRef | null; expires: number }
-const pending = new Map<string, Pending>();
+/**
+ * A preview waiting for the person's yes. Kept in the database (so a restart does not lose it), encrypted, and deleted
+ * once sent, when it expires, or when the person turns sending off.
+ */
+interface Pending { to: string[]; text: string; file: FileRef | null }
+const pendingOf = (userId: string) => {
+  run('DELETE FROM lark_pending WHERE expires < ?', now());
+  return all<{ code: string; payload: string }>('SELECT code, payload FROM lark_pending WHERE user_id = ?', userId)
+    .map((r) => ({ code: r.code, ...(JSON.parse(decrypt(r.payload)) as Pending) }));
+};
 const nameOf = (id: string) => get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id;
 const localeOf = (id: string) => get<{ locale: string | null }>('SELECT locale FROM users WHERE id = ?', id)?.locale ?? config.defaultLocale;
 
@@ -96,14 +105,17 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
     size = peekUpload(file.upload_id, user.id, 'file');
     if (size > MAX_FILE) throw new UserError('err.messages.fileTooBig', { mb: MAX_FILE / 1024 / 1024 });
   }
-  for (const [code, p] of pending) if (p.expires < now()) pending.delete(code);
-  const code = randomBytes(4).toString('hex');
   const name = file?.name.trim().replace(/[\\/]/g, '_').slice(0, 200) || 'file';
-  pending.set(code, { userId: user.id, to: ids, text: body, file: file && { upload_id: file.upload_id, name }, expires: now() + PREVIEW_MS });
+  const message: Pending = { to: ids, text: body, file: file && { upload_id: file.upload_id, name } };
+  // the same message prepared again (an agent that lost the code) keeps its code, so the user's yes still sends it
+  const same = pendingOf(user.id).find((p) => JSON.stringify([p.to, p.text, p.file]) === JSON.stringify([message.to, message.text, message.file]));
+  const code = same?.code ?? randomBytes(4).toString('hex');
+  run('INSERT INTO lark_pending (code, user_id, payload, expires) VALUES (?, ?, ?, ?) ON CONFLICT(code) DO UPDATE SET expires = excluded.expires',
+    code, user.id, encrypt(JSON.stringify(message)), now() + PREVIEW_MS);
   return {
     preview: { from: user.name, to: ids.map(nameOf), ...(file ? { file: { name, bytes: size } } : {}), text: signed(body, user, locale) },
-    confirm: code,
-    next: 'Show the user exactly who gets this (the file, then the text with the last line saying it was sent by their AI twin). Only after they agree, call send_lark_message again with just confirm. If they want changes, prepare it again.',
+    send_code: code,
+    next: `NOT SENT YET. Show the user exactly who gets this (the file, then the text with the last line saying it was sent by their AI twin). When they agree, call send_lark_message with only {"send_code": "${code}"}: calling it with to/text again does not send, it only shows this preview again. If they want changes, prepare a new one.`,
   };
 }
 
@@ -111,17 +123,17 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
 export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string) {
   const prepared = prepareMessage(user, to, text, file, locale);
   if (!withoutConfirm(user.id)) return prepared;
-  return { ...(await sendPrepared(user, prepared.confirm)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
+  return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
 }
 
 /** Sends the message a preview showed, as the person, to each recipient in turn. */
 export async function sendPrepared(user: User, code: string) {
   ready(user);
-  const p = pending.get(code);
-  if (!p || p.userId !== user.id || p.expires < now()) throw new UserError('err.messages.expired');
+  const p = pendingOf(user.id).find((x) => x.code === code);
+  if (!p) throw new UserError('err.messages.expired');
   const recent = get<{ n: number }>('SELECT COUNT(*) AS n FROM lark_sent WHERE user_id = ? AND at > ?', user.id, now() - 3_600_000)!.n;
   if (recent + p.to.length > PER_HOUR) throw new UserError('err.messages.rateLimited', { n: PER_HOUR });
-  pending.delete(code);
+  run('DELETE FROM lark_pending WHERE code = ?', code);
   // the file goes up to Lark once, as the person, and is then sent to each recipient
   let fileKey = '';
   if (p.file) {

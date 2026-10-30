@@ -296,7 +296,7 @@ const zhCN = {
   'err.messages.scope': '要用你的身份发 Lark 消息，需要你在 Lark 里授权一次：{url}\n如果授权页没有这项权限，请管理员先在 Lark 开发者后台开通 im:message 和 im:message.send_as_user。{detail}',
   'err.messages.empty': '请给出收件人和消息内容。',
   'err.messages.tooLong': '一条消息最多 {text} 个字、最多发给 {to} 个人。',
-  'err.messages.expired': '这个确认码无效或已过期（10 分钟内有效）。请重新生成预览，给用户确认后再发。',
+  'err.messages.expired': '这个 send_code 无效或已过期（10 分钟内有效）。send_code 要从预览结果里原样复制，不是用户说的话。请重新生成预览，用户同意后只带 send_code 再调用一次。',
   'err.messages.rateLimited': '每小时最多替你发 {n} 条消息，请稍后再发。',
   'err.messages.fileScope': '要用你的身份发文件，需要你在 Lark 里再授权一次上传文件：{url}\n授权页上写的是「获取与上传图片或文件资源」，这是 Lark 的要求，中台只用来上传，不会读取你消息里的文件。\n如果授权页没有这项权限，请管理员先在 Lark 开发者后台开通 im:resource。{detail}',
   'err.messages.fileTooBig': '文件不能超过 {mb} MB（Lark 的限制）。',

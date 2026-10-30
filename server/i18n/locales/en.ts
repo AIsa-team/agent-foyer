@@ -298,7 +298,7 @@ const en: Record<MessageKey, string> = {
   'err.messages.scope': 'To send Lark messages as you, allow it once in Lark: {url}\nIf that page does not offer it, an admin first enables im:message and im:message.send_as_user in the Lark developer console. {detail}',
   'err.messages.empty': 'Give the recipients and the text.',
   'err.messages.tooLong': 'A message is at most {text} characters, to at most {to} people.',
-  'err.messages.expired': 'This code is not valid or has expired (it lasts 10 minutes). Prepare the preview again and send it after the user agrees.',
+  'err.messages.expired': 'This send_code is not valid or has expired (it lasts 10 minutes). Copy send_code exactly from the preview result; it is not what the user said. Prepare the preview again and, once the user agrees, call again with only send_code.',
   'err.messages.rateLimited': 'At most {n} messages an hour are sent as you; try again later.',
   'err.messages.fileScope': 'To send files as you, allow uploading files once more in Lark: {url}\nThe Lark page says it may read and upload images and files, which Lark requires; the hub only uploads and never reads the files in your messages.\nIf that page does not offer it, an admin first enables im:resource in the Lark developer console. {detail}',
   'err.messages.fileTooBig': 'Files can be at most {mb} MB (a Lark limit).',
