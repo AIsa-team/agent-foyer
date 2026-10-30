@@ -15,7 +15,7 @@ function ConnectionCard({ logo, title, connected, detail, action, children, extr
 }) {
   const { t } = useI18n();
   return (
-    <div className="card conn-card">
+    <div className={`card conn-card${extra ? ' conn-card--wide' : ''}`}>
       <div className="conn-card__head">
         {logo}
         <div className="grow" style={{ minWidth: 0 }}>
