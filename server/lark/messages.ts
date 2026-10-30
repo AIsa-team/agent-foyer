@@ -1,7 +1,8 @@
 /**
  * Lark messages and files sent as the person by their agent ("send Alex the quote and tell him it moved to three").
  * Off until the person turns it on on their Me page and allows it in Lark. Every message is previewed first and sent
- * only with the code from that preview, so it goes out exactly as the person saw it, signed as sent by their AI twin.
+ * only with the code from that preview, so it goes out exactly as the person saw it, signed as sent by their AI twin;
+ * someone who trusts their agents can turn the preview off, and then messages go out at once.
  * The hub keeps who was messaged and when, never the text or the file, and never reads anyone's messages with their
  * access (asUser refuses).
  */
@@ -40,12 +41,22 @@ const granted = (userId: string) => {
 /** For the Me page: whether it is on, whether Lark allows it yet, and how many messages went out this week. */
 export function messagesStatus(user: User) {
   const sent = get<{ n: number }>('SELECT COUNT(*) AS n FROM lark_sent WHERE user_id = ? AND at > ?', user.id, now() - 7 * 86_400_000)!.n;
-  return { on: messagesOn(user.id), granted: granted(user.id), connectUrl: messagesConnectUrl(), sentThisWeek: sent };
+  return { on: messagesOn(user.id), noConfirm: withoutConfirm(user.id), granted: granted(user.id), connectUrl: messagesConnectUrl(), sentThisWeek: sent };
 }
+
+/** Whether the person lets their agents send without showing them each message first (off again when sending is). */
+const withoutConfirm = (userId: string) => !!get<{ send_no_confirm: number }>('SELECT send_no_confirm FROM users WHERE id = ?', userId)?.send_no_confirm;
 
 export function setMessagesOn(user: User, on: boolean) {
   run('UPDATE users SET send_as_me = ? WHERE id = ?', on ? 1 : 0, user.id);
-  if (!on) for (const [code, p] of pending) if (p.userId === user.id) pending.delete(code);
+  if (!on) {
+    run('UPDATE users SET send_no_confirm = 0 WHERE id = ?', user.id);
+    for (const [code, p] of pending) if (p.userId === user.id) pending.delete(code);
+  }
+}
+
+export function setWithoutConfirm(user: User, noConfirm: boolean) {
+  run('UPDATE users SET send_no_confirm = ? WHERE id = ?', noConfirm && messagesOn(user.id) ? 1 : 0, user.id);
 }
 
 function ready(user: User) {
@@ -94,6 +105,13 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
     confirm: code,
     next: 'Show the user exactly who gets this (the file, then the text with the last line saying it was sent by their AI twin). Only after they agree, call send_lark_message again with just confirm. If they want changes, prepare it again.',
   };
+}
+
+/** The preview to show the person, or, if they turned confirming off, the message sent at once. */
+export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string) {
+  const prepared = prepareMessage(user, to, text, file, locale);
+  if (!withoutConfirm(user.id)) return prepared;
+  return { ...(await sendPrepared(user, prepared.confirm)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
 }
 
 /** Sends the message a preview showed, as the person, to each recipient in turn. */

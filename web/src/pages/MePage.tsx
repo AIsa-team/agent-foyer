@@ -64,7 +64,7 @@ function LarkDataCard() {
 /** Features of the Lark connection each person switches on themselves: their agents sending, and reading, Lark messages as them. */
 function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading' }) {
   const { t } = useI18n();
-  const { data, reload } = useApi<{ on: boolean; granted: boolean; connectUrl: string; sentThisWeek?: number; readsThisWeek?: number }>(path);
+  const { data, reload } = useApi<{ on: boolean; noConfirm?: boolean; granted: boolean; connectUrl: string; sentThisWeek?: number; readsThisWeek?: number }>(path);
   const { busy, run } = useAction();
   if (!data) return null;
   const k = (key: string) => `me.${kind}.${key}` as MessageKey;
@@ -73,6 +73,12 @@ function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading
     if (on && !s.granted) location.href = s.connectUrl;
     else reload();
   }, on ? undefined : t(k('turnedOff')));
+  // sending only: letting the agent send without showing each message first
+  const setNoConfirm = (noConfirm: boolean) => {
+    if (noConfirm && !confirm(t('me.messages.noConfirmConfirm'))) return;
+    void run(() => api.post(path, { noConfirm })).then(reload);
+  };
+  const direct = kind === 'messages' && data.on && data.granted;
   return (
     <div className="conn-card__feature">
       <label className="aisa-switch">
@@ -80,9 +86,18 @@ function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading
         <span>{t(k('title'))}</span>
       </label>
       <p className="small muted" style={{ margin: 0 }}>
-        {!data.on ? t(k('body')) : data.granted ? t(k('onBody'), { n: data.sentThisWeek ?? data.readsThisWeek ?? 0 })
+        {!data.on ? t(k('body')) : data.granted ? t(data.noConfirm ? 'me.messages.onBodyDirect' : k('onBody'), { n: data.sentThisWeek ?? data.readsThisWeek ?? 0 })
           : <>{t(k('allowBody'))} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>}
       </p>
+      {direct && (
+        <div className="conn-card__sub">
+          <label className="aisa-switch">
+            <input type="checkbox" checked={!!data.noConfirm} disabled={busy} onChange={(e) => setNoConfirm(e.target.checked)} />
+            <span>{t('me.messages.noConfirm')}</span>
+          </label>
+          {!data.noConfirm && <p className="small muted" style={{ margin: 0 }}>{t('me.messages.noConfirmBody')}</p>}
+        </div>
+      )}
     </div>
   );
 }

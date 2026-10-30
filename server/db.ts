@@ -618,7 +618,8 @@ const MIGRATIONS: string[] = [
   ALTER TABLE users ADD COLUMN read_as_me INTEGER NOT NULL DEFAULT 0;
   CREATE TABLE lark_reads (user_id TEXT NOT NULL, chat_id TEXT NOT NULL, at INTEGER NOT NULL);
   CREATE INDEX lark_reads_user ON lark_reads (user_id, at);
-  `,
+  `,  // someone who lets their agents send messages as them without confirming each one first
+  `ALTER TABLE users ADD COLUMN send_no_confirm INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 {

@@ -265,7 +265,7 @@ const en: Record<MessageKey, string> = {
   'err.appLark.notDeclaredRecipient': 'Apps may only notify the people and groups they declared; {who} is not one of them (allowed: {allowed})',
   'err.appLark.rateLimited': 'This app may send at most {n} notifications an hour; try again later',
   'appLark.msg.footer': '— sent by {user} through "{app}" · {company} Hub',
-  'lark.msg.sentByTwin': "———— Sent by {name}'s AI twin",
+  'lark.msg.sentByTwin': "—— Sent by {name}'s AI twin",
   'appLark.consent.title': 'Let "{app}" use your Lark data?',
   'appLark.consent.intro': '"{app}", made by {owner}, will act as you to:',
   'appLark.consent.read': 'read the "{name}" table',

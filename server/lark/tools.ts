@@ -18,7 +18,7 @@ import * as workspace from './workspace.ts';
 import { inspect } from './baseSource.ts';
 import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
-import { prepareMessage, sendPrepared, type FileRef } from './messages.ts';
+import { sendOrPrepare, sendPrepared, type FileRef } from './messages.ts';
 import { findChats, readMessages } from './reading.ts';
 
 /** What a group of tools needs from the server being built: the person, their language and the result wrapper. */
@@ -179,7 +179,7 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
   server.registerTool('send_lark_message', {
-    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Two steps: call with to, text and/or file to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. Up to 10 colleagues. For a file (at most 30 MB): create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}.',
+    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Two steps: call with to, text and/or file to get a preview and a code; show the user exactly who gets what; only after they agree, call again with just confirm (the code, valid 10 minutes) and that exact message is sent. Never send anything the user has not seen. If the user turned off confirming on their Me page, the first call sends at once (the result says so): only call it when they asked for that message, and tell them afterwards what went to whom. Up to 10 colleagues. For a file (at most 30 MB): create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}.',
     inputSchema: {
       to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
       text: z.string().optional(),
@@ -187,7 +187,7 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
       confirm: z.string().optional().describe('the code from the preview, once the user agreed'),
     },
   }, guard((a: { to?: string[]; text?: string; file?: FileRef; confirm?: string }) =>
-    (a.confirm ? sendPrepared(user, a.confirm) : prepareMessage(user, resolveColleagues(a.to ?? []), a.text ?? '', a.file ?? null, locale))));
+    (a.confirm ? sendPrepared(user, a.confirm) : sendOrPrepare(user, resolveColleagues(a.to ?? []), a.text ?? '', a.file ?? null, locale))));
 
   server.registerTool('read_lark_messages', {
     description: 'Reads one Lark conversation as the user, only if they turned reading on (Me page, Lark data card): their direct chat with a colleague (e.g. what they replied) or a group chat (chat_id from find_lark_chat). Recent messages, oldest first, with sender, time (company time zone) and text; files and images come with a download link valid 10 minutes. Read only the conversation the user asked about.',

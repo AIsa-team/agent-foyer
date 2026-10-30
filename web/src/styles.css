@@ -160,6 +160,8 @@ code, pre, .mono { font-family: var(--aisa-font-mono); font-size: 12.5px; }
 .conn-card--wide { grid-column: 1 / -1; }
 .conn-card__feature { display: flex; flex-direction: column; gap: 6px; padding-top: 10px; border-top: 1px solid var(--line); }
 .conn-card__feature .aisa-switch { font-size: 13px; font-weight: 500; }
+.conn-card__sub { display: flex; flex-direction: column; gap: 4px; margin-left: 46px; }
+.conn-card__sub .aisa-switch { font-weight: 400; }
 .conn-card .app-icon { width: 32px; height: 32px; border-radius: 8px; font-size: 14px; }
 .link-tile { display: flex; align-items: center; gap: 10px; padding: 12px 14px; }
 .link-tile .emoji { font-size: 20px; width: 28px; text-align: center; }

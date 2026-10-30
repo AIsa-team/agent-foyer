@@ -2421,13 +2421,13 @@ try {
     await connect(alex.jar, '&messages=1');
     check(['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'allowing it asks Lark to send as them');
     const preview = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
-    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n———— Sent by Alex's AI twin" && !!preview.confirm && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
+    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n—— Sent by Alex's AI twin" && !!preview.confirm && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
     const bobLocale = (fsDb.prepare("SELECT locale FROM users WHERE id = 'ou_dev_bob'").get() as { locale: string | null }).locale;
     fsDb.prepare("UPDATE users SET locale = 'zh-CN' WHERE id = 'ou_dev_bob'").run();
     const sent = await tool(alex.token, 'send_lark_message', { confirm: preview.confirm });
     const m = lark.messages.at(-1)!;
     check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text.startsWith('会议改到三点\n') && m.as === 'user', 'the code sends exactly that, as the person');
-    check(m.text === '会议改到三点\n———— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language');
+    check(m.text === '会议改到三点\n—— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language');
     fsDb.prepare('UPDATE users SET locale = ? WHERE id = ?').run(bobLocale, 'ou_dev_bob');
     check(!!(await tool(alex.token, 'send_lark_message', { confirm: preview.confirm })).error && lark.messages.length === before + 1, 'a code sends once');
     check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
@@ -2447,11 +2447,20 @@ try {
     check(sentFile.file === '报价单.pdf' && upload.name === '报价单.pdf' && upload.bytes === 'PDF-BYTES' && f?.text === `[file:${upload.key}]` && f.as === 'user' && t?.text.startsWith('报价单在这\n') && t.as === 'user',
       'the file goes up to Lark as the person and arrives before the signed text');
     check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: quote })).error, 'an uploaded file is sent once');
+    // full access: no preview, sent at once
+    check((await api(alex.jar, 'POST', '/lark/messages', { noConfirm: true })).body.noConfirm === true, 'the person can let their agents send without asking first');
+    const k = lark.messages.length;
+    const direct = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '马上到' });
+    check(direct.sent?.[0] === '周明' && !direct.confirm && lark.messages.length === k + 1 && lark.messages.at(-1)!.text.startsWith('马上到\n—— '), 'then a message goes out at once, still signed');
+    await api(alex.jar, 'POST', '/lark/messages', { noConfirm: false });
+    check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'x' })).confirm && lark.messages.length === k + 1, 'and asking first comes back when they turn it off');
     await connect(alex.jar);
     check(['im:message.send_as_user', 'im:resource'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'reconnecting Lark keeps it while it is on');
     const pendingOne = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'hi' });
     const count = lark.messages.length;
+    await api(alex.jar, 'POST', '/lark/messages', { noConfirm: true });
     await api(alex.jar, 'POST', '/lark/messages', { on: false });
+    check((await api(alex.jar, 'GET', '/lark/messages')).body.noConfirm === false, 'turning sending off also turns full access off');
     check(!!(await tool(alex.token, 'send_lark_message', { confirm: pendingOne.confirm })).error && lark.messages.length === count, 'turning it off stops a message that was waiting for the go-ahead');
     await connect(alex.jar);
     check(!['im:message.send_as_user', 'im:resource'].some((s) => lark.scopesAsked.split(' ').includes(s)), 'and reconnecting no longer asks for it');

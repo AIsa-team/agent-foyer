@@ -263,7 +263,7 @@ const zhCN = {
   'err.appLark.notDeclaredRecipient': '只能通知应用声明过的人或群，{who} 不在其中（可以通知：{allowed}）',
   'err.appLark.rateLimited': '这个应用一小时内最多发 {n} 条通知，稍后再试',
   'appLark.msg.footer': '—— {user} 通过「{app}」发送 · {company} 中台',
-  'lark.msg.sentByTwin': '———— 由 {name} 的 AI 分身发送',
+  'lark.msg.sentByTwin': '—— 由 {name} 的 AI 分身发送',
   'appLark.consent.title': '允许「{app}」使用你的 Lark 数据？',
   'appLark.consent.intro': '{owner} 做的应用「{app}」会以你的身份：',
   'appLark.consent.read': '读取「{name}」表',
