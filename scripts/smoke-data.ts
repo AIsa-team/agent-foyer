@@ -797,6 +797,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   }
   if (p === '/docx/v1/documents/doxFolder') return send({ code: 0, data: { document: { document_id: 'doxFolder', title: '团队日会' } } });
   // files in Drive and the wiki: download (read scope), upload into a folder and move under a wiki page (write scopes)
+  if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikLocked') {
+    return send({ code: 0, data: { node: { space_id: 'sp2', node_token: 'wikLocked', title: '别人的知识库', obj_type: 'docx', obj_token: 'doxLocked' } } });
+  }
   if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikHtml') {
     return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wikHtml', title: 'aisa-one-site-suggestions.html', obj_type: 'file', obj_token: 'boxHtml' } } });
   }
@@ -824,6 +827,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     if (!lark.wikiTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [wiki:wiki]' });
     const f = lark.driveFiles.get(body.obj_token);
     if (!f || body.obj_type !== 'file') return send({ code: 131005, msg: 'not found' });
+    if (body.parent_wiki_token === 'wikLocked') return send({ code: 131006, msg: 'permission denied: no destination parent node permission' });
     f.wiki = body.parent_wiki_token;
     const task = `task${lark.wikiMoves.size + 1}`;
     lark.wikiMoves.set(task, `wikFile${lark.wikiMoves.size + 1}`);
@@ -2080,6 +2084,9 @@ try {
   check(String(inFolderFile.url).includes('/file/boxUp') && [...lark.driveFiles.values()].at(-1)!.folder === 'fldTeam' && !(await tool(alex.token, 'read_lark_doc', { url: htmlPage })).error,
     'or into a Drive folder; and downloading still works with the upload access');
   check(String((await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/docx/doxDaily' })).error).includes('wiki'), 'but not inside a document');
+  const locked = await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/wiki/wikLocked' });
+  check(!locked.error && locked.place === 'my space' && String(locked.url).includes('/file/boxUp') && String(locked.note).includes('did not put it under the wiki page'),
+    'a wiki page the person may not add to leaves the file in their own space, and the agent is told so with its link');
 
   // the admin's picker: Lark's own features always; the company's apps once the hub may read them
   check((await api(alice.jar, 'GET', '/lark-links/catalog')).status === 400, 'only admins see the Lark app picker');

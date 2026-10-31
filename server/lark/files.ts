@@ -9,9 +9,9 @@ import { get, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { signToken, verifyToken } from '../crypto.ts';
 import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
-import { larkLink, parseDocRef } from './docs.ts';
+import { larkLink, parseDocRef, WIKI_WRITE_SCOPE } from './docs.ts';
 import { peekUpload, takeUpload } from '../uploads.ts';
-import { asUser, userAccessToken } from './userToken.ts';
+import { asUser, connection, userAccessToken } from './userToken.ts';
 import type { FileRef } from './messages.ts';
 
 /** Downloading files from Drive and the wiki; asked for the first time an agent reads one. */
@@ -112,6 +112,7 @@ export async function uploadFile(user: User, file: FileRef, parent?: string) {
   const size = peekUpload(file.upload_id, user.id, 'file');
   if (size > MAX_UPLOAD) throw new UserError('err.files.tooBig', { mb: MAX_UPLOAD / 1024 / 1024 });
   // everything that can be refused is checked before the file goes up
+  if (wiki && !connection(user.id).scopes?.includes(WIKI_WRITE_SCOPE)) throw new UserError('err.files.uploadScope', { url: connectUrl(true, true), detail: '' });
   const under = wiki ? (await call<{ data: { node: WikiNode } }>(user, `/wiki/v2/spaces/get_node?token=${encodeURIComponent(ref.token)}`, undefined, true)).data.node : null;
   const folder = ref?.kind === 'folder' ? ref.token
     : (await call<{ data: { token: string } }>(user, '/drive/explorer/v2/root_folder/meta', undefined, wiki)).data.token;
@@ -132,17 +133,27 @@ export async function uploadFile(user: User, file: FileRef, parent?: string) {
   }
   if (!under) return { name, url: larkLink('file', token), place: ref ? 'folder' : 'my space' };
 
-  // into the wiki: Lark moves it there, sometimes only after a moment
-  const moved = (await call<{ data: { wiki_token?: string; task_id?: string } }>(user, `/wiki/v2/spaces/${under.space_id}/nodes/move_docs_to_wiki`, {
-    method: 'POST', body: JSON.stringify({ parent_wiki_token: under.node_token, obj_type: 'file', obj_token: token }),
-  }, true)).data;
+  // into the wiki: Lark moves it there, sometimes only after a moment. If Lark refuses (e.g. the person may not add
+  // pages there), the file stays in their own space and the agent is told so.
+  const inMySpace = (why: string) => ({
+    name, url: larkLink('file', token), place: 'my space',
+    note: `Uploaded to the user's own space, but Lark did not put it under the wiki page: ${why}. Tell the user; they can move it there in Lark, or give a page they may edit.`,
+  });
+  let moved: { wiki_token?: string; task_id?: string };
+  try {
+    moved = (await asUser<{ data: typeof moved }>(user, `/wiki/v2/spaces/${under.space_id}/nodes/move_docs_to_wiki`, {
+      method: 'POST', body: JSON.stringify({ parent_wiki_token: under.node_token, obj_type: 'file', obj_token: token }),
+    })).data;
+  } catch (e) {
+    return inMySpace(e instanceof LarkError && DENIED_CODES.has(e.code) ? 'the user may not add pages there' : (e as Error).message);
+  }
   let node = moved.wiki_token;
   for (let i = 0; !node && moved.task_id && i < 10; i++) {
     await new Promise((ok) => setTimeout(ok, 1000));
     const r = (await call<{ data: { task: { move_result?: { node?: { node_token: string }; status: number; status_msg?: string }[] } } }>(user,
       `/wiki/v2/tasks/${encodeURIComponent(moved.task_id)}?task_type=move`, undefined, true)).data.task.move_result?.[0];
     if (r?.status === 0) node = r.node?.node_token;
-    if (r?.status === -1) return { name, url: larkLink('file', token), place: 'my space', note: `Uploaded to the user's own space, but Lark did not move it under the wiki page: ${r.status_msg ?? 'failed'}.` };
+    if (r?.status === -1) return inMySpace(r.status_msg ?? 'failed');
   }
   if (!node) return { name, url: larkLink('file', token), place: 'my space', note: 'Uploaded; Lark is still moving it under the wiki page. It shows up there in a moment.' };
   return { name, url: larkLink('wiki', node), place: 'wiki' };
