@@ -266,6 +266,7 @@ const en: Record<MessageKey, string> = {
   'err.appLark.rateLimited': 'This app may send at most {n} notifications an hour; try again later',
   'appLark.msg.footer': '— sent by {user} through "{app}" · {company} Hub',
   'lark.msg.sentByTwin': "—— Sent by {name}'s AI twin",
+  'lark.confirm.question': 'Send as you to {names}:',
   'lark.card.title': 'Your AI twin wants to send a message for you',
   'lark.card.to': 'To: {names}',
   'lark.card.file': 'File: {name} · {size}',

@@ -81,7 +81,9 @@
 | `im:resource` | 随消息发文件 |
 | `im:message:readonly`、`im:message.p2p_msg:get_as_user`、`im:message.group_msg:get_as_user`、`im:chat:read` | `read_lark_messages`、`find_lark_chat`：只读本人指定的那一个会话 |
 
-机器人还会把每条预览以卡片发给本人，带「发送」「不发」按钮。按钮点击通过中台主动连向 Lark 的长连接送回来，不需要公网回调地址：在 **Events & Callbacks（事件与回调）→ 回调配置** 里选「使用长连接接收回调」（保存时中台要在运行，Lark 才能看到连接在线），添加「卡片回传交互」（`card.action.trigger`），再发布新版本。不配也能用，卡片只展示预览，确认在 Agent 里完成。
+每条消息发出前都要本人确认。默认由 Agent 客户端弹窗询问（MCP elicitation，Claude Code、Codex 会弹出确认框）；客户端不支持弹窗时，Agent 在对话里给出预览，本人同意后用一次性发送码发出。
+
+用 Lark 的建议改成在 Lark 里用卡片确认，消息发在哪就在哪确认：不管是哪个 Agent 准备的消息，中台机器人都把预览发给本人，带「发送」「不发」按钮。设置 `LARK_CONFIRM_CARDS=on`。按钮点击通过中台主动连向 Lark 的长连接送回来，不需要公网回调地址：先启动中台，再到 **Events & Callbacks（事件与回调）→ 回调配置** 里选「使用长连接接收回调」（Lark 会检查中台已连上），添加「卡片回传交互」（`card.action.trigger`），然后发布新版本。
 
 回调地址不用新加：连接 Lark 数据和登录用的是同一个 `https://hub.example.com/auth/callback`。
 

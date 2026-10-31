@@ -69,10 +69,15 @@ export const config = {
     apiBase: env('LARK_API_BASE', `https://open.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
     accountsBase: env('LARK_ACCOUNTS_BASE', `https://accounts.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
     /**
-     * The long connection that brings taps on the bot's cards to the hub (no public callback address needed). Off
-     * against a fake Lark, which has none.
+     * Messages agents send as a person are confirmed on a card from the hub's bot in Lark, instead of in the agent's
+     * own app. Needs the card callback set up in Lark (docs/LARK_SETUP.md).
      */
-    longConnection: env('LARK_LONG_CONNECTION', process.env.LARK_API_BASE ? 'off' : 'on') === 'on',
+    confirmCards: env('LARK_CONFIRM_CARDS', 'off') === 'on',
+    /**
+     * The long connection that brings taps on those cards to the hub (no public callback address needed). Off against
+     * a fake Lark, which has none.
+     */
+    longConnection: env('LARK_CONFIRM_CARDS', 'off') === 'on' && env('LARK_LONG_CONNECTION', process.env.LARK_API_BASE ? 'off' : 'on') === 'on',
   },
   /**
    * Google, for apps that save email drafts in Gmail (Google Workspace). Each person connects their own Google account

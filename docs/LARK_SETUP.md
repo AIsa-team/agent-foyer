@@ -93,11 +93,15 @@ page, and Lark asks them for these when they do):
 | `im:resource` | sending a file with a message |
 | `im:message:readonly`, `im:message.p2p_msg:get_as_user`, `im:message.group_msg:get_as_user`, `im:chat:read` | `read_lark_messages` and `find_lark_chat`: reading the one conversation the person asks about |
 
-The bot also shows the person each preview as a card with **Send** and **Don't send**. Taps reach the hub over a long
-connection the hub opens to Lark, so no public callback address is needed: under **Events & Callbacks → Callback
-Configuration**, choose **Receive callbacks through persistent connection** (with the hub running, so Lark sees it
-connected), add **Card action trigger** (`card.action.trigger`), and release a new version. Without it the card still
-shows the preview, and people confirm in their agent.
+Each message is confirmed by the person before it goes out. By default their agent's app asks them (an MCP
+elicitation: Claude Code and Codex show it as a dialog); agents whose app cannot ask show the preview in the chat and
+send with a one-time code once the person agrees.
+
+Recommended on Lark: confirm on a card in Lark instead, where the message goes out: the hub's bot sends the person each
+preview with **Send** and **Don't send**, whichever agent prepared it. Set `LARK_CONFIRM_CARDS=on`. Taps reach the hub over a long connection the hub opens to Lark, so no
+public callback address is needed: start the hub, then under **Events & Callbacks → Callback Configuration** choose
+**Receive callbacks through persistent connection** (Lark checks the hub is connected), add **Card action trigger**
+(`card.action.trigger`), and release a new version.
 
 No extra redirect URL is needed: connecting Lark data uses the same `https://hub.example.com/auth/callback`.
 

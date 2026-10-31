@@ -1,5 +1,7 @@
+import { randomBytes } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
+import { ElicitResultSchema, type JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { appUrl, config, version as hubVersion } from './config.ts';
 import { messenger } from './notify.ts';
@@ -67,7 +69,7 @@ Combining (only if an admin turned it on; save_data_source says so otherwise): a
 
 Boards: the Data page holds boards for the whole company or a department (save_board), and each person's own boards (save_board with scope "me", any number, private unless they share them with colleagues, departments or the company); all are built from the same modules as home pages and every number is read as the viewer. Use company and department boards for numbers a team looks at together, someone's own boards for what they put together for themselves, and the home page for their day-to-day view.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Lark documents: search_lark_docs finds documents and wiki pages by keyword (only what the user may open); read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Calendar: list_calendar_events reads the user's own Lark calendar (read-only), e.g. "what meetings do I have this afternoon" or the meetings of a day for a daily report. The first time, the user is asked once to allow reading their calendar. Lark itself reminds people before events; the hub cannot create or change events. The agenda home module {type: "agenda"} shows each viewer their own day.\n` : ''}${LARK ? `Messages: send_lark_message sends a Lark message, and optionally a file, as the user to colleagues (e.g. "send Alex the quote and tell him the meeting moved to three"), once the user turned it on on their Me page; each message ends with a line saying it was sent by the user's AI twin. It is two steps: a preview with a send_code, then calling again with only that send_code after the user agreed to exactly that message and those recipients; the user also gets the preview in Lark as a card and may send or cancel it there instead (unless the user turned confirming off, then it is sent at once and you tell them what went out). Once the user also turned reading on, read_lark_messages reads one conversation as them (a colleague's replies, a group's recent discussion via find_lark_chat, files people sent them); read only the conversation the user asked about.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
+${LARK ? `Lark documents: search_lark_docs finds documents and wiki pages by keyword (only what the user may open); read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Calendar: list_calendar_events reads the user's own Lark calendar (read-only), e.g. "what meetings do I have this afternoon" or the meetings of a day for a daily report. The first time, the user is asked once to allow reading their calendar. Lark itself reminds people before events; the hub cannot create or change events. The agenda home module {type: "agenda"} shows each viewer their own day.\n` : ''}${LARK ? `Messages: send_lark_message sends a Lark message, and optionally a file, as the user to colleagues (e.g. "send Alex the quote and tell him the meeting moved to three"), once the user turned it on on their Me page; each message ends with a line saying it was sent by the user's AI twin. The user confirms each message: in a question your app shows them (then it is sent in the same call), or, if your app cannot show one, in two steps: a preview with a send_code, then calling again with only that send_code after the user agreed to exactly that message and those recipients (unless the user turned confirming off, then it is sent at once and you tell them what went out). Once the user also turned reading on, read_lark_messages reads one conversation as them (a colleague's replies, a group's recent discussion via find_lark_chat, files people sent them); read only the conversation the user asked about.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
 Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
 Installing a Skill: install_skill returns a download command; run it. Agents that cannot install Skills (no skills folder, e.g. hosted agents or scheduled tasks) use read_skill and follow what it says; a scheduled task that should follow a Skill names it and calls read_skill each run, so it always uses the latest version. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
 
@@ -123,10 +125,22 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     const seen = clientId ? get<{ seen_version: string | null }>('SELECT seen_version FROM agent_connections WHERE user_id = ? AND client_id = ?', user.id, clientId)?.seen_version : null;
     return seen && version && seen !== version ? [{ type: 'text' as const, text: say({ key: 'note.hubUpdated' }) }] : [];
   };
-  function guard<A>(fn: (args: A) => Promise<unknown> | unknown) {
-    return async (args: A) => {
+  // a yes or no from the person, shown by their agent's own app (MCP elicitation), for agents that said they can show it
+  const ask = async (extra: { requestId?: string | number } | undefined, message: string): Promise<Answer> => {
+    if (!clientCanAsk(user, clientId) || extra?.requestId === undefined) return null;
+    try {
+      const r = await server.server.request({ method: 'elicitation/create', params: { mode: 'form', message, requestedSchema: { type: 'object', properties: {} } } },
+        ElicitResultSchema, { relatedRequestId: extra.requestId, timeout: ASK_MS });
+      return r.action;
+    } catch (e) {
+      console.warn('[mcp] could not ask the user:', (e as Error).message);
+      return null;
+    }
+  };
+  function guard<A>(fn: (args: A, ask: (message: string) => Promise<Answer>) => Promise<unknown> | unknown) {
+    return async (args: A, extra?: { requestId?: string | number }) => {
       try {
-        const out = json(await fn(args));
+        const out = json(await fn(args, (message) => ask(extra, message)));
         return { ...out, content: [...out.content, ...staleNote()] };
       } catch (e) {
         const known = e instanceof UserError;
@@ -777,18 +791,72 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   return server;
 }
 
+/** The person's answer to a question their agent's app showed them: accept, decline, cancel (closed it), or null (not asked). */
+export type Answer = 'accept' | 'decline' | 'cancel' | null;
+const ASK_MS = 10 * 60_000;
+/** Tools that may ask the person something while they run; their calls answer as a stream, so the question can go out on it. */
+const ASKING_TOOLS = new Set(['send_lark_message']);
+const clientCanAsk = (user: User, clientId?: string) =>
+  !!clientId && !!get<{ elicitation: number }>('SELECT elicitation FROM agent_connections WHERE user_id = ? AND client_id = ?', user.id, clientId)?.elicitation;
+
+/**
+ * Questions out to agents, by the id they were sent with. Each request gets its own server (nothing is kept between
+ * requests), so the answer, which arrives as a request of its own, is handed to the call that asked.
+ */
+const asking = new Map<string, { transport: WebStandardStreamableHTTPServerTransport; id: string | number; token: string }>();
+
+type Rpc = { method?: string; id?: string | number; params?: { name?: string; arguments?: { send_code?: unknown }; capabilities?: { elicitation?: unknown } }; result?: unknown; error?: unknown };
+
 export async function handleMcp(req: Request, user: User, clientId: string, token: string): Promise<Response> {
+  const authInfo = { token, clientId, scopes: ['hub'] };
+  const body = await req.clone().json().catch(() => null) as Rpc | Rpc[] | null;
+  const messages = (Array.isArray(body) ? body : [body]).filter((m): m is Rpc => !!m);
+  const reply = messages.length === 1 && !messages[0].method && messages[0].id !== undefined ? asking.get(String(messages[0].id)) : undefined;
+  if (reply && reply.token === token) {
+    asking.delete(String(messages[0].id));
+    reply.transport.onmessage?.({ ...messages[0], id: reply.id } as JSONRPCMessage, { authInfo });
+    return new Response(null, { status: 202 });
+  }
   const server = buildMcpServer(user, clientId);
-  // connecting (or reconnecting) gets the current instructions and tools: remember which ones
-  const body = await req.clone().json().catch(() => null) as { method?: string } | { method?: string }[] | null;
-  if ((Array.isArray(body) ? body : [body]).some((m) => m?.method === 'initialize')) {
-    run('UPDATE agent_connections SET seen_version = ? WHERE user_id = ? AND client_id = ?', surfaceVersion(server), user.id, clientId);
+  // connecting (or reconnecting) gets the current instructions and tools: remember which ones, and whether the agent's
+  // app can show the person a question
+  const init = messages.find((m) => m.method === 'initialize');
+  if (init) {
+    run('UPDATE agent_connections SET seen_version = ?, elicitation = ? WHERE user_id = ? AND client_id = ?',
+      surfaceVersion(server), init.params?.capabilities?.elicitation ? 1 : 0, user.id, clientId);
   }
-  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
-  await server.connect(transport);
-  try {
-    return await transport.handleRequest(req, { authInfo: { token, clientId, scopes: ['hub'] } });
-  } finally {
+  // (sending with a code the person already agreed to asks nothing, nor does a hub that confirms on Lark cards)
+  const streams = !config.lark.confirmCards && messages.some((m) => m.method === 'tools/call' && ASKING_TOOLS.has(m.params?.name ?? '') && !m.params?.arguments?.send_code)
+    && clientCanAsk(user, clientId);
+  const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: !streams });
+  if (!streams) {
+    await server.connect(transport);
+    try {
+      return await transport.handleRequest(req, { authInfo });
+    } finally {
+      void server.close();
+    }
+  }
+  // a question goes out with an id of its own, so answers to different calls cannot be mixed up; the server lives until
+  // the call is answered
+  const calls = new Set(messages.filter((m) => m.method && m.id !== undefined).map((m) => m.id));
+  const done = () => {
+    clearTimeout(limit);
+    for (const [k, v] of asking) if (v.transport === transport) asking.delete(k);
     void server.close();
-  }
+  };
+  const limit = setTimeout(done, ASK_MS + 60_000);
+  const send = transport.send.bind(transport);
+  transport.send = async (message, options) => {
+    const m = message as Rpc;
+    if (m.method && m.id !== undefined) {
+      const id = `ask_${randomBytes(9).toString('base64url')}`;
+      asking.set(id, { transport, id: m.id, token });
+      message = { ...message, id } as JSONRPCMessage;
+    }
+    await send(message, options);
+    if (!m.method && m.id !== undefined && calls.delete(m.id) && !calls.size) setTimeout(done, 0);
+  };
+  await server.connect(transport);
+  return transport.handleRequest(req, { authInfo });
 }

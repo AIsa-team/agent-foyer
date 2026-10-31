@@ -627,6 +627,8 @@ const MIGRATIONS: string[] = [
   ALTER TABLE lark_pending ADD COLUMN card TEXT;
   ALTER TABLE lark_pending ADD COLUMN state TEXT NOT NULL DEFAULT 'waiting';
   `,
+  // whether the agent's app can show the person a question (MCP elicitation), as it said when it last connected
+  `ALTER TABLE agent_connections ADD COLUMN elicitation INTEGER NOT NULL DEFAULT 0;`,
 ];
 
 {

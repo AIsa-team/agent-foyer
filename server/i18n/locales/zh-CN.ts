@@ -264,6 +264,7 @@ const zhCN = {
   'err.appLark.rateLimited': '这个应用一小时内最多发 {n} 条通知，稍后再试',
   'appLark.msg.footer': '—— {user} 通过「{app}」发送 · {company} 中台',
   'lark.msg.sentByTwin': '—— 由 {name} 的 AI 分身发送',
+  'lark.confirm.question': '以你的身份发给 {names}：',
   'lark.card.title': '你的 AI 分身要替你发一条消息',
   'lark.card.to': '发给：{names}',
   'lark.card.file': '附件：{name} · {size}',

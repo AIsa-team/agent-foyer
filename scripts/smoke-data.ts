@@ -2436,12 +2436,10 @@ try {
     await connect(alex.jar, '&messages=1');
     check(['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'allowing it asks Lark to send as them');
     const preview = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
-    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n—— Sent by Alex's AI twin" && !!preview.send_code && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
-    const firstCard = lark.cards.at(-1)!;
-    check(lark.cards.length === 1 && firstCard.to === 'ou_dev_alex' && firstCard.card.includes('会议改到三点') && firstCard.card.includes(preview.send_code) && firstCard.card.includes('"Send"')
-      && String(preview.next).includes('card'), 'the hub\'s bot also shows Alex the preview in Lark, with Send and Don\'t send');
+    check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n\n—— Sent by Alex's AI twin" && !!preview.send_code && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
+    check(lark.cards.length === 0 && !String(preview.next).includes('card'), 'without cards set up in Lark, no card is sent');
     const again = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
-    check(again.send_code === preview.send_code && lark.messages.length === before && lark.cards.length === 1, 'preparing the same message again keeps its send_code and card, and still sends nothing');
+    check(again.send_code === preview.send_code && lark.messages.length === before, 'preparing the same message again keeps its send_code and still sends nothing');
     const waiting = JSON.stringify(fsDb.prepare('SELECT * FROM lark_pending').all());
     check(waiting.includes(preview.send_code) && !waiting.includes('三点'), 'a preview waits in the database (so a restart keeps it), encrypted');
     check(String((await tool(alex.token, 'send_lark_message', { send_code: '确认' })).error).includes('send_code') && lark.messages.length === before, 'a send_code that is not one says how to send');
@@ -2450,21 +2448,76 @@ try {
     const sent = await tool(alex.token, 'send_lark_message', { send_code: preview.send_code });
     const m = lark.messages.at(-1)!;
     check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text.startsWith('会议改到三点\n') && m.as === 'user', 'the code sends exactly that, as the person');
-    check(m.text === '会议改到三点\n—— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language');
+    check(m.text === '会议改到三点\n\n—— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language, after a blank line');
     check((fsDb.prepare('SELECT state, payload FROM lark_pending WHERE code = ?').get(preview.send_code) as { state: string; payload: string }).payload === '', 'and is emptied once sent');
-    await new Promise((ok) => setTimeout(ok, 200));
-    check(firstCard.updates.length === 1 && firstCard.updates[0].includes('✓') && !firstCard.updates[0].includes('"button"'), 'and the card in Lark says it was sent, without the buttons');
     fsDb.prepare('UPDATE users SET locale = ? WHERE id = ?').run(bobLocale, 'ou_dev_bob');
     check(String((await tool(alex.token, 'send_lark_message', { send_code: preview.send_code })).error).includes('already sent') && lark.messages.length === before + 1, 'a code sends once');
-    // the person answers on the card in Lark instead (a tap comes through the long connection; here, called directly)
+    check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
+
+    // an agent whose app can ask (MCP elicitation): the person says yes there, and it goes out in the same call
+    const asker = (await api(alex.jar, 'POST', '/tokens', { name: 'Claude Code' })).body.token as string;
+    const mcpPost = (token: string, msg: object) => fetch(`${HUB}/mcp`, {
+      method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: JSON.stringify(msg),
+    });
+    await (await mcpPost(asker, { jsonrpc: '2.0', id: ++rpc, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: { elicitation: {} }, clientInfo: { name: 'smoke', version: '1' } } })).text();
+    type Asked = { question?: { params: { message: string } }; stream: boolean; out: Record<string, unknown> & { sent?: string[]; send_code?: string; next?: string; declined?: boolean }; intruderStatus?: number };
+    const askedCall = async (args: Record<string, unknown>, answer: 'accept' | 'decline' | 'cancel', intruder?: string): Promise<Asked> => {
+      const res = await mcpPost(asker, { jsonrpc: '2.0', id: ++rpc, method: 'tools/call', params: { name: 'send_lark_message', arguments: args } });
+      const reader = res.body!.getReader();
+      const dec = new TextDecoder();
+      const r: Partial<Asked> = { stream: (res.headers.get('content-type') ?? '').includes('text/event-stream') };
+      let buf = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) throw new Error('the call ended without a result');
+        buf += dec.decode(value, { stream: true });
+        for (let i = buf.indexOf('\n\n'); i >= 0; i = buf.indexOf('\n\n')) {
+          const data = buf.slice(0, i).split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim()).join('');
+          buf = buf.slice(i + 2);
+          if (!data) continue;
+          const msg = JSON.parse(data);
+          if (msg.method === 'elicitation/create') {
+            r.question = msg;
+            if (intruder) r.intruderStatus = (await mcpPost(intruder, { jsonrpc: '2.0', id: msg.id, result: { action: 'accept' } })).status;
+            await mcpPost(asker, { jsonrpc: '2.0', id: msg.id, result: { action: answer } });
+          } else if (msg.result) {
+            void reader.cancel();
+            const text = msg.result.content[0].text;
+            return { ...r, out: msg.result.isError ? { error: text } : JSON.parse(text) } as Asked;
+          }
+        }
+      }
+    };
+    const n0 = lark.messages.length;
+    const yes = await askedCall({ to: ['ou_dev_bob'], text: '晚上见' }, 'accept');
+    check(yes.stream && yes.question?.params.message.startsWith('Send as you to 周明:') === true && yes.question.params.message.includes("晚上见\n\n—— Sent by Alex's AI twin"),
+      'the agent\'s app asks Alex, showing who gets what, signed');
+    check(yes.out.sent?.[0] === '周明' && !yes.out.send_code && lark.messages.length === n0 + 1 && lark.messages.at(-1)!.text.startsWith('晚上见\n'), 'and once Alex accepts, it is sent in the same call');
+    const no = await askedCall({ to: ['ou_dev_bob'], text: '不发这条' }, 'decline', bob.token);
+    check(no.out.declined === true && lark.messages.length === n0 + 1, 'declining sends nothing, and someone else cannot answer for Alex');
+    const closed = await askedCall({ to: ['ou_dev_bob'], text: '等会儿再说' }, 'cancel');
+    check(!!closed.out.send_code && String(closed.out.next).includes('closed') && lark.messages.length === n0 + 1, 'closing the question leaves the preview, so Alex can still agree in the chat');
+    check((await tool(asker, 'send_lark_message', { send_code: closed.out.send_code! })).sent?.[0] === '周明' && lark.messages.length === n0 + 2, 'and then the code sends it');
+    check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'x' })).send_code, 'an agent whose app cannot ask still gets the preview and a code');
+
+    // where the hub is set up for it, the person answers on a card in Lark instead (a tap comes through the long
+    // connection; here the hub's code is called directly, with cards on)
     const { execFile } = await import('node:child_process');
-    const tap = (operator: string, code: string, choice: 'send' | 'decline') => new Promise<{ toast?: { type: string; content: string }; card?: { data: unknown } }>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
-      const { onCardTap } = await import(${JSON.stringify(path.resolve('server/lark/messages.ts'))});
-      console.log(JSON.stringify(await onCardTap(${JSON.stringify({ operator: { open_id: operator }, action: { value: { hub: 'send_message', code, choice } } })})));
-    `], { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis` } },
+    const inHub = (js: string) => new Promise<Record<string, any>>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
+      const m = await import(${JSON.stringify(path.resolve('server/lark/messages.ts'))});
+      const { get } = await import(${JSON.stringify(path.resolve('server/db.ts'))});
+      const user = get("SELECT * FROM users WHERE id = 'ou_dev_alex'");
+      console.log(JSON.stringify(await (${js})));
+    `], { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_CONFIRM_CARDS: 'on' } },
       (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(JSON.parse(out.trim().split('\n').at(-1)!)))));
-    const byCard = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '五点见' });
+    const withCard = (text: string, answer = 'null') => inHub(`m.sendOrPrepare(user, ['ou_dev_bob'], ${JSON.stringify(text)}, null, 'en', async () => ${answer})`);
+    const tap = (operator: string, code: string, choice: 'send' | 'decline') => inHub(`m.onCardTap(${JSON.stringify({ operator: { open_id: operator }, action: { value: { hub: 'send_message', code, choice } } })})`);
+    const byCard = await withCard('五点见');
     const sentBefore = lark.messages.length;
+    const card = lark.cards.at(-1)!;
+    check(lark.cards.length === 1 && card.to === 'ou_dev_alex' && card.card.includes('五点见') && card.card.includes(byCard.send_code) && card.card.includes('"Send"') && String(byCard.next).includes('card') && sentBefore === n0 + 2,
+      'with cards set up, the hub\'s bot shows Alex the preview in Lark, with Send and Don\'t send');
+    check((await withCard('五点见')).send_code === byCard.send_code && lark.cards.length === 1, 'preparing the same message again keeps its code and card');
     const notHis = await tap('ou_dev_bob', byCard.send_code, 'send');
     check(notHis.toast?.type === 'error' && !notHis.card && lark.messages.length === sentBefore, 'only the sender can answer the card');
     const tapped = await tap('ou_dev_alex', byCard.send_code, 'send');
@@ -2472,12 +2525,19 @@ try {
       'tapping Send sends it as the person and turns the card into a sent note');
     check(String((await tool(alex.token, 'send_lark_message', { send_code: byCard.send_code })).error).includes('already sent') && lark.messages.length === sentBefore + 1, 'the agent\'s yes afterwards is told it went out already, and nothing goes twice');
     check((await tap('ou_dev_alex', byCard.send_code, 'send')).toast?.type === 'info' && lark.messages.length === sentBefore + 1, 'and a second tap does nothing');
-    const unwanted = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '算了' });
+    const viaAgent = await withCard('六点见');
+    await tool(alex.token, 'send_lark_message', { send_code: viaAgent.send_code });
+    await new Promise((ok) => setTimeout(ok, 200));
+    const agentCard = lark.cards.at(-1)!;
+    check(lark.messages.length === sentBefore + 2 && agentCard.updates.length === 1 && agentCard.updates[0].includes('✓') && !agentCard.updates[0].includes('"button"'), 'sent with the agent\'s yes, the card says so, without the buttons');
+    const unwanted = await withCard('算了');
     const declined = await tap('ou_dev_alex', unwanted.send_code, 'decline');
-    check(JSON.stringify(declined.card).includes('Cancelled') && String((await tool(alex.token, 'send_lark_message', { send_code: unwanted.send_code })).error).includes("Don't send") && lark.messages.length === sentBefore + 1,
+    check(JSON.stringify(declined.card).includes('Cancelled') && String((await tool(alex.token, 'send_lark_message', { send_code: unwanted.send_code })).error).includes("Don't send") && lark.messages.length === sentBefore + 2,
       'tapping Don\'t send cancels it, and the agent is told so');
     check((await tap('ou_dev_alex', 'nope1234', 'send')).toast?.type === 'error', 'an unknown or expired preview only says so');
-    check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 2 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged (by the agent\'s yes or the card), never the text');
+    const cards = lark.cards.length;
+    const notAsked = await withCard('七点见', "'accept'");
+    check(!!notAsked.send_code && lark.cards.length === cards + 1 && lark.messages.length === sentBefore + 2, 'and the card is used even for an agent whose app could ask');
     // a file, uploaded as it is, then sent before the text
     const up = await tool(alex.token, 'create_upload', { purpose: 'file' });
     check((await fetch(up.upload_url, { method: 'PUT', body: 'PDF-BYTES' })).ok && String(up.command).includes('--data-binary @<FILE>'), 'a file is uploaded as it is');
@@ -2498,7 +2558,7 @@ try {
     check((await api(alex.jar, 'POST', '/lark/messages', { noConfirm: true })).body.noConfirm === true, 'the person can let their agents send without asking first');
     const k = lark.messages.length;
     const direct = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '马上到' });
-    check(direct.sent?.[0] === '周明' && !direct.send_code && lark.messages.length === k + 1 && lark.messages.at(-1)!.text.startsWith('马上到\n—— '), 'then a message goes out at once, still signed');
+    check(direct.sent?.[0] === '周明' && !direct.send_code && lark.messages.length === k + 1 && lark.messages.at(-1)!.text.startsWith('马上到\n\n—— '), 'then a message goes out at once, still signed');
     await api(alex.jar, 'POST', '/lark/messages', { noConfirm: false });
     check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: 'x' })).send_code && lark.messages.length === k + 1, 'and asking first comes back when they turn it off');
     await connect(alex.jar);

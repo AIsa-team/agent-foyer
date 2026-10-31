@@ -1,9 +1,11 @@
 /**
  * Lark messages and files sent as the person by their agent ("send Alex the quote and tell him it moved to three").
  * Off until the person turns it on on their Me page and allows it in Lark. Every message is previewed first and sent
- * only with the code from that preview, so it goes out exactly as the person saw it, signed as sent by their AI twin.
- * The hub's bot also shows the person the preview in Lark with Send and Don't send, so their yes does not depend on the
- * agent passing it on. Someone who trusts their agents can turn the preview off, and then messages go out at once.
+ * only with the person's yes to that preview, so it goes out exactly as they saw it, signed as sent by their AI twin.
+ * Where the hub is set up for it, the yes comes from a card the hub's bot sends in Lark, the channel the message goes
+ * out on; otherwise from the agent's own app, which shows the preview as a question (MCP elicitation). Either way it
+ * does not depend on the agent passing it on. Agents whose app cannot ask get a code to send with once the person
+ * agreed in the chat. Someone who trusts their agents can turn confirming off, and then messages go out at once.
  * The hub keeps who was messaged and when, never the text or the file, and never reads anyone's messages with their
  * access (asUser refuses).
  */
@@ -17,6 +19,7 @@ import { peekUpload, takeUpload } from '../uploads.ts';
 import { getTenantToken } from './auth.ts';
 import { localTime } from './calendar.ts';
 import { DENIED_CODES, larkFetch, LarkError, SCOPE_CODES } from './client.ts';
+import type { Answer } from '../mcp.ts';
 import { asUser, connection } from './userToken.ts';
 
 /** Lark asks for both to send as a person; the hub only ever sends with them. */
@@ -84,8 +87,8 @@ const nameOf = (id: string) => get<{ name: string }>('SELECT name FROM users WHE
 const localeOf = (id: string) => get<{ locale: string | null }>('SELECT locale FROM users WHERE id = ?', id)?.locale ?? config.defaultLocale;
 const names = (ids: string[], locale: string) => new Intl.ListFormat(locale, { type: 'conjunction' }).format(ids.map(nameOf));
 
-/** The last lines of every message, in the recipient's language: who sent it, through their AI twin. */
-const signed = (text: string, sender: User, locale: string) => [text, tr(locale, 'lark.msg.sentByTwin', { name: sender.name })].filter(Boolean).join('\n');
+/** The last line of every message, after a blank line, in the recipient's language: who sent it, through their AI twin. */
+const signed = (text: string, sender: User, locale: string) => [text, tr(locale, 'lark.msg.sentByTwin', { name: sender.name })].filter(Boolean).join('\n\n');
 
 /** Lark's file types; anything else goes as a plain file. */
 function fileType(name: string) {
@@ -124,17 +127,30 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
   };
 }
 
-/** The preview to show the person, or, if they turned confirming off, the message sent at once. */
-export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string) {
+/**
+ * The preview and its code, with a card in Lark where the hub is set up for it; otherwise the message sent once the
+ * person said yes in their agent's app (`ask`). Sent at once if they turned confirming off.
+ */
+export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string, ask?: (message: string) => Promise<Answer>) {
   const prepared = prepareMessage(user, to, text, file, locale);
   if (withoutConfirm(user.id)) {
     return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
   }
-  if (!(await askInLark(user, prepared.send_code))) return prepared;
-  return {
-    ...prepared,
-    next: `NOT SENT YET. The hub also sent the user this preview in Lark, as a card with Send and Don't send. Show them who gets this and tell them they can tap Send there, or tell you to send it; then call send_lark_message with only {"send_code": "${prepared.send_code}"}. If that says it was already sent, they sent it from the card: do not send again. If they want changes, prepare a new one.`,
-  };
+  if (config.lark.confirmCards) {
+    if (!(await askInLark(user, prepared.send_code))) return prepared;
+    return {
+      ...prepared,
+      next: `NOT SENT YET. The hub also sent the user this preview in Lark, as a card with Send and Don't send. Show them who gets this and tell them they can tap Send there, or tell you to send it; then call send_lark_message with only {"send_code": "${prepared.send_code}"}. If that says it was already sent, they sent it from the card: do not send again. If they want changes, prepare a new one.`,
+    };
+  }
+  const answer = ask ? await ask(question(prepared.preview, localeOf(user.id))) : null;
+  if (answer === 'accept') return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'The user confirmed this message in the dialog, and it was sent.' };
+  if (answer === 'decline') {
+    run("UPDATE lark_pending SET state = 'declined', payload = '' WHERE code = ?", prepared.send_code);
+    return { sent: [], declined: true, note: 'The user declined this message in the dialog; nothing was sent. Ask them what to change.' };
+  }
+  if (answer === 'cancel') return { ...prepared, next: `NOT SENT: the user closed the dialog without answering. If they then agree in the chat, call send_lark_message with only {"send_code": "${prepared.send_code}"}.` };
+  return prepared;
 }
 
 /** Sends the message a preview showed, as the person, and updates its confirmation card in Lark. */
@@ -203,6 +219,14 @@ async function deliver(user: User, p: Waiting) {
   }
   return { sent, ...(p.file ? { file: p.file.name } : {}), ...(failed.length ? { failed } : {}) };
 }
+
+/** The question the agent's app shows the person: who gets what, as they will see it. */
+const question = (p: ReturnType<typeof prepareMessage>['preview'], locale: string) => [
+  tr(locale, 'lark.confirm.question', { names: new Intl.ListFormat(locale, { type: 'conjunction' }).format(p.to) }),
+  ...(p.file ? [tr(locale, 'lark.card.file', { name: p.file.name, size: size(p.file.bytes) })] : []),
+  '',
+  p.text,
+].join('\n');
 
 // ---- the confirmation card: the preview from the hub's bot, with Send and Don't send ----
 type Result = Awaited<ReturnType<typeof deliver>>;

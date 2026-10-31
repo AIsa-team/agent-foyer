@@ -7,6 +7,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { appUrl, config } from '../config.ts';
 import type { User } from '../db.ts';
+import type { Answer } from '../mcp.ts';
 import { UserError } from '../i18n/index.ts';
 import * as apps from '../apps/service.ts';
 import * as appLark from '../apps/larkApi.ts';
@@ -26,7 +27,8 @@ export interface ToolKit {
   server: McpServer;
   user: User;
   locale: string;
-  guard: <A>(fn: (args: A) => Promise<unknown> | unknown) => (args: A) => Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }>;
+  /** Wraps a tool; it may ask the person a yes or no in their agent's app (null: that app cannot show it). */
+  guard: <A>(fn: (args: A, ask: (message: string) => Promise<Answer>) => Promise<unknown> | unknown) => (args: A) => Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }>;
   resolveColleagues: (refs: string[]) => string[];
 }
 
@@ -179,15 +181,15 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
   server.registerTool('send_lark_message', {
-    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Two steps: call with to, text and/or file to get a preview and a send_code; show the user exactly who gets what; only after they agree, call again with only send_code (copied from the preview result, valid 10 minutes) and that exact message is sent. The user also gets the preview in Lark as a card with Send and Don\'t send; if they used it, calling with the send_code says so, and nothing is sent twice. Calling with to/text again never sends; it only repeats the preview. Never send anything the user has not seen. If the user turned off confirming on their Me page, the first call sends at once (the result says so): only call it when they asked for that message, and tell them afterwards what went to whom. Up to 10 colleagues. For a file (at most 30 MB): create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}.',
+    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Call with to, text and/or file. If your app can show the user a question, the hub asks them there and sends once they accept (the result says what happened). Otherwise you get a preview and a send_code: show the user exactly who gets what; only after they agree, call again with only send_code (copied from the preview result, valid 10 minutes) and that exact message is sent. Where the hub sends the user the preview as a card in Lark, they may send it there instead; then calling with the send_code says so, and nothing is sent twice. Calling with to/text again never sends; it only repeats the preview. Never send anything the user has not seen. If the user turned off confirming on their Me page, the first call sends at once (the result says so): only call it when they asked for that message, and tell them afterwards what went to whom. Up to 10 colleagues. For a file (at most 30 MB): create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}.',
     inputSchema: {
       to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
       text: z.string().optional(),
       file: z.object({ upload_id: z.string(), name: z.string().describe('the file name the recipients see, e.g. 报价单.pdf') }).optional(),
       send_code: z.string().optional().describe('the send_code from the preview result (8 characters), once the user agreed: sends that message'),
     },
-  }, guard((a: { to?: string[]; text?: string; file?: FileRef; send_code?: string }) =>
-    (a.send_code ? sendPrepared(user, a.send_code.trim()) : sendOrPrepare(user, resolveColleagues(a.to ?? []), a.text ?? '', a.file ?? null, locale))));
+  }, guard((a: { to?: string[]; text?: string; file?: FileRef; send_code?: string }, ask) =>
+    (a.send_code ? sendPrepared(user, a.send_code.trim()) : sendOrPrepare(user, resolveColleagues(a.to ?? []), a.text ?? '', a.file ?? null, locale, ask))));
 
   server.registerTool('read_lark_messages', {
     description: 'Reads one Lark conversation as the user, only if they turned reading on (Me page, Lark data card): their direct chat with a colleague (e.g. what they replied) or a group chat (chat_id from find_lark_chat). Recent messages, oldest first, with sender, time (company time zone) and text; files and images come with a download link valid 10 minutes. Read only the conversation the user asked about.',
