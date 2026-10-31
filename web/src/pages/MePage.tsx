@@ -52,7 +52,7 @@ function LarkDataCard() {
     if (confirm(t('me.lark.disconnectConfirm'))) run(() => api.post('/lark/disconnect'), t('me.lark.disconnected')).then(reload);
   };
   return (
-    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.lark.title')} connected={data.connected} extra={data.connected && <><LarkFeature path="/lark/messages" kind="messages" /><LarkFeature path="/lark/reading" kind="reading" /></>}
+    <ConnectionCard logo={<ServiceLogo src="/services/lark.png" />} title={t('me.lark.title')} connected={data.connected} extra={data.connected && <><LarkFeature path="/lark/messages" kind="messages" /><LarkFeature path="/lark/reading" kind="reading" /><TwinFeature /></>}
       action={data.connected
         ? <button className="btn sm ghost danger" disabled={busy} onClick={disconnect} type="button">{t('me.lark.disconnect')}</button>
         : <a className="btn sm primary" href={data.connectUrl}>{t('me.lark.connect')}</a>}>
@@ -100,6 +100,93 @@ function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading
           </span>
         </label>
       )}
+    </div>
+  );
+}
+
+interface TwinStatus {
+  on: boolean; granted: boolean; connectUrl: string; setUp: boolean;
+  links: { memory: string | null; profile: string | null; style: string | null } | null;
+  groupMode: 'mentions' | 'all'; watch: { id: string; name: string }[];
+  week: { conversations: number; predictions: number; settled: number; accuracy: number | null };
+  proposals: { code: string; doc: 'profile' | 'style'; at: number; markdown: string; reason: string }[];
+}
+
+/**
+ * The AI twin in shadow mode: the person's agent watches their new messages, predicts whether and how they would
+ * reply, and learns from what they did, sending nothing. Here they switch it on, see where its memory is, choose which
+ * groups it looks at, and approve or turn down changes it proposes to its two documents.
+ */
+function TwinFeature() {
+  const { t } = useI18n();
+  const { data, reload } = useApi<TwinStatus>('/lark/twin');
+  const { busy, run } = useAction();
+  if (!data) return null;
+  const save = (b: object, done?: string) => run(() => api.post('/lark/twin', b), done).then(reload);
+  const toggle = (on: boolean) => run(async () => {
+    const s = await api.post<TwinStatus>('/lark/twin', { on });
+    if (on && !s.granted) location.href = s.connectUrl;
+    else reload();
+  }, on ? undefined : t('me.twin.turnedOff'));
+  const answer = (code: string, apply: boolean) => run(() => api.post(`/lark/twin/proposals/${code}`, { apply }), t(apply ? 'me.twin.applied' : 'me.twin.declined')).then(reload);
+  const ready = data.on && data.granted;
+  return (
+    <div className="conn-card__feature">
+      <label className="aisa-switch">
+        <input type="checkbox" checked={data.on} disabled={busy} onChange={(e) => void toggle(e.target.checked)} />
+        <span>{t('me.twin.title')}</span>
+      </label>
+      <p className="small muted" style={{ margin: 0 }}>
+        {!data.on ? t('me.twin.body')
+          : !data.granted ? <>{t('me.twin.allowBody')} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>
+          : !data.setUp ? t('me.twin.startBody')
+          : t('me.twin.onBody', { conversations: data.week.conversations, predictions: data.week.predictions, accuracy: data.week.accuracy == null ? '—' : `${data.week.accuracy}%` })}
+      </p>
+      {ready && data.links && (
+        <p className="small" style={{ margin: 0, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {([['memory', 'me.twin.memory'], ['profile', 'me.twin.profile'], ['style', 'me.twin.style']] as const).map(([k, label]) => data.links![k] && (
+            <a key={k} href={data.links![k]!} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>{t(label)}</a>
+          ))}
+        </p>
+      )}
+      {ready && (
+        <div className="conn-card__option" style={{ cursor: 'default', flexWrap: 'wrap' }}>
+          <span className="grow">
+            <span className="conn-card__option-title">{t('me.twin.groups')}</span>
+            <span className="small muted">{t('me.twin.groupsBody')}</span>
+          </span>
+          <select className="select" style={{ width: 'auto' }} value={data.groupMode} disabled={busy} aria-label={t('me.twin.groups')}
+            onChange={(e) => void save({ groupMode: e.target.value })}>
+            <option value="mentions">{t('me.twin.groupsMentions')}</option>
+            <option value="all">{t('me.twin.groupsAll')}</option>
+          </select>
+          {data.watch.length > 0 && (
+            <span className="chips" style={{ flexBasis: '100%', alignItems: 'center' }}>
+              <span className="small muted">{t('me.twin.watching')}</span>
+              {data.watch.map((w) => (
+                <span key={w.id} className="chip" style={{ paddingLeft: 10 }}>
+                  {w.name || w.id}
+                  <button type="button" disabled={busy} onClick={() => void save({ unwatch: [w.id] })} aria-label={t('me.twin.unwatch')} title={t('me.twin.unwatch')}>×</button>
+                </span>
+              ))}
+            </span>
+          )}
+        </div>
+      )}
+      {data.proposals.map((p) => (
+        <div key={p.code} className="conn-card__option" style={{ flexDirection: 'column', alignItems: 'stretch', cursor: 'default' }}>
+          <span className="conn-card__option-title">{t('me.twin.proposal', { doc: t(p.doc === 'profile' ? 'me.twin.profile' : 'me.twin.style') })}</span>
+          <span className="small muted">{p.reason}</span>
+          <details>
+            <summary className="small">{t('me.twin.proposalText')}</summary>
+            <pre className="small" style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', maxHeight: 280, overflow: 'auto' }}>{p.markdown}</pre>
+          </details>
+          <span style={{ display: 'flex', gap: 8 }}>
+            <button className="btn sm primary" type="button" disabled={busy} onClick={() => void answer(p.code, true)}>{t('me.twin.apply')}</button>
+            <button className="btn sm ghost" type="button" disabled={busy} onClick={() => void answer(p.code, false)}>{t('me.twin.decline')}</button>
+          </span>
+        </div>
+      ))}
     </div>
   );
 }

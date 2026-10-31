@@ -81,14 +81,21 @@ export async function userAccessToken(user: Pick<User, 'id'>, force = false): Pr
 /**
  * What a person's access may do in Lark's messaging API: send messages and the files in them (lark/messages.ts), and,
  * only while they keep reading turned on (lark/reading.ts), read a conversation, find their chats and fetch files from
- * messages. Everything else under /im/ is refused, whatever the person allowed in Lark.
+ * messages; while their AI twin is on too (lark/twin.ts), search their messages and look up single messages and chats.
+ * Everything else under /im/ is refused, whatever the person allowed in Lark.
  */
 export function imAllowed(userId: string, path: string, method = 'GET'): boolean {
+  const reading = () => !!get<{ read_as_me: number }>('SELECT read_as_me FROM users WHERE id = ?', userId)?.read_as_me;
+  const twin = () => reading() && !!get<{ enabled: number }>('SELECT enabled FROM twin WHERE user_id = ?', userId)?.enabled;
+  // searching all of the person's messages is only for their AI twin (lark/twin.ts), while it is on
+  if (path.startsWith('/search/v2/message')) return method === 'POST' && twin();
   if (!path.startsWith('/im/')) return true;
   if (method === 'POST' && (path.startsWith('/im/v1/messages?') || path === '/im/v1/files' || path === '/im/v1/images')) return true;
   const read = (method === 'GET' && (/^\/im\/v1\/messages\?/.test(path) || /^\/im\/v1\/messages\/[^/?]+\/resources\/[^/?]+\?/.test(path) || path.startsWith('/im/v1/chats/search?')))
     || (method === 'POST' && path.startsWith('/im/v1/chat_p2p/batch_query?'));
-  return read && !!get<{ read_as_me: number }>('SELECT read_as_me FROM users WHERE id = ?', userId)?.read_as_me;
+  // the twin also looks up single messages its search found, and the chats they are in
+  const twinRead = method === 'GET' && (/^\/im\/v1\/messages\/[^/?]+\?user_id_type=open_id$/.test(path) || /^\/im\/v1\/chats\/oc_[\w-]+\?user_id_type=open_id$/.test(path));
+  return (read && reading()) || (twinRead && twin());
 }
 
 /**

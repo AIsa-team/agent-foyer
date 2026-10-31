@@ -21,7 +21,9 @@ import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
 import { uploadFile } from './files.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
 import { inlineFile, sendOrPrepare, sendPrepared, type FileRef, type InlineFile } from './messages.ts';
-import { findChats, readMessages } from './reading.ts';
+import { findChats, nameOf, readMessages } from './reading.ts';
+import * as twin from './twin.ts';
+import { TWIN_GUIDE } from './twinGuide.ts';
 
 /** What a group of tools needs from the server being built: the person, their language and the result wrapper. */
 export interface ToolKit {
@@ -225,4 +227,114 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
     description: 'Finds Lark group chats the user is in (or may see) by a word in their name or a member\'s name, as the user, only if they turned reading on. Returns chat_id and name for read_lark_messages.',
     inputSchema: { query: z.string().describe('part of the group name, or a member\'s name') },
   }, guard((a: { query: string }) => findChats(user, a.query)));
+}
+
+/**
+ * The person's AI twin, phase one (shadow mode): their agent finds new messages, predicts whether and how the person
+ * would reply, and learns from what they actually did, with its memory in the person's own Base and documents.
+ */
+export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKit) {
+  server.registerTool('twin_guide', {
+    description: 'How to run the user\'s AI twin (cold start, patrol, reflection, morning prep, guardrails). Read it first whenever the user asks you to act as their AI twin / 分身, or to keep an eye on their Lark messages for them.',
+  }, guard(() => ({ guide: TWIN_GUIDE, status: { on: twin.twinOn(user.id) } })));
+
+  server.registerTool('setup_twin', {
+    description: 'Creates the AI twin\'s memory in the user\'s own Lark, once: a Base (memories, shadow predictions, corrections) and two documents ("who I am", "how I reply"). Later calls return the links. Needs the user to have turned on the AI twin on their Me page.',
+  }, guard(() => twin.setupTwin(user)));
+
+  server.registerTool('check_new_messages', {
+    description: 'The user\'s new Lark messages since the last check (at most once a minute), grouped by conversation: direct chats, and groups where they were @mentioned or that they chose to watch. Bots and the user\'s own messages are left out; you_replied says the user already answered. Shadow mode: predict with record_prediction, never send.',
+  }, guard(() => twin.checkNewMessages(user)));
+
+  server.registerTool('my_message_history', {
+    description: 'The user\'s past Lark conversations, for the twin\'s cold start and replay. Without chat_id: the conversations of the last `days` (default 30, at most 90). With chat_id: that conversation\'s messages, oldest first, 100 per page (page_token for the next). Learn from what the user answered to what, and what they left unanswered; keep conclusions with remember, never the messages.',
+    inputSchema: {
+      days: z.number().int().min(1).max(90).optional(),
+      chat_id: z.string().optional(),
+      page_token: z.string().optional(),
+    },
+  }, guard((a: { days?: number; chat_id?: string; page_token?: string }) => twin.messageHistory(user, a)));
+
+  server.registerTool('twin_context', {
+    description: 'Read before every prediction: the twin\'s "who I am" and "how I reply" documents, and a one-line index of the memories about this colleague or chat (and about the user in general) that hold today, plus the level (shadow). Details with recall_memory.',
+    inputSchema: {
+      colleague: z.string().optional().describe('the person who wrote: open_id (with_id from check_new_messages), email or name'),
+      chat_id: z.string().optional(),
+    },
+  }, guard((a: { colleague?: string; chat_id?: string }) => twin.twinContext(user, { chat_id: a.chat_id, colleague: a.colleague ? resolveColleagues([a.colleague])[0] : undefined })));
+
+  server.registerTool('recall_memory', {
+    description: 'The twin\'s memories in full (detail, source, validity): by ids from twin_context, or by words to search for.',
+    inputSchema: { ids: z.array(z.string()).max(20).optional(), query: z.string().optional() },
+  }, guard((a: { ids?: string[]; query?: string }) => twin.recallMemory(user, a)));
+
+  server.registerTool('remember', {
+    description: 'Adds one memory to the twin\'s Base (one fact per memory, with its source), or changes one by id. Never delete: mark it replaced (with replaced_by) or wrong. Things that change get valid_until. Do not keep message text, sensitive personal matters about colleagues, or passwords and codes.',
+    inputSchema: {
+      id: z.string().optional().describe('to change an existing memory'),
+      type: z.enum(['person', 'project', 'preference', 'decision', 'commitment', 'correction', 'today']).optional(),
+      summary: z.string().optional().describe('one line, at most 80 characters: what the index shows'),
+      detail: z.string().optional(),
+      colleague: z.string().optional().describe('the colleague it is about (email, name or open_id)'),
+      about: z.string().optional().describe('who or what it is about, when not a colleague (e.g. an outside contact)'),
+      chat_id: z.string().optional().describe('the chat it is about'),
+      source: z.string().optional().describe('link to where it comes from (a document, a message chat)'),
+      confidence: z.enum(['high', 'medium', 'low']).optional(),
+      valid_from: z.string().optional().describe('YYYY-MM-DD'),
+      valid_until: z.string().optional().describe('YYYY-MM-DD, when it stops holding'),
+      status: z.enum(['active', 'replaced', 'wrong']).optional(),
+      replaced_by: z.string().optional().describe('id of the memory that replaces it'),
+    },
+  }, guard((a: twin.Remember & { colleague?: string }) => {
+    const id = a.colleague ? resolveColleagues([a.colleague])[0] : undefined;
+    return twin.remember(user, { ...a, ...(id ? { about_id: id, about: a.about ?? nameOf(id) } : {}) });
+  }));
+
+  server.registerTool('record_prediction', {
+    description: 'Shadow mode: records your prediction for a message someone sent the user (from check_new_messages): whether they would reply, how urgently, and what they would say. Nothing is sent. Live, the hub later fills in what the user actually did. For past messages (cold start), pass replay with what the user did.',
+    inputSchema: {
+      message_id: z.string(),
+      should_reply: z.boolean(),
+      urgency: z.enum(['now', 'today', 'later']).optional(),
+      reply: z.string().optional().describe('what you predict the user would say'),
+      scenario: z.string().optional().describe('a short, stable label, e.g. "schedule", "status question"; accuracy is counted per scenario'),
+      replay: z.object({
+        replied: z.boolean(), reply: z.string().optional(), gap_minutes: z.number().int().min(0).optional(),
+      }).optional().describe('past messages only: what the user actually did'),
+    },
+  }, guard((a: twin.Prediction) => twin.recordPrediction(user, a)));
+
+  server.registerTool('list_predictions', {
+    description: 'For the daily reflection: your predictions whose outcome is known and that you have not learned from yet (all: true for every recent one), with your predicted reply and the user\'s actual one.',
+    inputSchema: { days: z.number().int().min(1).max(90).optional(), all: z.boolean().optional() },
+  }, guard((a: { days?: number; all?: boolean }) => twin.listPredictions(user, a)));
+
+  server.registerTool('review_prediction', {
+    description: 'After comparing a prediction with what the user did: why it differed (cause), how close your reply was (1–5), and that you learned from it (distilled). replied_elsewhere when the user tells you they answered another way.',
+    inputSchema: {
+      id: z.string(),
+      cause: z.enum(['same', 'missingFact', 'stance', 'tone', 'shouldNotReply', 'missed']).optional(),
+      closeness: z.number().min(1).max(5).optional(),
+      distilled: z.boolean().optional(),
+      replied_elsewhere: z.boolean().optional(),
+    },
+  }, guard((a: { id: string; cause?: string; closeness?: number; distilled?: boolean; replied_elsewhere?: boolean }) => twin.reviewPrediction(user, a)));
+
+  server.registerTool('suggest_twin_doc_change', {
+    description: 'Proposes a new version of one of the twin\'s documents ("profile": who the user is; "style": how they reply), as the whole new text in Markdown, with the reason. It changes only when the user agrees (on a Lark card or their Me page); you cannot edit these documents directly.',
+    inputSchema: {
+      doc: z.enum(['profile', 'style']),
+      markdown: z.string(),
+      reason: z.string().describe('one or two sentences: what changes and why'),
+    },
+  }, guard((a: { doc: 'profile' | 'style'; markdown: string; reason: string }) => twin.suggestDocChange(user, a)));
+
+  server.registerTool('twin_settings', {
+    description: 'Which group chats the twin looks at, when the user asks to change it: group_mode "mentions" (only messages that @mention them, plus watched groups; the default) or "all"; watch / unwatch group chat_ids (find_lark_chat finds them). Direct chats are always included.',
+    inputSchema: {
+      group_mode: z.enum(['mentions', 'all']).optional(),
+      watch: z.array(z.string()).max(50).optional(),
+      unwatch: z.array(z.string()).max(50).optional(),
+    },
+  }, guard((a: { group_mode?: 'mentions' | 'all'; watch?: string[]; unwatch?: string[] }) => twin.twinSettings(user, a)));
 }

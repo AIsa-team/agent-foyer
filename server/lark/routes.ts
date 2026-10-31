@@ -19,6 +19,7 @@ import { botChats } from './chats.ts';
 import { calendarAppUrl, calendarEvents, today as calendarToday } from './calendar.ts';
 import { messagesStatus, setMessagesOn, setWithoutConfirm } from './messages.ts';
 import { readingStatus, setReadingOn } from './reading.ts';
+import { answerProposal, setTwinOn, setTwinSettings, twinStatus } from './twin.ts';
 
 export const larkApi = new Hono<HubEnv>();
 
@@ -57,7 +58,22 @@ larkApi.get('/lark/reading', (c) => c.json(readingStatus(c.get('user'))));
 larkApi.post('/lark/reading', async (c) => {
   const b = await body<{ on?: boolean }>(c);
   setReadingOn(c.get('user'), b.on === true);
+  // the AI twin reads messages, so it stops when reading does
+  if (b.on !== true) setTwinOn(c.get('user'), false);
   return c.json(readingStatus(c.get('user')));
+});
+/** The AI twin in shadow mode: the person's own switch, its settings, and the changes to its documents waiting for them. */
+larkApi.get('/lark/twin', (c) => c.json(twinStatus(c.get('user'))));
+larkApi.post('/lark/twin', async (c) => {
+  const b = await body<{ on?: boolean; groupMode?: 'mentions' | 'all'; unwatch?: string[] }>(c);
+  if (b.on !== undefined) setTwinOn(c.get('user'), b.on === true);
+  setTwinSettings(c.get('user'), { groupMode: b.groupMode, unwatch: Array.isArray(b.unwatch) ? b.unwatch.map(String) : undefined });
+  return c.json(twinStatus(c.get('user')));
+});
+larkApi.post('/lark/twin/proposals/:code', async (c) => {
+  const b = await body<{ apply?: boolean }>(c);
+  await answerProposal(c.get('user'), c.req.param('code'), b.apply === true);
+  return c.json(twinStatus(c.get('user')));
 });
 
 /** The company OKR page: everyone's objectives for a period, how they align, and the team's pace. */

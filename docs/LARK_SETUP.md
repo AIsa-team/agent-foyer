@@ -94,6 +94,7 @@ page, and Lark asks them for these when they do):
 | `im:message`, `im:message.send_as_user` | `send_lark_message`: messages sent as the person, each one previewed first |
 | `im:resource` | sending a file or picture with a message (pictures show in the chat) |
 | `im:message:readonly`, `im:message.p2p_msg:get_as_user`, `im:message.group_msg:get_as_user`, `im:chat:read` | `read_lark_messages` and `find_lark_chat`: reading the one conversation the person asks about |
+| `search:message` | the AI twin in shadow mode (`check_new_messages`, `my_message_history`): finding the person's new messages across their chats, only while they keep "AI twin" on on their Me page. The twin also needs the reading scopes above, `bitable:app` and the document scopes (its memory is a Base and two documents in the person's own space). It sends nothing |
 
 Each message is confirmed by the person before it goes out. By default their agent's app asks them (an MCP
 elicitation: Claude Code and Codex show it as a dialog); agents whose app cannot ask show the preview in the chat and

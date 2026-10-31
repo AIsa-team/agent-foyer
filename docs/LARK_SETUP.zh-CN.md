@@ -82,6 +82,7 @@
 | `im:message`、`im:message.send_as_user` | `send_lark_message`：以本人身份发消息，每条先预览 |
 | `im:resource` | 随消息发文件或图片（图片在聊天里直接显示） |
 | `im:message:readonly`、`im:message.p2p_msg:get_as_user`、`im:message.group_msg:get_as_user`、`im:chat:read` | `read_lark_messages`、`find_lark_chat`：只读本人指定的那一个会话 |
+| `search:message` | AI 分身的影子模式（`check_new_messages`、`my_message_history`）：在本人所有会话里找新消息，只在本人在「我的」页打开「AI 分身」时使用。分身还需要上面的读消息权限、`bitable:app` 和文档权限（它的记忆是本人空间里的一个多维表格和两份文档）。它什么都不发 |
 
 每条消息发出前都要本人确认。默认由 Agent 客户端弹窗询问（MCP elicitation，Claude Code、Codex 会弹出确认框）；客户端不支持弹窗时，Agent 在对话里给出预览，本人同意后用一次性发送码发出。
 

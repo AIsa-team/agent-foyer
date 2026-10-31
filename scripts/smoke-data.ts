@@ -100,6 +100,11 @@ const lark = {
   sendTokens: new Set<string>(),
   fileTokens: new Set<string>(),
   readTokens: new Set<string>(),
+  twinTokens: new Set<string>(),
+  // messages the AI twin finds through search (id → where, who, when, what)
+  inbox: new Map<string, { id: string; chat: string; from: string; at: number; text: string; bot?: boolean; mentions?: string[] }>(),
+  // records of Bases created during the run, per app/table
+  records: new Map<string, Map<string, Record<string, unknown>>>(),
   messageReads: [] as { chat: string; size: number }[],
   uploads: [] as { name: string; key: string; as: 'bot' | 'user'; bytes: string; image?: boolean }[],
   scopesAsked: '',
@@ -128,7 +133,7 @@ const lark = {
   sheetCols: 4,
   sheetReadOnly: false,
   sheet: [['客户', '产品', '金额', '状态'], ['Northwind', 'API 套餐', '12000', '已签'], ['Lumen', 'Skills', '3000', '谈判中'], [], ['Atlas', 'API 套餐', '8000', '已签']] as unknown[][],
-  made: new Map<string, { title: string; folder?: string; blocks: { block_id: string; block_type: number; children?: string[] }[]; calls: number }>(),
+  made: new Map<string, { title: string; folder?: string; blocks: { block_id: string; block_type: number; children?: string[] }[]; top?: string[]; calls: number }>(),
   doc: new Map<string, DocBlock>(),
   fixP1: false,
   created: [] as { table: string; fields: Record<string, unknown>; by: string }[],
@@ -186,6 +191,7 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('search:docs:read')) lark.searchTokens.add(a);
+  if (lark.scopesAsked.split(' ').includes('search:message')) lark.twinTokens.add(a);
   if (['drive:file:readonly', 'drive:file'].some((s) => lark.scopesAsked.split(' ').includes(s))) lark.driveReadTokens.add(a);
   if (['drive:file', 'drive:drive.metadata:readonly'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.driveWriteTokens.add(a);
   if (['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.sendTokens.add(a);
@@ -522,6 +528,35 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   if (p === '/authen/v1/user_info') return userOk() ? send({ code: 0, data: { open_id: 'ou_dev_alex', name: 'Alex' } }) : send({ code: 99991668, msg: 'bad token' });
   if (p === '/auth/v3/tenant_access_token/internal') return send({ code: 0, tenant_access_token: 't-app', expire: 7200 });
   if (p === '/im/v1/chats') return bearer === 't-app' ? send({ code: 0, data: { items: [{ chat_id: 'oc_dev', name: '开发群' }, { chat_id: 'oc_finance', name: '财务' }], has_more: false } }) : send({ code: 99991663, msg: 'bad tenant token' });
+  // the AI twin: searching the person's messages (ids only, newest first), and single messages and chats by id
+  if (p === '/search/v2/message' && req.method === 'POST') {
+    if (!lark.twinTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [search:message]' });
+    const start = Number(body.start_time ?? 0) * 1000;
+    const end = body.end_time ? Number(body.end_time) * 1000 + 999 : Infinity;
+    const hits = [...lark.inbox.values()].filter((m) => m.at >= start && m.at <= end
+      && (!body.chat_type || (body.chat_type === 'p2p_chat') === m.chat.startsWith('oc_p2p'))
+      && (body.from_type !== 'user' || !m.bot)
+      && (!body.from_ids?.length || body.from_ids.includes(m.from))
+      && (!body.chat_ids?.length || body.chat_ids.includes(m.chat)))
+      .sort((x, y) => y.at - x.at).map((m) => m.id);
+    const from = Number(url.searchParams.get('page_token') || 0);
+    return send({ code: 0, data: { items: hits.slice(from, from + 20), has_more: from + 20 < hits.length, page_token: String(from + 20) } });
+  }
+  const oneMessage = p.match(/^\/im\/v1\/messages\/(om_t\w+)$/);
+  if (oneMessage && req.method === 'GET') {
+    if (!lark.readTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message:readonly]' });
+    const m = lark.inbox.get(oneMessage[1]);
+    if (!m) return send({ code: 230011, msg: 'message not found' });
+    return send({ code: 0, data: { items: [{
+      message_id: m.id, msg_type: 'text', create_time: String(m.at), chat_id: m.chat, sender: { id: m.from, id_type: 'open_id', sender_type: m.bot ? 'app' : 'user' },
+      body: { content: JSON.stringify({ text: m.text }) }, ...(m.mentions ? { mentions: m.mentions.map((id, i) => ({ key: `@_user_${i + 1}`, id, name: id })) } : {}),
+    }] } });
+  }
+  const oneChat = p.match(/^\/im\/v1\/chats\/(oc_\w+)$/);
+  if (oneChat && req.method === 'GET') {
+    const direct = oneChat[1].startsWith('oc_p2p');
+    return send({ code: 0, data: { name: direct ? '' : `群 ${oneChat[1].slice(3)}`, chat_mode: direct ? 'p2p' : 'group' } });
+  }
   // reading as the person, who allowed it: their direct chat with Bob, a group, and a file Bob sent
   const readScope = () => send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.p2p_msg:get_as_user]' });
   if (p === '/im/v1/chats/search' && req.method === 'GET') {
@@ -544,6 +579,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       ? [msg('om_3', 1_790_000_300_000, 'file', { file_key: 'file_c1', file_name: '合同.pdf' }), msg('om_2', 1_790_000_200_000, 'text', { text: '@_user_1 周三见' }, { mentions: [{ key: '@_user_1', name: 'Alex' }] }),
         msg('om_1', 1_790_000_100_000, 'text', { text: '报价单收到了' })]
       : [1, 2, 3, 4, 5].map((i) => msg(`og_${i}`, 1_790_000_000_000 - i * 1000, 'text', { text: `群消息 ${i}` }));
+    if (url.searchParams.get('sort_type') === 'ByCreateTimeAsc') items.reverse();
     return send({ code: 0, data: { items: items.slice(0, size), has_more: false } });
   }
   if (p === '/im/v1/messages/om_3/resources/file_c1' && req.method === 'GET') {
@@ -748,7 +784,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   if (p === '/docx/v1/documents' && req.method === 'POST') {
     if (!lark.docsTokens.has(bearer)) return noDocs();
     const id = `doxMade${lark.made.size + 1}`;
-    lark.made.set(id, { title: body.title, folder: body.folder_token, blocks: [], calls: 0 });
+    lark.made.set(id, { title: body.title, folder: body.folder_token, blocks: [], top: [], calls: 0 });
     return send({ code: 0, data: { document: { document_id: id, title: body.title } } });
   }
   if (p === '/wiki/v2/spaces/sp1/nodes' && req.method === 'POST') {
@@ -760,8 +796,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   // a created document read back: its title and (for edit_lark_doc) a root block
   const madeDoc = p.match(/^\/docx\/v1\/documents\/(doxMade\d+)(\/blocks)?$/);
   if (madeDoc && lark.made.has(madeDoc[1]) && req.method === 'GET') {
+    const d = lark.made.get(madeDoc[1])!;
     return madeDoc[2]
-      ? send({ code: 0, data: { items: [{ block_id: madeDoc[1], block_type: 1, children: [] }], has_more: false } })
+      ? send({ code: 0, data: { items: [{ block_id: madeDoc[1], block_type: 1, children: d.top ?? [] }, ...d.blocks], has_more: false } })
       : send({ code: 0, data: { document: { document_id: madeDoc[1], title: lark.made.get(madeDoc[1])!.title } } });
   }
   const descendant = p.match(/^\/docx\/v1\/documents\/(\w+)\/blocks\/(\w+)\/descendant$/);
@@ -776,8 +813,16 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       || (body.children_id as string[]).some((c) => !ids.has(c));
     if (bad) return send({ code: 1770001, msg: 'invalid param' });
     d.blocks.push(...body.descendants);
+    d.top?.push(...body.children_id);
     d.calls++;
     return send({ code: 0, data: { children: [] } });
+  }
+  const madeDelete = p.match(/^\/docx\/v1\/documents\/(doxMade\d+)\/blocks\/(doxMade\d+)\/children\/batch_delete$/);
+  if (madeDelete && req.method === 'DELETE') {
+    const d = lark.made.get(madeDelete[1])!;
+    if (!lark.docsTokens.has(bearer)) return noDocs();
+    d.top?.splice(body.start_index, body.end_index - body.start_index);
+    return send({ code: 0, data: {} });
   }
   if (p === '/docx/v1/documents/doxFolder/blocks') {
     if (!userOk()) return send({ code: 99991668, msg: 'bad token' });
@@ -891,6 +936,34 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
       : send({ code: 0, data: { node: { obj_type: 'docx', obj_token: 'doxX' } } });
   }
   // creating Bases, tables and columns, and sharing (needs the Base write scope)
+  // records in a Base created during the run (needs the Base write scope); search filters on one "is" condition
+  const madeRecords = p.match(/^\/bitable\/v1\/apps\/(appMade\d+)\/tables\/(\w+)\/records(?:\/(\w+))?$/);
+  if (madeRecords) {
+    if (!lark.writeTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [bitable:app]' });
+    const key = `${madeRecords[1]}/${madeRecords[2]}`;
+    const rows = lark.records.get(key) ?? new Map<string, Record<string, unknown>>();
+    lark.records.set(key, rows);
+    const rec = madeRecords[3];
+    const text = (v: unknown) => (typeof v === 'object' && v ? String((v as { text?: string; link?: string }).text ?? (v as { link?: string }).link ?? '') : String(v ?? ''));
+    if (rec === 'search' && req.method === 'POST') {
+      const conds = (body.filter?.conditions ?? []) as { field_name: string; value: string[] }[];
+      const items = [...rows].filter(([, f]) => conds.every((c) => text(f[c.field_name]) === c.value[0])).map(([record_id, fields]) => ({ record_id, fields }));
+      return send({ code: 0, data: { items, has_more: false, total: items.length } });
+    }
+    if (!rec && req.method === 'POST') {
+      const id = `rec${++serial}`;
+      rows.set(id, { ...body.fields });
+      return send({ code: 0, data: { record: { record_id: id, fields: rows.get(id) } } });
+    }
+    if (rec && !rows.has(rec)) return send({ code: 1254043, msg: 'RecordIdNotFound' });
+    if (rec && req.method === 'PUT') {
+      const merged: Record<string, unknown> = { ...rows.get(rec), ...body.fields };
+      for (const k of Object.keys(merged)) if (merged[k] === null) delete merged[k];
+      rows.set(rec, merged);
+      return send({ code: 0, data: { record: { record_id: rec, fields: merged } } });
+    }
+    return send({ code: 0, data: { record: { record_id: rec, fields: rows.get(rec) } } });
+  }
   if ((p === '/bitable/v1/apps' && req.method === 'POST') || (/^\/bitable\/v1\/apps\/[^/]+\/tables(\/[^/]+\/fields)?$/.test(p) && req.method === 'POST') || req.method === 'DELETE' && p.startsWith('/bitable/')) {
     if (!lark.writeTokens.has(bearer)) return send({ code: 99991679, msg: 'required one of these privileges under the user identity: [bitable:app]' });
     if (p === '/bitable/v1/apps') {
@@ -2731,6 +2804,132 @@ try {
     check(!!(await tool(alex.token, 'read_lark_messages', { colleague: 'ou_dev_bob' })).error && (await fetch(link)).status === 403, 'turning it off stops reading, file links included');
     await connect(alex.jar);
     check(!lark.scopesAsked.split(' ').includes('im:message.p2p_msg:get_as_user'), 'and reconnecting no longer asks for it');
+  }
+
+  // ---------------------------------------------------------------- the AI twin in shadow mode
+  {
+    const twinDb = (sql: string, ...args: (string | number)[]) => fsDb.prepare(sql).all(...args) as Record<string, unknown>[];
+    check(String((await tool(alex.token, 'check_new_messages', {})).error).includes('/me'), 'the AI twin is off until the person turns it on');
+    const on = await api(alex.jar, 'POST', '/lark/twin', { on: true });
+    check(on.body.on === true && on.body.granted === false && String(on.body.connectUrl).includes('twin=1') && (await api(alex.jar, 'GET', '/lark/reading')).body.on === true,
+      'turning it on turns reading on with it, and sends them to allow it in Lark');
+    check(String((await tool(alex.token, 'setup_twin', {})).error).includes('twin=1'), 'until then the agent gets the same link');
+    await connect(alex.jar, '&reading=1&twin=1&write=1&docs=1');
+    const asked = lark.scopesAsked.split(' ');
+    check(['search:message', 'im:message.p2p_msg:get_as_user', 'bitable:app', 'docx:document'].every((x) => asked.includes(x)), 'one authorisation asks for searching messages, reading them, and writing its Base and documents');
+
+    const t0 = Date.now();
+    const inbox = (id: string, chat: string, from: string, ago: number, text: string, more: { bot?: boolean; mentions?: string[] } = {}) =>
+      lark.inbox.set(id, { id, chat, from, at: t0 - ago, text, ...more });
+    inbox('om_t1', 'oc_p2p_bob', 'ou_dev_bob', 600_000, '周五的报价能发我吗？');
+    inbox('om_t2', 'oc_grp1', 'ou_dev_alice', 500_000, '@Alex 方案看了吗', { mentions: ['ou_dev_alex'] });
+    inbox('om_t3', 'oc_grp2', 'ou_dev_alice', 400_000, '午饭吃什么');
+    inbox('om_t4', 'oc_p2p_bob', 'ou_bot', 300_000, '提醒', { bot: true });
+    inbox('om_t5', 'oc_grp1', 'ou_dev_alex', 100_000, '看了，晚点说');
+
+    const docsBefore = lark.made.size;
+    const setup = await tool(alex.token, 'setup_twin', {});
+    const base = [...lark.bases.entries()].at(-1)!;
+    check(String(setup.memory).includes(base[0]) && base[1].tables.length === 3 && lark.made.size === docsBefore + 2 && String(setup.style).includes('/docx/'),
+      'setup_twin makes a Base with three tables and two documents in the person\'s own space');
+    check((await tool(alex.token, 'setup_twin', {})).memory === setup.memory && lark.made.size === docsBefore + 2 && lark.bases.size === [...lark.bases.keys()].length, 'and a second call only returns the links');
+
+    const first = await tool(alex.token, 'check_new_messages', {}) as { conversations: { chat_id: string; kind: string; with?: string; messages: { message_id: string; text: string; mentions_me?: boolean }[]; you_replied: boolean }[] };
+    const direct = first.conversations.find((c) => c.chat_id === 'oc_p2p_bob');
+    const group = first.conversations.find((c) => c.chat_id === 'oc_grp1');
+    check(first.conversations.length === 2 && direct?.kind === 'direct' && direct.with === '周明' && direct.messages.map((m) => m.message_id).join() === 'om_t1' && direct.messages[0].text.includes('报价'),
+      'check_new_messages finds the direct message as the person, leaving the bot out');
+    check(group?.messages[0].mentions_me === true && group.you_replied === true && !first.conversations.some((c) => c.chat_id === 'oc_grp2'),
+      'groups only where they were @mentioned, saying they already replied; their own messages are not listed');
+    check(String((await tool(alex.token, 'check_new_messages', {})).error).length > 0, 'at most one check a minute');
+    check(!JSON.stringify(twinDb('SELECT * FROM twin_seen')).includes('报价') && twinDb('SELECT * FROM twin_seen WHERE user_id = ?', 'ou_dev_alex').length === 4, 'the hub keeps which messages it saw, never their text');
+
+    const bobFact = await tool(alex.token, 'remember', { type: 'person', colleague: 'ou_dev_bob', summary: 'Bob 负责报价，喜欢先看结论', source: 'https://x.larksuite.com/docx/doxQuote', detail: '上周会上定的' });
+    const general = await tool(alex.token, 'remember', { type: 'preference', summary: '回复简短，不用表情' });
+    const stale = await tool(alex.token, 'remember', { type: 'project', summary: 'Q3 定价已结束', valid_until: '2020-01-01' });
+    const ctx = await tool(alex.token, 'twin_context', { colleague: 'ou_dev_bob', chat_id: 'oc_p2p_bob' }) as { level: string; profile: string; style: string; memories: { id: string }[] };
+    check(ctx.level === 'shadow' && ctx.memories[0]?.id === bobFact.id && ctx.memories.some((m) => m.id === general.id) && !ctx.memories.some((m) => m.id === stale.id) && ctx.profile.length > 20 && ctx.style.length > 20,
+      'twin_context: both documents, then memories about this colleague first and general ones, only those that still hold');
+    const recalled = await tool(alex.token, 'recall_memory', { ids: [bobFact.id] }) as { memories: { detail: string; source: string; about: string }[] };
+    check(recalled.memories[0]?.detail === '上周会上定的' && recalled.memories[0].source === 'https://x.larksuite.com/docx/doxQuote' && recalled.memories[0].about === '周明'
+      && (await tool(alex.token, 'recall_memory', { query: '表情' })).memories.length === 1, 'recall_memory gives the details by id, or by words');
+    await tool(alex.token, 'remember', { id: stale.id, status: 'replaced', replaced_by: general.id });
+    check((await tool(alex.token, 'recall_memory', { query: 'Q3' })).memories.length === 0, 'a replaced memory is kept but no longer recalled');
+
+    const pred = await tool(alex.token, 'record_prediction', { message_id: 'om_t1', should_reply: true, urgency: 'today', reply: '好的，下午发你', scenario: '要资料' });
+    check(pred.recorded === true && pred.sent === false && lark.messages.every((m) => !m.text.includes('下午发你')), 'record_prediction records, and sends nothing');
+    check(!!(await tool(alex.token, 'record_prediction', { message_id: 'om_t5', should_reply: true })).error, 'nor for the person\'s own messages');
+    inbox('om_t6', 'oc_p2p_bob', 'ou_dev_alex', -1000, '下午发');
+    fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
+    const second = await tool(alex.token, 'check_new_messages', {});
+    const predRows = lark.records.get(`${base[0]}/${base[1].tables[1].id}`)!;
+    const settledRow = JSON.stringify(predRows.get(pred.id));
+    check(second.conversations.length === 0 && twinDb('SELECT outcome FROM twin_predictions WHERE record_id = ?', pred.id)[0]?.outcome === 'replied' && settledRow.includes('下午发"'),
+      'their reply in that chat settles the prediction: the Base gets what they actually said, the hub only that they replied');
+    const replay = await tool(alex.token, 'record_prediction', { message_id: 'om_t2', should_reply: false, scenario: '方案', replay: { replied: true, reply: '看了，晚点说', gap_minutes: 7 } });
+    const toReview = (await tool(alex.token, 'list_predictions', {})).predictions as { id: string; predictedReply?: string; actualReply?: string }[];
+    check(toReview.length === 2 && toReview.find((r) => r.id === pred.id)?.actualReply === '下午发' && toReview.some((r) => r.id === replay.id), 'list_predictions gives the settled ones, live and replayed, for the reflection');
+    await tool(alex.token, 'review_prediction', { id: pred.id, cause: 'tone', closeness: 4, distilled: true });
+    check(!(await tool(alex.token, 'list_predictions', {})).predictions.some((r: { id: string }) => r.id === pred.id) && twinDb('SELECT cause, closeness FROM twin_predictions WHERE record_id = ?', pred.id)[0]?.closeness === 4,
+      'a reviewed prediction leaves the queue');
+
+    // a prediction nobody answered for a day is settled as "no reply" by the hourly round
+    const quiet = await tool(alex.token, 'record_prediction', { message_id: 'om_t3', should_reply: true, scenario: '闲聊' });
+    fsDb.prepare('UPDATE twin_predictions SET received = received - 90000000 WHERE record_id = ?').run(quiet.id);
+    const { execFile } = await import('node:child_process');
+    const inTwin = (js: string, env: Record<string, string> = {}) => new Promise<Record<string, any>>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
+      const t = await import(${JSON.stringify(path.resolve('server/lark/twin.ts'))});
+      const { get } = await import(${JSON.stringify(path.resolve('server/db.ts'))});
+      const user = get("SELECT * FROM users WHERE id = 'ou_dev_alex'");
+      console.log(JSON.stringify(await (${js})));
+    `], { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`, ...env } },
+      (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(JSON.parse(out.trim().split('\n').at(-1)!)))));
+    await inTwin('t.twinRound().then(() => ({}))');
+    check(twinDb('SELECT outcome FROM twin_predictions WHERE record_id = ?', quiet.id)[0]?.outcome === 'none' && /没回|No reply/.test(JSON.stringify(predRows.get(quiet.id))),
+      'after a day without their reply, the round settles it as no reply');
+    const brief = JSON.stringify(await inTwin('t.weeklyBrief(user)'));
+    check(brief.includes('3 predictions') && brief.includes('33%') && brief.includes(String(setup.memory)), 'the weekly brief counts predictions and how often it was right, with the memory link');
+
+    // the two documents change only with the person's yes
+    const styleDoc = String(setup.style).split('/').pop()!;
+    check(String((await tool(alex.token, 'edit_lark_doc', { url: String(setup.style), append: '- 随便改' })).error).includes('suggest_twin_doc_change'), 'the agent cannot edit the twin\'s documents directly');
+    const prop = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '## 语气\n\n简短直接，不用表情', reason: '最近几次你都删掉了表情' });
+    const waiting = (await api(alex.jar, 'GET', '/lark/twin')).body as { proposals: { code: string; reason: string }[] };
+    check(prop.changed === false && waiting.proposals.length === 1 && waiting.proposals[0].reason.includes('表情'), 'a proposal waits for the person on their Me page');
+    await api(alex.jar, 'POST', `/lark/twin/proposals/${waiting.proposals[0].code}`, { apply: true });
+    const restyled = await tool(alex.token, 'twin_context', { colleague: 'ou_dev_bob' });
+    check(restyled.style.includes('简短直接') && lark.made.get(styleDoc)!.top!.length === 2 && ((await api(alex.jar, 'GET', '/lark/twin')).body.proposals as unknown[]).length === 0,
+      'applying it rewrites the document');
+    const declined = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '全部用英文', reason: '试试' });
+    await api(alex.jar, 'POST', `/lark/twin/proposals/${declined.proposal}`, { apply: false });
+    check(!(await tool(alex.token, 'twin_context', {})).style.includes('英文') && (await api(alex.jar, 'POST', `/lark/twin/proposals/${declined.proposal}`, { apply: true })).status === 400,
+      'turning it down changes nothing, and an answered proposal cannot be answered again');
+    const cardsBefore = lark.cards.length;
+    const viaCard = await inTwin("t.suggestDocChange(user, { doc: 'profile', markdown: '## 角色\\n\\n负责中台', reason: '从 OKR 看到' })", { LARK_CONFIRM_CARDS: 'on' });
+    const tapped = await inTwin(`t.onTwinCardTap({ operator: { open_id: 'ou_dev_alex' }, action: { value: { hub: 'twin_doc', code: '${viaCard.proposal}', choice: 'apply' } } })`, { LARK_CONFIRM_CARDS: 'on' });
+    const notHers = await inTwin(`t.onTwinCardTap({ operator: { open_id: 'ou_dev_bob' }, action: { value: { hub: 'twin_doc', code: '${viaCard.proposal}', choice: 'apply' } } })`, { LARK_CONFIRM_CARDS: 'on' });
+    check(lark.cards.length === cardsBefore + 1 && lark.cards.at(-1)!.card.includes('负责中台') && tapped.toast?.type === 'success' && notHers.toast?.type === 'error'
+      && (await tool(alex.token, 'twin_context', {})).profile.includes('负责中台'), 'with cards set up, the bot sends the proposal as a card and only the person can apply it there');
+
+    // which groups it looks at
+    inbox('om_t7', 'oc_grp2', 'ou_dev_alice', -2000, '下周团建去哪');
+    await tool(alex.token, 'twin_settings', { watch: ['oc_grp2'] });
+    fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
+    const third = await tool(alex.token, 'check_new_messages', {});
+    check(third.conversations.length === 1 && third.conversations[0].chat_id === 'oc_grp2' && ((await api(alex.jar, 'GET', '/lark/twin')).body.watch as { name: string }[])[0]?.name === '群 grp2',
+      'a watched group is looked at without an @mention, and the Me page names it');
+
+    // the person's past conversations, for the cold start
+    const hist = await tool(alex.token, 'my_message_history', { days: 30 }) as { conversations: { chat_id: string; kind: string }[] };
+    check(hist.conversations.some((c) => c.chat_id === 'oc_p2p_bob' && c.kind === 'direct') && hist.conversations.some((c) => c.chat_id === 'oc_grp1' && c.kind === 'group') && !hist.conversations.some((c) => c.chat_id === 'oc_grp2'),
+      'my_message_history lists direct chats with colleagues and the groups the person spoke in');
+    const bobHist = await tool(alex.token, 'my_message_history', { chat_id: 'oc_p2p_bob' });
+    check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation oldest first');
+
+    const status = (await api(alex.jar, 'GET', '/lark/twin')).body as { week: { predictions: number; accuracy: number } };
+    check(status.week.predictions === 3 && status.week.accuracy === 33, 'the Me page shows the week in numbers');
+    await api(alex.jar, 'POST', '/lark/reading', { on: false });
+    check((await api(alex.jar, 'GET', '/lark/twin')).body.on === false && String((await tool(alex.token, 'check_new_messages', {})).error).includes('/me'), 'turning reading off turns the twin off too');
   }
 
   // ---------------------------------------------------------------- a department's page

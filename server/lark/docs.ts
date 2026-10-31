@@ -202,6 +202,8 @@ export async function editDoc(user: User, url: string, input: { edits?: { id: st
   const edits = input.edits ?? [];
   if (!edits.length && !input.append?.trim()) throw new UserError('err.docs.nothingToDo');
   const { doc, title, link } = await openDoc(user, url);
+  // the AI twin's own documents change only with the person's yes (lark/twin.ts, suggest_twin_doc_change)
+  if (get('SELECT 1 FROM twin WHERE user_id = ? AND ? IN (profile_doc, style_doc)', user.id, doc)) throw new UserError('err.twin.ownDoc');
   const blocks = await allBlocks(user, doc);
   const targets = edits.map((e) => {
     const b = blocks.get(e.id);
@@ -223,6 +225,29 @@ export async function editDoc(user: User, url: string, input: { edits?: { id: st
   }
   const added = groups.length ? await insertGroups(user, doc, groups) : 0;
   return { title, url: link, edited: targets.map((t) => t.b.block_id), appendedBlocks: added, ...(appended?.images ? { imagesLeftOut: appended.images } : {}) };
+}
+
+/** A document's body as Markdown (the same form readDoc gives). */
+export async function docMarkdown(user: User, doc: string) {
+  return toMarkdown(await allBlocks(user, doc), doc);
+}
+
+/**
+ * Replaces a document's whole body with Markdown, as the person: the new blocks go in after the old ones first, then
+ * the old ones are removed, so a failure never leaves the document empty.
+ */
+export async function replaceDocBody(user: User, doc: string, markdown: string) {
+  const { top, blocks: all } = markdownToBlocks(markdown.trim());
+  const byId = new Map(all.map((b) => [b.block_id, b]));
+  const groups = top.map((id) => subtree(id, byId));
+  if (groups.some((g) => g.length > MAX_PER_CALL)) throw new UserError('err.docs.tooBig');
+  const old = (await allBlocks(user, doc)).get(doc)?.children?.length ?? 0;
+  await insertGroups(user, doc, groups);
+  if (old) {
+    await docCall(user, `/docx/v1/documents/${doc}/blocks/${doc}/children/batch_delete?document_revision_id=-1`, {
+      method: 'DELETE', body: JSON.stringify({ start_index: 0, end_index: old }),
+    });
+  }
 }
 
 // ---------------------------------------------------------------- creating

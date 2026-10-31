@@ -6,13 +6,14 @@
 import * as lark from '@larksuiteoapi/node-sdk';
 import { config } from '../config.ts';
 import { onCardTap, type CardTap } from './messages.ts';
+import { onTwinCardTap } from './twin.ts';
 
 export function startLarkEvents() {
   if (!config.lark.enabled || !config.lark.longConnection) return;
   const dispatcher = new lark.EventDispatcher({}).register({
     'card.action.trigger': async (tap: CardTap) => {
       try {
-        return await onCardTap(tap);
+        return await ((tap.action?.value as { hub?: string } | undefined)?.hub === 'twin_doc' ? onTwinCardTap(tap) : onCardTap(tap));
       } catch (e) {
         console.warn('[lark events] card tap failed:', (e as Error).message);
         return { toast: { type: 'error', content: (e as Error).message } };

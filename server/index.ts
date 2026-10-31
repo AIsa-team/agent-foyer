@@ -21,6 +21,7 @@ import { handleAppRequest, handleAppUpgrade, slugFromHost } from './gateway.ts';
 import { startAlertScheduler } from './data/alerts.ts';
 import { startCheckScheduler } from './data/checks.ts';
 import { startLarkEvents } from './lark/events.ts';
+import { startTwin } from './lark/twin.ts';
 import { directoryProvider, syncDirectory } from './directory.ts';
 import { sourceKinds } from './channels.ts';
 import { startConnectorRefresher } from './data/sources.ts';
@@ -185,6 +186,7 @@ startCheckScheduler().unref();
 for (const k of sourceKinds()) k.start?.();
 startConnectorRefresher();
 startLarkEvents();
+startTwin();
 startBoardSync();
 if (directoryProvider()) {
   // keep departments and colleagues in step with the company's platform (the admin page can still sync on demand)

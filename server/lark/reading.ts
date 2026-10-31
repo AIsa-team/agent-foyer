@@ -70,17 +70,17 @@ async function directChat(user: User, colleagueId: string): Promise<string> {
   return id;
 }
 
-interface Item {
+export interface Item {
   message_id: string; msg_type: string; create_time: string; deleted?: boolean; thread_id?: string;
   sender?: { id?: string; sender_type?: string };
   body?: { content?: string };
   mentions?: { key: string; name?: string }[];
 }
 
-const nameOf = (id: string | undefined) => (id ? get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id : '');
+export const nameOf = (id: string | undefined) => (id ? get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id : '');
 
 /** A message as plain text: text and rich text as written (with @names), anything else as a short marker. */
-function asText(m: Item): { text: string; file?: { file_key: string; type: 'file' | 'image'; name?: string } } {
+export function asText(m: Item): { text: string; file?: { file_key: string; type: 'file' | 'image'; name?: string } } {
   let c: Record<string, unknown> = {};
   try { c = JSON.parse(m.body?.content ?? '{}'); } catch { /* left empty */ }
   const at = (s: string) => (m.mentions ?? []).reduce((t, x) => t.replaceAll(x.key, `@${x.name ?? ''}`), s);

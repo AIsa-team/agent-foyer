@@ -629,6 +629,27 @@ const MIGRATIONS: string[] = [
   `,
   // whether the agent's app can show the person a question (MCP elicitation), as it said when it last connected
   `ALTER TABLE agent_connections ADD COLUMN elicitation INTEGER NOT NULL DEFAULT 0;`,
+  // the AI twin in shadow mode (lark/twin.ts): where its memory lives in the person's Lark, how far it has looked, and
+  // per message only ids, times, yes/no and counts; message text stays in Lark and in the person's own Base
+  `
+  CREATE TABLE twin (
+    user_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    base TEXT, base_url TEXT, tables TEXT, profile_doc TEXT, style_doc TEXT,
+    cursor INTEGER, last_check INTEGER,
+    group_mode TEXT NOT NULL DEFAULT 'mentions', watch TEXT NOT NULL DEFAULT '[]',
+    weekly_at INTEGER
+  );
+  CREATE TABLE twin_seen (user_id TEXT NOT NULL, message_id TEXT NOT NULL, chat_id TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (user_id, message_id));
+  CREATE TABLE twin_predictions (
+    record_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id TEXT NOT NULL,
+    received INTEGER NOT NULL, should_reply INTEGER NOT NULL, scenario TEXT NOT NULL DEFAULT '', source TEXT NOT NULL,
+    outcome TEXT, gap_min INTEGER, cause TEXT, closeness INTEGER, at INTEGER NOT NULL
+  );
+  CREATE INDEX twin_predictions_user ON twin_predictions (user_id, outcome, chat_id);
+  CREATE TABLE twin_proposals (code TEXT PRIMARY KEY, user_id TEXT NOT NULL, doc TEXT NOT NULL, payload TEXT NOT NULL, card TEXT, state TEXT NOT NULL DEFAULT 'waiting', at INTEGER NOT NULL, expires INTEGER NOT NULL);
+  CREATE TABLE twin_log (user_id TEXT NOT NULL, kind TEXT NOT NULL, at INTEGER NOT NULL);
+  `,
 ];
 
 {

@@ -15,6 +15,7 @@ import { connection, DATA_SCOPES, WRITE_SCOPE, saveTokens } from '../lark/userTo
 import { MAIL_SCOPES } from '../lark/mail.ts';
 import { DOCS_SCOPES, SEARCH_SCOPE, WIKI_WRITE_SCOPE } from '../lark/docs.ts';
 import { DRIVE_READ_SCOPE, DRIVE_WRITE_SCOPES } from '../lark/files.ts';
+import { TWIN_SCOPE, twinOn } from '../lark/twin.ts';
 import { CALENDAR_SCOPE } from '../lark/calendar.ts';
 import { SHEETS_SCOPE } from '../lark/sheets.ts';
 import { FILE_SCOPE, MESSAGE_SCOPES, messagesOn } from '../lark/messages.ts';
@@ -88,7 +89,8 @@ authRoutes.get('/auth/lark/connect', (c) => {
   const messages = (c.req.query('messages') === '1' || MESSAGE_SCOPES.every((s) => had.includes(s))) && messagesOn(user.id);
   const files = messages && (c.req.query('files') === '1' || had.includes(FILE_SCOPE));
   const reading = (c.req.query('reading') === '1' || READ_SCOPES.every((s) => had.includes(s))) && readingOn(user.id);
-  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : []), ...(search ? [SEARCH_SCOPE] : []), ...(drive ? [DRIVE_READ_SCOPE] : []), ...(upload ? DRIVE_WRITE_SCOPES : []), ...(messages ? MESSAGE_SCOPES : []), ...(files ? [FILE_SCOPE] : []), ...(reading ? READ_SCOPES : [])];
+  const twin = reading && (c.req.query('twin') === '1' || had.includes(TWIN_SCOPE)) && twinOn(user.id);
+  const scopes = [...DATA_SCOPES, ...(write ? [WRITE_SCOPE] : []), ...(docs ? DOCS_SCOPES : []), ...(wiki ? [WIKI_WRITE_SCOPE] : []), ...(mail ? MAIL_SCOPES : []), ...(sheets ? [SHEETS_SCOPE] : []), ...(calendar ? [CALENDAR_SCOPE] : []), ...(search ? [SEARCH_SCOPE] : []), ...(drive ? [DRIVE_READ_SCOPE] : []), ...(upload ? DRIVE_WRITE_SCOPES : []), ...(messages ? MESSAGE_SCOPES : []), ...(files ? [FILE_SCOPE] : []), ...(reading ? READ_SCOPES : []), ...(twin ? [TWIN_SCOPE] : [])];
   return c.redirect(larkAuthorizeUrl(`${config.hubUrl}/auth/callback`, state, scopes.join(' ')));
 });
 

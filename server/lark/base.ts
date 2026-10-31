@@ -105,6 +105,12 @@ export async function createRecord(user: User, app: string, table: string, field
   return { id: r.data.record.record_id, fields: r.data.record.fields };
 }
 
+export async function getRecord(user: User, app: string, table: string, record: string) {
+  const r = await call<{ data: { record: { record_id: string; fields: Record<string, unknown> } } }>(
+    user, `/bitable/v1/apps/${app}/tables/${table}/records/${encodeURIComponent(record)}`);
+  return { id: r.data.record.record_id, fields: r.data.record.fields };
+}
+
 export async function updateRecord(user: User, app: string, table: string, record: string, fields: Record<string, unknown>) {
   const r = await call<{ data: { record: { record_id: string; fields: Record<string, unknown> } } }>(
     user, `/bitable/v1/apps/${app}/tables/${table}/records/${encodeURIComponent(record)}`, { method: 'PUT', body: JSON.stringify({ fields }) });
