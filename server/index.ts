@@ -49,11 +49,17 @@ app.route('/', authRoutes);
 app.route('/', githubHook);
 app.route('/api', api);
 
+/** The largest request an agent may send: a 30 MB file handed over in base64, with room to spare. */
+const MAX_MCP_BODY = 48 * 1024 * 1024;
+
 app.all(MCP_PATH, async (c) => {
   const auth = authenticateBearer(c.req.header('authorization'), c.req.header('user-agent'));
   if (!auth) {
     const L = requestLocale((h) => c.req.header(h));
     return c.json({ error: 'unauthorized', error_description: tr(L, 'err.mcpUnauthorized') }, 401, { 'WWW-Authenticate': wwwAuthenticate() });
+  }
+  if (Number(c.req.header('content-length') ?? 0) > MAX_MCP_BODY) {
+    return c.json({ jsonrpc: '2.0', id: null, error: { code: -32600, message: `Request larger than ${MAX_MCP_BODY / 1024 / 1024} MB` } }, 413);
   }
   return handleMcp(c.req.raw, auth.user, auth.clientId, auth.token);
 });

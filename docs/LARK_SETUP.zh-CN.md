@@ -78,7 +78,7 @@
 | 权限 | 用途 |
 |---|---|
 | `im:message`、`im:message.send_as_user` | `send_lark_message`：以本人身份发消息，每条先预览 |
-| `im:resource` | 随消息发文件 |
+| `im:resource` | 随消息发文件或图片（图片在聊天里直接显示） |
 | `im:message:readonly`、`im:message.p2p_msg:get_as_user`、`im:message.group_msg:get_as_user`、`im:chat:read` | `read_lark_messages`、`find_lark_chat`：只读本人指定的那一个会话 |
 
 每条消息发出前都要本人确认。默认由 Agent 客户端弹窗询问（MCP elicitation，Claude Code、Codex 会弹出确认框）；客户端不支持弹窗时，Agent 在对话里给出预览，本人同意后用一次性发送码发出。

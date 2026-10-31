@@ -1,4 +1,4 @@
-import { createWriteStream, existsSync, mkdirSync, rmSync } from 'node:fs';
+import { createWriteStream, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { Readable, Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -47,6 +47,14 @@ export async function receiveUpload(id: string, token: string, body: ReadableStr
   }
   run("UPDATE uploads SET status = 'received', size = ? WHERE id = ?", size, id);
   return { ok: true, size };
+}
+
+/** A file handed over inside a request (by agents that cannot run the upload command), kept as a received upload. */
+export function storeUpload(userId: string, purpose: UploadPurpose, bytes: Buffer): string {
+  const { id } = createUpload(userId, purpose);
+  writeFileSync(uploadFile(id), bytes);
+  run("UPDATE uploads SET status = 'received', size = ? WHERE id = ?", bytes.length, id);
+  return id;
 }
 
 /** The size of a received upload that is not used yet, without using it (to check it before sending). */

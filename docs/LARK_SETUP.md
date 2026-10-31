@@ -90,7 +90,7 @@ page, and Lark asks them for these when they do):
 | Scope | Why |
 |---|---|
 | `im:message`, `im:message.send_as_user` | `send_lark_message`: messages sent as the person, each one previewed first |
-| `im:resource` | sending a file with a message |
+| `im:resource` | sending a file or picture with a message (pictures show in the chat) |
 | `im:message:readonly`, `im:message.p2p_msg:get_as_user`, `im:message.group_msg:get_as_user`, `im:chat:read` | `read_lark_messages` and `find_lark_chat`: reading the one conversation the person asks about |
 
 Each message is confirmed by the person before it goes out. By default their agent's app asks them (an MCP

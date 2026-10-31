@@ -15,7 +15,7 @@ import { config } from '../config.ts';
 import { all, get, now, run, type User } from '../db.ts';
 import { decrypt, encrypt } from '../crypto.ts';
 import { tr, UserError } from '../i18n/index.ts';
-import { peekUpload, takeUpload } from '../uploads.ts';
+import { peekUpload, storeUpload, takeUpload } from '../uploads.ts';
 import { getTenantToken } from './auth.ts';
 import { localTime } from './calendar.ts';
 import { DENIED_CODES, larkFetch, LarkError, SCOPE_CODES } from './client.ts';
@@ -37,6 +37,9 @@ const MAX_TO = 10;
 const MAX_TEXT = 4000;
 /** Lark's limit for a file sent in a chat. */
 const MAX_FILE = 30 * 1024 * 1024;
+/** Lark's limit for an image shown in a chat; a bigger one goes as a file. */
+const MAX_IMAGE = 10 * 1024 * 1024;
+const IMAGE_TYPES = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tif', 'tiff', 'ico', 'heic']);
 const PREVIEW_MS = 10 * 60_000;
 
 export const messagesOn = (userId: string) => !!get<{ send_as_me: number }>('SELECT send_as_me FROM users WHERE id = ?', userId)?.send_as_me;
@@ -72,6 +75,21 @@ function ready(user: User) {
 }
 
 export interface FileRef { upload_id: string; name: string }
+/** A file in the request itself, for agents that cannot run the upload command: the platform puts the real file in. */
+export interface InlineFile { name: string; mime_type?: string; data: string }
+
+/** Keeps a file handed over in the request as an upload, so it is sent like any other. */
+export function inlineFile(user: User, f: InlineFile): FileRef {
+  const data = f.data.replace(/^data:[^,]*,/, '').replace(/\s/g, '');
+  if (!data || !/^[A-Za-z0-9+/_-]*={0,2}$/.test(data)) throw new UserError('err.messages.badFile');
+  if (data.length * 0.75 > MAX_FILE + 4) throw new UserError('err.messages.fileTooBig', { mb: MAX_FILE / 1024 / 1024 });
+  const bytes = Buffer.from(data, data.includes('-') || data.includes('_') ? 'base64url' : 'base64');
+  if (!bytes.length) throw new UserError('err.messages.badFile');
+  // a picture without an extension gets one from its type, so it is sent as a picture
+  const sub = f.mime_type?.match(/^image\/([\w.+-]+)$/)?.[1]?.replace('jpeg', 'jpg');
+  const name = f.name.trim() || 'file';
+  return { upload_id: storeUpload(user.id, 'file', bytes), name: !extOf(name) && sub && IMAGE_TYPES.has(sub) ? `${name}.${sub}` : name };
+}
 /**
  * A preview waiting for the person's yes. Kept in the database (so a restart does not lose it), encrypted, emptied once
  * sent or declined, and deleted when it expires or when the person turns sending off.
@@ -90,9 +108,13 @@ const names = (ids: string[], locale: string) => new Intl.ListFormat(locale, { t
 /** The last line of every message, after a blank line, in the recipient's language: who sent it, through their AI twin. */
 const signed = (text: string, sender: User, locale: string) => [text, tr(locale, 'lark.msg.sentByTwin', { name: sender.name })].filter(Boolean).join('\n\n');
 
+const extOf = (name: string) => (name.includes('.') ? name.toLowerCase().split('.').pop()! : '');
+/** Pictures go as images, shown in the chat; anything else, or a picture too big for that, as a file. */
+const isImage = (name: string, bytes: number) => IMAGE_TYPES.has(extOf(name)) && bytes <= MAX_IMAGE;
+
 /** Lark's file types; anything else goes as a plain file. */
 function fileType(name: string) {
-  const ext = name.toLowerCase().split('.').pop() ?? '';
+  const ext = extOf(name);
   if (ext === 'pdf' || ext === 'mp4') return ext;
   if (ext === 'doc' || ext === 'docx') return 'doc';
   if (ext === 'xls' || ext === 'xlsx') return 'xls';
@@ -121,7 +143,7 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
   run('INSERT INTO lark_pending (code, user_id, payload, expires) VALUES (?, ?, ?, ?) ON CONFLICT(code) DO UPDATE SET expires = excluded.expires',
     code, user.id, encrypt(JSON.stringify(message)), now() + PREVIEW_MS);
   return {
-    preview: { from: user.name, to: ids.map(nameOf), ...(file ? { file: { name, bytes: size } } : {}), text: signed(body, user, locale) },
+    preview: { from: user.name, to: ids.map(nameOf), ...(file ? { file: { name, bytes: size, as: isImage(name, size) ? 'image' : 'file' } } : {}), text: signed(body, user, locale) },
     send_code: code,
     next: `NOT SENT YET. Show the user exactly who gets this (the file, then the text with the last line saying it was sent by their AI twin). When they agree, call send_lark_message with only {"send_code": "${code}"}: calling it with to/text again does not send, it only shows this preview again. If they want changes, prepare a new one.`,
   };
@@ -185,30 +207,51 @@ function claim(user: User, code: string): Waiting {
 
 /** Sends a claimed message, as the person, to each recipient in turn. */
 async function deliver(user: User, p: Waiting) {
-  // the file goes up to Lark once, as the person, and is then sent to each recipient
-  let fileKey = '';
+  // the file goes up to Lark once, as the person, and is then sent to each recipient: a picture as an image shown in
+  // the chat, anything else (or a picture Lark would not take as one) as a file
+  let attachment: { type: 'image'; content: { image_key: string } } | { type: 'file'; content: { file_key: string } } | null = null;
   if (p.file) {
     const path = takeUpload(p.file.upload_id, user.id, 'file');
+    const name = p.file.name;
+    const upload = async <T>(apiPath: string, form: FormData) => {
+      try {
+        return await asUser<{ data: T }>(user, apiPath, { method: 'POST', body: form });
+      } catch (e) {
+        if (e instanceof LarkError && SCOPE_CODES.has(e.code)) throw new UserError('err.messages.fileScope', { url: messagesConnectUrl('/me', true), detail: e.message });
+        throw e;
+      }
+    };
     try {
-      const form = new FormData();
-      form.set('file_type', fileType(p.file.name));
-      form.set('file_name', p.file.name);
-      form.set('file', new Blob([readFileSync(path)]), p.file.name);
-      fileKey = (await asUser<{ data: { file_key: string } }>(user, '/im/v1/files', { method: 'POST', body: form })).data.file_key;
-    } catch (e) {
-      if (e instanceof LarkError && SCOPE_CODES.has(e.code)) throw new UserError('err.messages.fileScope', { url: messagesConnectUrl('/me', true), detail: e.message });
-      throw e;
+      const bytes = readFileSync(path);
+      if (isImage(name, bytes.length)) {
+        const form = new FormData();
+        form.set('image_type', 'message');
+        form.set('image', new Blob([bytes]), name);
+        attachment = await upload<{ image_key: string }>('/im/v1/images', form)
+          .then((r) => ({ type: 'image' as const, content: { image_key: r.data.image_key } }), (e) => {
+            if (e instanceof UserError) throw e;
+            console.warn('[messages] Lark did not take the picture as an image, sending it as a file:', (e as Error).message);
+            return null;
+          });
+      }
+      if (!attachment) {
+        const form = new FormData();
+        form.set('file_type', fileType(name));
+        form.set('file_name', name);
+        form.set('file', new Blob([bytes]), name);
+        attachment = { type: 'file', content: { file_key: (await upload<{ file_key: string }>('/im/v1/files', form)).data.file_key } };
+      }
     } finally {
       rmSync(path, { force: true });
     }
   }
-  const send = (id: string, msgType: 'text' | 'file', content: object) =>
+  const send = (id: string, msgType: 'text' | 'file' | 'image', content: object) =>
     asUser(user, '/im/v1/messages?receive_id_type=open_id', { method: 'POST', body: JSON.stringify({ receive_id: id, msg_type: msgType, content: JSON.stringify(content) }) });
   const sent: string[] = [];
   const failed: { to: string; reason: string }[] = [];
   for (const id of p.to) {
     try {
-      if (fileKey) await send(id, 'file', { file_key: fileKey });
+      if (attachment) await send(id, attachment.type, attachment.content);
       await send(id, 'text', { text: signed(p.text, user, localeOf(id)) });
       run('INSERT INTO lark_sent (user_id, to_id, at) VALUES (?, ?, ?)', user.id, id, now());
       sent.push(nameOf(id));

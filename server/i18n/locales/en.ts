@@ -317,6 +317,7 @@ const en: Record<MessageKey, string> = {
   'err.messages.rateLimited': 'At most {n} messages an hour are sent as you; try again later.',
   'err.messages.fileScope': 'To send files as you, allow uploading files once more in Lark: {url}\nThe Lark page says it may read and upload images and files, which Lark requires; the hub only uploads and never reads the files in your messages.\nIf that page does not offer it, an admin first enables im:resource in the Lark developer console. {detail}',
   'err.messages.fileTooBig': 'Files can be at most {mb} MB (a Lark limit).',
+  'err.messages.badFile': 'The attached file is not valid base64, so nothing was sent. data must be the real file your platform attached, never written by you.',
   'err.messages.alreadySent': 'This message was already sent (the user tapped Send on the confirmation card in Lark); do not send it again.',
   'err.messages.declined': "The user chose Don't send on the confirmation card in Lark, so this message will not go out. To send a changed one, prepare a new preview.",
   'err.reading.off': 'Reading your messages is off. Turn it on in the Lark data card on your Me page in the hub so your agent can read your Lark messages: {url}',

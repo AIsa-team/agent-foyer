@@ -315,6 +315,7 @@ const zhCN = {
   'err.messages.rateLimited': '每小时最多替你发 {n} 条消息，请稍后再发。',
   'err.messages.fileScope': '要用你的身份发文件，需要你在 Lark 里再授权一次上传文件：{url}\n授权页上写的是「获取与上传图片或文件资源」，这是 Lark 的要求，中台只用来上传，不会读取你消息里的文件。\n如果授权页没有这项权限，请管理员先在 Lark 开发者后台开通 im:resource。{detail}',
   'err.messages.fileTooBig': '文件不能超过 {mb} MB（Lark 的限制）。',
+  'err.messages.badFile': '附带的文件内容不是有效的 base64，没有发出。data 只能放平台附上的真实文件内容，不要自己写。',
   'err.messages.alreadySent': '这条消息已经发出去了（用户在 Lark 的确认卡片上点了发送），不用再发。',
   'err.messages.declined': '用户在 Lark 的确认卡片上选择了不发，这条消息不会发出。如果要改了再发，请重新生成预览。',
   'err.reading.off': '你还没有开启「让 Agent 读我的消息」。在中台「我的」页面的 Lark 数据卡片里打开它，Agent 才能读你的 Lark 消息：{url}',

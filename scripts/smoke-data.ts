@@ -101,7 +101,7 @@ const lark = {
   fileTokens: new Set<string>(),
   readTokens: new Set<string>(),
   messageReads: [] as { chat: string; size: number }[],
-  uploads: [] as { name: string; key: string; as: 'bot' | 'user'; bytes: string }[],
+  uploads: [] as { name: string; key: string; as: 'bot' | 'user'; bytes: string; image?: boolean }[],
   scopesAsked: '',
   drafts: [] as string[],
   gmail: [] as string[],
@@ -551,6 +551,16 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     lark.uploads.push({ name: field('file_name'), key, as: 'user', bytes: field('file') });
     return send({ code: 0, data: { file_key: key } });
   }
+  // a picture to show in a chat (same permission); Lark refuses what is not a picture
+  if (p === '/im/v1/images' && req.method === 'POST') {
+    if (!userOk()) return send({ code: 99991663, msg: 'bad token' });
+    if (!lark.fileTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:resource]' });
+    const bytes = raw.match(/name="image"; filename="([^"]*)"\r\n(?:Content-Type: [^\r]*\r\n)?\r\n([^\r]*)/);
+    if (!raw.includes('name="image_type"\r\n\r\nmessage') || !bytes || !bytes[2].startsWith('PNG')) return send({ code: 234011, msg: 'Can\'t recognize image format.' });
+    const key = `img_v3_${lark.uploads.length + 1}`;
+    lark.uploads.push({ name: bytes[1], key, as: 'user', bytes: bytes[2], image: true });
+    return send({ code: 0, data: { image_key: key } });
+  }
   if (p === '/im/v1/messages' && body.msg_type === 'interactive') {
     if (bearer !== 't-app') return send({ code: 99991663, msg: 'cards come from the bot' });
     const id = `om_card_${lark.cards.length + 1}`;
@@ -569,7 +579,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     if (bearer !== 't-app' && !userOk()) return send({ code: 99991663, msg: 'bad tenant token' });
     if (bearer !== 't-app' && !lark.sendTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.send_as_user]' });
     const content = JSON.parse(body.content);
-    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: content.file_key ? `[file:${content.file_key}]` : content.text, as: bearer === 't-app' ? 'bot' : 'user' });
+    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: content.file_key ? `[file:${content.file_key}]` : content.image_key ? `[image:${content.image_key}]` : content.text, as: bearer === 't-app' ? 'bot' : 'user' });
     return send({ code: 0, data: {} });
   }
   if (p.startsWith('/sheets/')) {
@@ -2554,6 +2564,24 @@ try {
     check(sentFile.file === '报价单.pdf' && upload.name === '报价单.pdf' && upload.bytes === 'PDF-BYTES' && f?.text === `[file:${upload.key}]` && f.as === 'user' && t?.text.startsWith('报价单在这\n') && t.as === 'user',
       'the file goes up to Lark as the person and arrives before the signed text');
     check(!!(await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: quote })).error, 'an uploaded file is sent once');
+    // a platform that cannot run commands puts the file in the request; pictures go as images shown in the chat
+    const b64 = (s: string) => Buffer.from(s).toString('base64');
+    const pic = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '看下截图', file: { name: '截图', mime_type: 'image/png', data: b64('PNG-PICTURE') } });
+    check(pic.preview?.file?.name === '截图.png' && pic.preview.file.as === 'image' && pic.preview.file.bytes === 11, 'a picture handed over in the request is previewed as an image, named by its type');
+    const n2 = lark.messages.length;
+    await tool(alex.token, 'send_lark_message', { send_code: pic.send_code });
+    const img = lark.uploads.at(-1)!;
+    check(img.image === true && img.bytes === 'PNG-PICTURE' && img.as === 'user' && lark.messages[n2]?.text === `[image:${img.key}]` && lark.messages[n2 + 1]?.text.startsWith('看下截图\n'),
+      'and goes to Lark as the person as an image, before the text');
+    const odd = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: { name: 'broken.png', data: b64('NOT-A-PICTURE') } });
+    const n3 = lark.messages.length;
+    await tool(alex.token, 'send_lark_message', { send_code: odd.send_code });
+    check(lark.uploads.at(-1)!.image !== true && lark.messages[n3]?.text === `[file:${lark.uploads.at(-1)!.key}]`, 'a picture Lark will not take as an image is sent as a file');
+    const doc = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: { name: '合同.pdf', mime_type: 'application/pdf', data: b64('PDF') } });
+    check(doc.preview?.file?.as === 'file', 'other files handed over in the request are sent as files');
+    check(String((await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], file: { name: 'x.png', data: '这不是base64' } })).error).includes('base64'), 'data that is not base64 is refused');
+    const huge = await fetch(`${HUB}/mcp`, { method: 'POST', headers: { authorization: `Bearer ${alex.token}`, 'content-type': 'application/json', accept: 'application/json, text/event-stream' }, body: 'x'.repeat(49 * 1024 * 1024) });
+    check(huge.status === 413, 'a request over 48 MB is refused before it is read');
     // full access: no preview, sent at once
     check((await api(alex.jar, 'POST', '/lark/messages', { noConfirm: true })).body.noConfirm === true, 'the person can let their agents send without asking first');
     const k = lark.messages.length;

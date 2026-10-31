@@ -85,7 +85,7 @@ export async function userAccessToken(user: Pick<User, 'id'>, force = false): Pr
  */
 export function imAllowed(userId: string, path: string, method = 'GET'): boolean {
   if (!path.startsWith('/im/')) return true;
-  if (method === 'POST' && (path.startsWith('/im/v1/messages?') || path === '/im/v1/files')) return true;
+  if (method === 'POST' && (path.startsWith('/im/v1/messages?') || path === '/im/v1/files' || path === '/im/v1/images')) return true;
   const read = (method === 'GET' && (/^\/im\/v1\/messages\?/.test(path) || /^\/im\/v1\/messages\/[^/?]+\/resources\/[^/?]+\?/.test(path) || path.startsWith('/im/v1/chats/search?')))
     || (method === 'POST' && path.startsWith('/im/v1/chat_p2p/batch_query?'));
   return read && !!get<{ read_as_me: number }>('SELECT read_as_me FROM users WHERE id = ?', userId)?.read_as_me;
