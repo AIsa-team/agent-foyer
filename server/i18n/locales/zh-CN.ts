@@ -412,7 +412,6 @@ const zhCN = {
   'err.twin.scope': '要让 AI 分身看你的新消息、记在你的多维表格和文档里，需要你在 Lark 里授权一次：{url}\n如果授权页没有这些权限，请管理员先在 Lark 开发者后台开通 search:message（以及读消息、多维表格和文档的权限）。{detail}',
   'err.twin.notSetUp': 'AI 分身的记忆还没建好：先调用 setup_twin。',
   'err.twin.tooSoon': '刚检查过，{s} 秒后再查。',
-  'err.twin.recallWhat': '给出要取的记忆 id（ids），或者要搜的词（query）。',
   'err.twin.badDate': '日期要写成 YYYY-MM-DD：{value}',
   'err.twin.rememberWhat': '新记忆需要一行摘要（summary）。',
   'err.twin.noMessage': '找不到这条消息（可能已撤回，或你看不到它）。',

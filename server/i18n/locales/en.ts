@@ -414,7 +414,6 @@ const en: Record<MessageKey, string> = {
   'err.twin.scope': 'For your AI twin to see your new messages and keep its notes in your Base and documents, allow it once in Lark: {url}\nIf that page does not offer these, an admin first enables search:message (and the scopes for reading messages, Base and documents) in the Lark developer console. {detail}',
   'err.twin.notSetUp': 'The AI twin\'s memory is not set up yet: call setup_twin first.',
   'err.twin.tooSoon': 'Just checked; check again in {s} seconds.',
-  'err.twin.recallWhat': 'Give the memory ids (ids) or words to search for (query).',
   'err.twin.badDate': 'Write dates as YYYY-MM-DD: {value}',
   'err.twin.rememberWhat': 'A new memory needs a one-line summary.',
   'err.twin.noMessage': 'This message cannot be found (it may have been recalled, or you cannot see it).',

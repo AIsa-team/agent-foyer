@@ -678,14 +678,21 @@ export async function recallMemory(user: User, a: { ids?: string[]; query?: stri
   let rows: ({ id: string } & Record<string, unknown>)[];
   if (a.ids?.length) {
     rows = [];
-    for (const id of a.ids.slice(0, 20)) {
+    for (const id of a.ids.slice(0, 50)) {
       const r = await getRecord(user, t.base, tbl.id, id).catch(() => null);
       if (r) rows.push({ id: r.id, ...fromFields(tbl, r.fields) });
     }
     for (const r of rows) void updateRecord(user, t.base, tbl.id, r.id, toFields(tbl, { lastUsed: now() })).catch(() => {});
   } else {
     const q = (a.query ?? '').trim().toLowerCase();
-    if (!q) throw new UserError('err.twin.recallWhat');
+    // without ids or words: every memory that holds, one line each, to tidy them up (merge, correct)
+    if (!q) {
+      const all = await memoryRows(user, t);
+      return {
+        memories: all.slice(0, 200).map((r) => ({ id: r.id, type: r.type, summary: r.summary, ...(r.about ? { about: r.about } : {}), ...(r.validUntil ? { until: day(r.validUntil) } : {}) })),
+        total: all.length, note: 'One line each; recall_memory {ids} for the details.',
+      };
+    }
     rows = (await memoryRows(user, t)).filter((r) => [r.summary, r.detail, r.about].some((v) => String(v ?? '').toLowerCase().includes(q))).slice(0, 20);
   }
   return { memories: rows.map((r) => ({ ...r, ...(r.validFrom ? { validFrom: day(r.validFrom) } : {}), ...(r.validUntil ? { validUntil: day(r.validUntil) } : {}), ...(r.updated ? { updated: day(r.updated) } : {}), ...(r.lastUsed ? { lastUsed: day(r.lastUsed) } : {}) })) };

@@ -264,8 +264,8 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
   }, guard((a: { colleague?: string; chat_id?: string }) => twin.twinContext(user, { chat_id: a.chat_id, colleague: a.colleague ? resolveColleagues([a.colleague])[0] : undefined })));
 
   server.registerTool('recall_memory', {
-    description: 'The twin\'s memories in full (detail, source, validity): by ids from twin_context, or by words to search for.',
-    inputSchema: { ids: z.array(z.string()).max(20).optional(), query: z.string().optional() },
+    description: 'The twin\'s memories: in full (detail, source, validity) by ids from twin_context (up to 50) or by words to search for; with neither, every memory that holds, one line each (to merge or correct them).',
+    inputSchema: { ids: z.array(z.string()).max(50).optional(), query: z.string().optional() },
   }, guard((a: { ids?: string[]; query?: string }) => twin.recallMemory(user, a)));
 
   server.registerTool('remember', {

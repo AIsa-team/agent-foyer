@@ -2881,6 +2881,9 @@ try {
     const recalled = await tool(alex.token, 'recall_memory', { ids: [bobFact.id] }) as { memories: { detail: string; source: string; about: string }[] };
     check(recalled.memories[0]?.detail === '上周会上定的' && recalled.memories[0].source === 'https://x.larksuite.com/docx/doxQuote' && recalled.memories[0].about === '周明'
       && (await tool(alex.token, 'recall_memory', { query: '表情' })).memories.length === 1, 'recall_memory gives the details by id, or by words');
+    const everything = await tool(alex.token, 'recall_memory', {});
+    check(everything.total === 3 && everything.memories.some((m: { id: string; summary: string }) => m.id === bobFact.id && m.summary.includes('报价')) && !everything.memories[0].detail,
+      'without ids or words, recall_memory lists every memory that holds, one line each');
     await tool(alex.token, 'remember', { id: stale.id, status: 'replaced', replaced_by: general.id });
     check((await tool(alex.token, 'recall_memory', { query: 'Q3' })).memories.length === 0, 'a replaced memory is kept but no longer recalled');
 
