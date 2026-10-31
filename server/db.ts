@@ -665,6 +665,15 @@ const MIGRATIONS: string[] = [
   ALTER TABLE twin_predictions ADD COLUMN updates INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE twin_predictions ADD COLUMN updated_at INTEGER;
   `,
+  // who wrote each predicted message (so a change to the twin's documents needs evidence from several people), and the
+  // conversations the twin has met: name and ids, kept in step with the person's "conversations" table in Lark
+  `
+  ALTER TABLE twin_predictions ADD COLUMN sender TEXT;
+  CREATE TABLE twin_conversations (
+    user_id TEXT NOT NULL, chat_id TEXT NOT NULL, record_id TEXT, name TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL, person_id TEXT,
+    seen_at INTEGER NOT NULL, synced_at INTEGER, PRIMARY KEY (user_id, chat_id)
+  );
+  `,
 ];
 
 {

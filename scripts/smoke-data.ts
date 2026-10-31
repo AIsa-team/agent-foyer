@@ -2829,8 +2829,8 @@ try {
     const docsBefore = lark.made.size;
     const setup = await tool(alex.token, 'setup_twin', {});
     const base = [...lark.bases.entries()].at(-1)!;
-    check(String(setup.memory).includes(base[0]) && base[1].tables.length === 3 && lark.made.size === docsBefore + 2 && String(setup.style).includes('/docx/'),
-      'setup_twin makes a Base with three tables and two documents in the person\'s own space');
+    check(String(setup.memory).includes(base[0]) && base[1].tables.length === 4 && lark.made.size === docsBefore + 2 && String(setup.style).includes('/docx/'),
+      'setup_twin makes a Base with four tables (memories, predictions, corrections, conversations) and two documents in the person\'s own space');
     const fresh = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; missing: string[] }; next: string };
     check(fresh.coldStart.done === false && fresh.coldStart.missing.length === 4 && fresh.next.includes('cold start'), 'a new session learns from twin_guide that the cold start is still to do, and which steps');
     check((await tool(alex.token, 'setup_twin', {})).memory === setup.memory && lark.made.size === docsBefore + 2 && lark.bases.size === [...lark.bases.keys()].length, 'and a second call only returns the links');
@@ -2845,6 +2845,9 @@ try {
     check(group?.messages[0].mentions_me === true && group.you_replied === true && !first.conversations.some((c) => c.chat_id === 'oc_grp2'),
       'groups only where they were @mentioned, saying they already replied; their own messages are not listed');
     check(String((await tool(alex.token, 'check_new_messages', {})).error).length > 0, 'at most one check a minute');
+    const convRows = [...(lark.records.get(`${base[0]}/${base[1].tables[3].id}`)?.values() ?? [])].map((r) => JSON.stringify(r));
+    check(convRows.length === 2 && convRows.some((r) => r.includes('oc_p2p_bob') && r.includes('ou_dev_bob') && r.includes('周明')) && convRows.some((r) => r.includes('oc_grp1') && r.includes('群 grp1')),
+      'the conversations it met go into the person\'s id table: name, kind and ids');
     check(!JSON.stringify(twinDb('SELECT * FROM twin_seen')).includes('报价') && twinDb('SELECT * FROM twin_seen WHERE user_id = ?', 'ou_dev_alex').length === 4, 'the hub keeps which messages it saw, never their text');
 
     const bobFact = await tool(alex.token, 'remember', { type: 'person', colleague: 'ou_dev_bob', summary: 'Bob 负责报价，喜欢先看结论', source: 'https://x.larksuite.com/docx/doxQuote', detail: '上周会上定的' });
@@ -2914,6 +2917,26 @@ try {
     check(lark.cards.length === cardsBefore + 1 && lark.cards.at(-1)!.card.includes('负责中台') && tapped.toast?.type === 'success' && notHers.toast?.type === 'error'
       && (await tool(alex.token, 'twin_context', {})).profile.includes('负责中台'), 'with cards set up, the bot sends the proposal as a card and only the person can apply it there');
 
+    // the documents' rules: 2000 characters, no ids; small changes with evidence from several people apply by themselves
+    check(String((await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '长'.repeat(2100), reason: 'x' })).error).includes('2000'), 'a document over 2000 characters is refused');
+    check(String((await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '## 语气\n\n对 oc_abcdef123456 简短', reason: 'x' })).error).length > 0, 'and so is one that names chats by id');
+    const tweak = (extra: string) => ({ doc: 'style', markdown: `## 语气\n\n简短直接，不用表情${extra}`, reason: '三位同事的对话里你都先给结论' });
+    const thin = await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，先给结论'), evidence: [pred.id] });
+    check(thin.changed === false && String(thin.needs_user).includes('evidence'), 'without evidence from several people it waits for the person');
+    await tool(alex.token, 'review_prediction', { id: replay.id, cause: 'tone', closeness: 2, distilled: true });
+    await tool(alex.token, 'review_prediction', { id: quiet.id, cause: 'tone', closeness: 2, distilled: true });
+    const evidence = [pred.id, replay.id, quiet.id];
+    check(String((await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，链接放 https://x.com'), evidence })).needs_user).includes('link'), 'a change that adds a link waits');
+    const lines = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '## 语气\n\n简短直接，不用表情\n\n## 底线\n\n- 可以替我答应', reason: '加底线', evidence });
+    check(lines.changed === false && String(lines.needs_user).includes('底线'), 'and so does one that touches the lines never to cross');
+    const auto = await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，先给结论'), evidence });
+    const twinPage = (await api(alex.jar, 'GET', '/lark/twin')).body as { changes: { code: string; added: string[] }[]; proposals: unknown[] };
+    check(auto.changed === true && auto.automatic === true && (await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && twinPage.changes[0]?.added[0]?.includes('先给结论') && twinPage.proposals.length === 0,
+      'a small change with evidence from two people applies by itself, and the Me page shows what changed');
+    check(String((await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，再简短些'), evidence })).needs_user).includes('today'), 'at most one change a day applies by itself');
+    await api(alex.jar, 'POST', `/lark/twin/proposals/${auto.proposal}`, { revert: true });
+    check(!(await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && ((await api(alex.jar, 'GET', '/lark/twin')).body.changes as unknown[]).length === 0, 'and the person can undo it');
+
     // which groups it looks at
     inbox('om_t7', 'oc_grp2', 'ou_dev_alice', 1000, '下周团建去哪', { parent: 'om_t3' });
     await tool(alex.token, 'twin_settings', { watch: ['oc_grp2'] });
@@ -2931,7 +2954,7 @@ try {
     check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation oldest first');
 
     const later = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; documents: Record<string, string> }; toReview: number; lastCheck: string; next: string };
-    check(later.coldStart.done === true && later.coldStart.documents.style === 'approved' && later.toReview === 2 && !!later.lastCheck && later.next.includes('Patrol'),
+    check(later.coldStart.done === true && later.coldStart.documents.style === 'approved' && later.toReview === 0 && !!later.lastCheck && later.next.includes('Patrol'),
       'once memories, both documents and a replay exist, a new session goes straight to patrolling instead of starting over');
     // the hub watches the twin from outside: a silent patrol, a prediction redone again and again
     const warnings = () => lark.messages.filter((m) => m.id === 'ou_dev_alex' && m.as === 'bot' && /AI (分身|twin)/.test(m.text));

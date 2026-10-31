@@ -19,7 +19,7 @@ import { botChats } from './chats.ts';
 import { calendarAppUrl, calendarEvents, today as calendarToday } from './calendar.ts';
 import { messagesStatus, setMessagesOn, setWithoutConfirm } from './messages.ts';
 import { readingStatus, setReadingOn } from './reading.ts';
-import { answerProposal, setTwinOn, setTwinSettings, twinStatus } from './twin.ts';
+import { answerProposal, revertChange, setTwinOn, setTwinSettings, twinStatus } from './twin.ts';
 
 export const larkApi = new Hono<HubEnv>();
 
@@ -71,8 +71,9 @@ larkApi.post('/lark/twin', async (c) => {
   return c.json(twinStatus(c.get('user')));
 });
 larkApi.post('/lark/twin/proposals/:code', async (c) => {
-  const b = await body<{ apply?: boolean }>(c);
-  await answerProposal(c.get('user'), c.req.param('code'), b.apply === true);
+  const b = await body<{ apply?: boolean; revert?: boolean }>(c);
+  if (b.revert) await revertChange(c.get('user'), c.req.param('code'));
+  else await answerProposal(c.get('user'), c.req.param('code'), b.apply === true);
   return c.json(twinStatus(c.get('user')));
 });
 

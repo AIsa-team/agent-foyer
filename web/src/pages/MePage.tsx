@@ -111,6 +111,7 @@ interface TwinStatus {
   groupMode: 'mentions' | 'all'; watch: { id: string; name: string }[];
   week: { conversations: number; predictions: number; settled: number; accuracy: number | null };
   proposals: { code: string; doc: 'profile' | 'style'; at: number; markdown: string; reason: string }[];
+  changes: { code: string; doc: 'profile' | 'style'; at: number; reason: string; added: string[]; removed: string[] }[];
 }
 
 /**
@@ -129,6 +130,7 @@ function TwinFeature() {
     if (on && !s.granted) location.href = s.connectUrl;
     else reload();
   }, on ? undefined : t('me.twin.turnedOff'));
+  const undo = (code: string) => run(() => api.post(`/lark/twin/proposals/${code}`, { revert: true }), t('me.twin.reverted')).then(reload);
   const answer = (code: string, apply: boolean) => run(() => api.post(`/lark/twin/proposals/${code}`, { apply }), t(apply ? 'me.twin.applied' : 'me.twin.declined')).then(reload);
   const ready = data.on && data.granted;
   return (
@@ -174,6 +176,17 @@ function TwinFeature() {
           )}
         </div>
       )}
+      {data.changes.map((c) => (
+        <div key={c.code} className="conn-card__option" style={{ flexDirection: 'column', alignItems: 'stretch', cursor: 'default' }}>
+          <span className="conn-card__option-title">{t('me.twin.change', { doc: t(c.doc === 'profile' ? 'me.twin.profile' : 'me.twin.style') })}</span>
+          <span className="small muted">{c.reason}</span>
+          <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
+            {c.removed.map((l, i) => <li key={`r${i}`} style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{l.replace(/^[-*]\s+/, '')}</li>)}
+            {c.added.map((l, i) => <li key={`a${i}`}>{l.replace(/^[-*]\s+/, '')}</li>)}
+          </ul>
+          <span><button className="btn sm ghost" type="button" disabled={busy} onClick={() => void undo(c.code)}>{t('me.twin.revert')}</button></span>
+        </div>
+      ))}
       {data.proposals.map((p) => (
         <div key={p.code} className="conn-card__option" style={{ flexDirection: 'column', alignItems: 'stretch', cursor: 'default' }}>
           <span className="conn-card__option-title">{t('me.twin.proposal', { doc: t(p.doc === 'profile' ? 'me.twin.profile' : 'me.twin.style') })}</span>

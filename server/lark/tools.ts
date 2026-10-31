@@ -321,13 +321,14 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
   }, guard((a: { id: string; cause?: string; closeness?: number; distilled?: boolean; replied_elsewhere?: boolean }) => twin.reviewPrediction(user, a)));
 
   server.registerTool('suggest_twin_doc_change', {
-    description: 'Proposes a new version of one of the twin\'s documents ("profile": who the user is; "style": how they reply), as the whole new text in Markdown, with the reason. It changes only when the user agrees (on a Lark card or their Me page); you cannot edit these documents directly.',
+    description: 'Proposes a new version of one of the twin\'s documents ("profile": who the user is; "style": how they reply), as the whole new text in Markdown (at most 2000 characters; people and chats by name, never ids), with the reason. A small change backed by evidence applies by itself after the hub\'s review and the user can undo it; anything else waits for the user (Lark card or Me page). You cannot edit these documents directly.',
     inputSchema: {
       doc: z.enum(['profile', 'style']),
       markdown: z.string(),
       reason: z.string().describe('one or two sentences: what changes and why'),
+      evidence: z.array(z.string()).max(20).optional().describe('ids of reviewed predictions showing the pattern (cause "tone" for style; "missingFact"/"stance" for profile), or of high-confidence memories for profile; 3+ from 2+ people let a small change apply by itself'),
     },
-  }, guard((a: { doc: 'profile' | 'style'; markdown: string; reason: string }) => twin.suggestDocChange(user, a)));
+  }, guard((a: { doc: 'profile' | 'style'; markdown: string; reason: string; evidence?: string[] }) => twin.suggestDocChange(user, a)));
 
   server.registerTool('twin_settings', {
     description: 'Which group chats the twin looks at, when the user asks to change it: group_mode "mentions" (only messages that @mention them, plus watched groups; the default) or "all"; watch / unwatch group chat_ids (find_lark_chat finds them). Direct chats are always included.',

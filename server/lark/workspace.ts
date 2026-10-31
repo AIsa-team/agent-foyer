@@ -25,7 +25,7 @@ export const COLUMN_TYPES = ['text', 'number', 'select', 'multi', 'date', 'check
 export type ColumnType = typeof COLUMN_TYPES[number];
 export interface Column { name: string; type: ColumnType; options?: string[] }
 
-function larkField(c: Column) {
+export function larkField(c: Column) {
   switch (c.type) {
     case 'number': return { field_name: c.name, type: 2 };
     case 'select': return { field_name: c.name, type: 3, property: { options: (c.options ?? []).map((name) => ({ name })) } };
