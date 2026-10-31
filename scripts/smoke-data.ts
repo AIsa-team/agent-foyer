@@ -2818,9 +2818,8 @@ try {
     const asked = lark.scopesAsked.split(' ');
     check(['search:message', 'im:message.p2p_msg:get_as_user', 'bitable:app', 'docx:document'].every((x) => asked.includes(x)), 'one authorisation asks for searching messages, reading them, and writing its Base and documents');
 
-    const t0 = Date.now();
     const inbox = (id: string, chat: string, from: string, ago: number, text: string, more: { bot?: boolean; mentions?: string[] } = {}) =>
-      lark.inbox.set(id, { id, chat, from, at: t0 - ago, text, ...more });
+      lark.inbox.set(id, { id, chat, from, at: Date.now() - ago, text, ...more });
     inbox('om_t1', 'oc_p2p_bob', 'ou_dev_bob', 600_000, '周五的报价能发我吗？');
     inbox('om_t2', 'oc_grp1', 'ou_dev_alice', 500_000, '@Alex 方案看了吗', { mentions: ['ou_dev_alex'] });
     inbox('om_t3', 'oc_grp2', 'ou_dev_alice', 400_000, '午饭吃什么');
@@ -2859,7 +2858,7 @@ try {
     const pred = await tool(alex.token, 'record_prediction', { message_id: 'om_t1', should_reply: true, urgency: 'today', reply: '好的，下午发你', scenario: '要资料' });
     check(pred.recorded === true && pred.sent === false && lark.messages.every((m) => !m.text.includes('下午发你')), 'record_prediction records, and sends nothing');
     check(!!(await tool(alex.token, 'record_prediction', { message_id: 'om_t5', should_reply: true })).error, 'nor for the person\'s own messages');
-    inbox('om_t6', 'oc_p2p_bob', 'ou_dev_alex', -1000, '下午发');
+    inbox('om_t6', 'oc_p2p_bob', 'ou_dev_alex', 1000, '下午发');
     fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
     const second = await tool(alex.token, 'check_new_messages', {});
     const predRows = lark.records.get(`${base[0]}/${base[1].tables[1].id}`)!;
@@ -2912,7 +2911,7 @@ try {
       && (await tool(alex.token, 'twin_context', {})).profile.includes('负责中台'), 'with cards set up, the bot sends the proposal as a card and only the person can apply it there');
 
     // which groups it looks at
-    inbox('om_t7', 'oc_grp2', 'ou_dev_alice', -2000, '下周团建去哪');
+    inbox('om_t7', 'oc_grp2', 'ou_dev_alice', 1000, '下周团建去哪');
     await tool(alex.token, 'twin_settings', { watch: ['oc_grp2'] });
     fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
     const third = await tool(alex.token, 'check_new_messages', {});

@@ -226,7 +226,7 @@ export async function setupTwin(user: User) {
 interface Msg extends Item { chat_id: string; mentions?: { key: string; id?: string; name?: string }[] }
 const sec = (ms: number) => String(Math.floor(ms / 1000));
 
-/** Message ids from Lark's message search (newest pages first), as the person. */
+/** Message ids from Lark's message search (newest first), as the person. Lark ignores start_time without end_time: pass both. */
 async function searchIds(user: User, body: Record<string, unknown>, pages = SEARCH_PAGES) {
   const ids: string[] = [];
   let page = '';
@@ -386,7 +386,7 @@ export async function messageHistory(user: User, a: { days?: number; chat_id?: s
     }
   }
   const groups = new Set<string>();
-  for (const id of (await searchIds(user, { chat_type: 'group_chat', from_ids: [user.id], start_time: sec(since) }, 3)).ids) {
+  for (const id of (await searchIds(user, { chat_type: 'group_chat', from_ids: [user.id], start_time: sec(since), end_time: sec(now()) }, 3)).ids) {
     const m = await getMessage(user, id);
     if (m && !groups.has(m.chat_id)) {
       groups.add(m.chat_id);
