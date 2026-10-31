@@ -99,7 +99,7 @@ export async function setManifest(owner: User, app: App, input: ManifestInput, p
   if (input.docs) {
     const parent = input.docs.parent?.trim() || null;
     const ref = parent ? parseDocRef(parent) : null;
-    if (ref?.kind === 'docx') throw new UserError('err.docs.badParent');
+    if (ref?.kind === 'docx' || ref?.kind === 'file') throw new UserError('err.docs.badParent');
     docs = { parent, wiki: ref?.kind === 'wiki', ...(input.docs.share && input.docs.share !== 'view' ? { share: input.docs.share } : {}) };
   }
   const m: Manifest = { tables, notify: { people: users, chats: input.notify?.chats ?? [], ...(input.notify?.app_users ? { appUsers: true } : {}) }, ...(input.mail_drafts ? { mailDrafts: true } : {}), ...(docs ? { docs } : {}) };

@@ -71,6 +71,8 @@ Add these **user** scopes (user_access_token):
 | `calendar:calendar:readonly` **optional** | the home page's agenda module and agents' `list_calendar_events`: reading the person's own calendar, read-only; only requested when someone first uses it |
 | `search:docs:read` **optional** | agents' `search_lark_docs`: searching the documents and wiki pages the person may open, by keyword; only requested when someone first uses it |
 | `wiki:wiki` **optional** | an agent putting a new document under a wiki page; only requested the first time someone does that |
+| `drive:file:readonly` **optional** | agents reading a file in Drive or the wiki (e.g. an uploaded HTML page) the person may open; only requested when someone first does that |
+| `drive:file`, `drive:drive.metadata:readonly` **optional** | an agent uploading a file for the person (`upload_lark_file`) into their space, a folder or under a wiki page (with `wiki:wiki`); upload and download only, no managing or deleting files; the metadata scope finds the person's own Drive folder. Only requested when someone first does that |
 
 Alerts are sent by the hub's bot in Lark:
 

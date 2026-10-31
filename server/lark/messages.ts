@@ -94,7 +94,7 @@ export function inlineFile(user: User, f: InlineFile): FileRef {
  * A preview waiting for the person's yes. Kept in the database (so a restart does not lose it), encrypted, emptied once
  * sent or declined, and deleted when it expires or when the person turns sending off.
  */
-interface Pending { to: string[]; text: string; file: FileRef | null }
+export interface Pending { to: string[]; text: string; file: FileRef | null; markdown?: boolean }
 interface Waiting extends Pending { code: string; card: string | null }
 const pendingOf = (userId: string): Waiting[] => {
   run('DELETE FROM lark_pending WHERE expires < ?', now());
@@ -112,6 +112,11 @@ const extOf = (name: string) => (name.includes('.') ? name.toLowerCase().split('
 /** Pictures go as images, shown in the chat; anything else, or a picture too big for that, as a file. */
 const isImage = (name: string, bytes: number) => IMAGE_TYPES.has(extOf(name)) && bytes <= MAX_IMAGE;
 
+/** The text as Lark sends it: plain, or as rich text written in Markdown (bold, lists, links, code, quotes). */
+const textMessage = (p: Pending, text: string, locale: string) => (p.markdown
+  ? { msg_type: 'post' as const, content: { [locale.startsWith('zh') ? 'zh_cn' : 'en_us']: { content: [[{ tag: 'md', text }]] } } }
+  : { msg_type: 'text' as const, content: { text } });
+
 /** Lark's file types; anything else goes as a plain file. */
 function fileType(name: string) {
   const ext = extOf(name);
@@ -123,7 +128,7 @@ function fileType(name: string) {
 }
 
 /** The preview: who gets what, and the code that sends exactly that. */
-export function prepareMessage(user: User, to: string[], text: string, file: FileRef | null, locale: string) {
+export function prepareMessage(user: User, { to, text, file, markdown }: Pending, locale: string) {
   ready(user);
   const body = text.trim();
   const ids = [...new Set(to)];
@@ -136,14 +141,15 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
     if (size > MAX_FILE) throw new UserError('err.messages.fileTooBig', { mb: MAX_FILE / 1024 / 1024 });
   }
   const name = file?.name.trim().replace(/[\\/]/g, '_').slice(0, 200) || 'file';
-  const message: Pending = { to: ids, text: body, file: file && { upload_id: file.upload_id, name } };
+  const message: Pending = { to: ids, text: body, file: file && { upload_id: file.upload_id, name }, ...(markdown && body ? { markdown: true } : {}) };
   // the same message prepared again (an agent that lost the code) keeps its code, so the user's yes still sends it
-  const same = pendingOf(user.id).find((p) => JSON.stringify([p.to, p.text, p.file]) === JSON.stringify([message.to, message.text, message.file]));
+  const key = (p: Pending) => JSON.stringify([p.to, p.text, p.file, !!p.markdown]);
+  const same = pendingOf(user.id).find((p) => key(p) === key(message));
   const code = same?.code ?? randomBytes(4).toString('hex');
   run('INSERT INTO lark_pending (code, user_id, payload, expires) VALUES (?, ?, ?, ?) ON CONFLICT(code) DO UPDATE SET expires = excluded.expires',
     code, user.id, encrypt(JSON.stringify(message)), now() + PREVIEW_MS);
   return {
-    preview: { from: user.name, to: ids.map(nameOf), ...(file ? { file: { name, bytes: size, as: isImage(name, size) ? 'image' : 'file' } } : {}), text: signed(body, user, locale) },
+    preview: { from: user.name, to: ids.map(nameOf), ...(file ? { file: { name, bytes: size, as: isImage(name, size) ? 'image' : 'file' } } : {}), text: signed(body, user, locale), ...(message.markdown ? { format: 'markdown' } : {}) },
     send_code: code,
     next: `NOT SENT YET. Show the user exactly who gets this (the file, then the text with the last line saying it was sent by their AI twin). When they agree, call send_lark_message with only {"send_code": "${code}"}: calling it with to/text again does not send, it only shows this preview again. If they want changes, prepare a new one.`,
   };
@@ -153,8 +159,8 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
  * The preview and its code, with a card in Lark where the hub is set up for it; otherwise the message sent once the
  * person said yes in their agent's app (`ask`). Sent at once if they turned confirming off.
  */
-export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string, ask?: (message: string) => Promise<Answer>) {
-  const prepared = prepareMessage(user, to, text, file, locale);
+export async function sendOrPrepare(user: User, message: Pending, locale: string, ask?: (message: string) => Promise<Answer>) {
+  const prepared = prepareMessage(user, message, locale);
   if (withoutConfirm(user.id)) {
     return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
   }
@@ -245,14 +251,15 @@ async function deliver(user: User, p: Waiting) {
       rmSync(path, { force: true });
     }
   }
-  const send = (id: string, msgType: 'text' | 'file' | 'image', content: object) =>
+  const send = (id: string, msgType: 'text' | 'post' | 'file' | 'image', content: object) =>
     asUser(user, '/im/v1/messages?receive_id_type=open_id', { method: 'POST', body: JSON.stringify({ receive_id: id, msg_type: msgType, content: JSON.stringify(content) }) });
   const sent: string[] = [];
   const failed: { to: string; reason: string }[] = [];
   for (const id of p.to) {
     try {
       if (attachment) await send(id, attachment.type, attachment.content);
-      await send(id, 'text', { text: signed(p.text, user, localeOf(id)) });
+      const text = textMessage(p, signed(p.text, user, localeOf(id)), localeOf(id));
+      await send(id, text.msg_type, text.content);
       run('INSERT INTO lark_sent (user_id, to_id, at) VALUES (?, ?, ?)', user.id, id, now());
       sent.push(nameOf(id));
     } catch (e) {
@@ -295,7 +302,7 @@ function card(user: User, p: Waiting, end?: string) {
       { tag: 'div', text: plain(tr(locale, 'lark.card.to', { names: names(p.to, locale) })) },
       ...(p.file ? [{ tag: 'div', text: plain(tr(locale, 'lark.card.file', { name: p.file.name, size: file ? size(file) : '' })) }] : []),
       { tag: 'hr' },
-      { tag: 'div', text: plain(signed(p.text, user, locale)) },
+      p.markdown ? { tag: 'markdown', content: signed(p.text, user, locale) } : { tag: 'div', text: plain(signed(p.text, user, locale)) },
       ...(end
         ? [{ tag: 'note', elements: [plain(end)] }]
         : [{ tag: 'action', actions: [button('send'), button('decline')] }, { tag: 'note', elements: [plain(tr(locale, 'lark.card.hint'))] }]),

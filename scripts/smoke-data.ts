@@ -94,7 +94,7 @@ const lark = {
   access: new Set<string>(),
   refresh: new Set<string>(),
   refreshes: 0,
-  messages: [] as { type: string; id: string; text: string; as?: 'bot' | 'user' }[],
+  messages: [] as { type: string; id: string; text: string; as?: 'bot' | 'user'; msgType?: string }[],
   /** the bot's interactive cards, and what each was updated to */
   cards: [] as { id: string; to: string; card: string; updates: string[] }[],
   sendTokens: new Set<string>(),
@@ -116,6 +116,13 @@ const lark = {
   advanced: false,
   writeTokens: new Set<string>(),
   docsTokens: new Set<string>(),
+  driveReadTokens: new Set<string>(),
+  driveWriteTokens: new Set<string>(),
+  driveFiles: new Map<string, { name: string; folder: string; bytes: string; wiki?: string }>([
+    ['boxHtml', { name: 'site.html', folder: 'fldOther', bytes: '<html><body><h1>官网建议</h1></body></html>' }],
+    ['boxPdf', { name: '合同.pdf', folder: 'fldOther', bytes: '%PDF-1.7 binary' }],
+  ]),
+  wikiMoves: new Map<string, string>(),
   wikiTokens: new Set<string>(),
   sheetsTokens: new Set<string>(),
   sheetCols: 4,
@@ -179,6 +186,8 @@ function issue(expiresIn: number) {
   if (lark.scopesAsked.split(' ').includes('sheets:spreadsheet')) lark.sheetsTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('calendar:calendar:readonly')) lark.calendarTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('search:docs:read')) lark.searchTokens.add(a);
+  if (['drive:file:readonly', 'drive:file'].some((s) => lark.scopesAsked.split(' ').includes(s))) lark.driveReadTokens.add(a);
+  if (['drive:file', 'drive:drive.metadata:readonly'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.driveWriteTokens.add(a);
   if (['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.sendTokens.add(a);
   if (lark.scopesAsked.split(' ').includes('im:resource')) lark.fileTokens.add(a);
   if (['im:message:readonly', 'im:message.p2p_msg:get_as_user', 'im:message.group_msg:get_as_user', 'im:chat:read'].every((s) => lark.scopesAsked.split(' ').includes(s))) lark.readTokens.add(a);
@@ -579,7 +588,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     if (bearer !== 't-app' && !userOk()) return send({ code: 99991663, msg: 'bad tenant token' });
     if (bearer !== 't-app' && !lark.sendTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message.send_as_user]' });
     const content = JSON.parse(body.content);
-    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: content.file_key ? `[file:${content.file_key}]` : content.image_key ? `[image:${content.image_key}]` : content.text, as: bearer === 't-app' ? 'bot' : 'user' });
+    lark.messages.push({ type: url.searchParams.get('receive_id_type')!, id: body.receive_id, text: content.file_key ? `[file:${content.file_key}]` : content.image_key ? `[image:${content.image_key}]` : body.msg_type === 'post' ? JSON.stringify(content) : content.text, as: bearer === 't-app' ? 'bot' : 'user', msgType: body.msg_type });
     return send({ code: 0, data: {} });
   }
   if (p.startsWith('/sheets/')) {
@@ -787,6 +796,44 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     ] } });
   }
   if (p === '/docx/v1/documents/doxFolder') return send({ code: 0, data: { document: { document_id: 'doxFolder', title: '团队日会' } } });
+  // files in Drive and the wiki: download (read scope), upload into a folder and move under a wiki page (write scopes)
+  if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wikHtml') {
+    return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wikHtml', title: 'aisa-one-site-suggestions.html', obj_type: 'file', obj_token: 'boxHtml' } } });
+  }
+  const driveDownload = p.match(/^\/drive\/v1\/files\/(\w+)\/download$/);
+  if (driveDownload) {
+    if (!lark.driveReadTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [drive:file:readonly]' });
+    const f = lark.driveFiles.get(driveDownload[1]);
+    if (!f) return send({ code: 1061004, msg: 'forbidden' });
+    res.writeHead(200, { 'content-type': f.name.endsWith('.html') ? 'text/html' : 'application/octet-stream', 'content-disposition': `attachment; filename="${encodeURIComponent(f.name)}"`, 'content-length': Buffer.byteLength(f.bytes) });
+    return res.end(f.bytes);
+  }
+  if (p === '/drive/explorer/v2/root_folder/meta') {
+    if (!lark.driveWriteTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [drive:drive.metadata:readonly]' });
+    return send({ code: 0, data: { token: 'fldRoot', id: '1', user_id: 'u1' } });
+  }
+  if (p === '/drive/v1/files/upload_all' && req.method === 'POST') {
+    if (!lark.driveWriteTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [drive:file]' });
+    const field = (name: string) => raw.match(new RegExp(`name="${name}"(?:; filename="[^"]*")?\r\n(?:Content-Type: [^\r]*\r\n)?\r\n([^\r]*)`))?.[1] ?? '';
+    const token = `boxUp${lark.driveFiles.size + 1}`;
+    lark.driveFiles.set(token, { name: field('file_name'), folder: field('parent_node'), bytes: field('file') });
+    return send({ code: 0, data: { file_token: token } });
+  }
+  const move = p.match(/^\/wiki\/v2\/spaces\/(\w+)\/nodes\/move_docs_to_wiki$/);
+  if (move) {
+    if (!lark.wikiTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [wiki:wiki]' });
+    const f = lark.driveFiles.get(body.obj_token);
+    if (!f || body.obj_type !== 'file') return send({ code: 131005, msg: 'not found' });
+    f.wiki = body.parent_wiki_token;
+    const task = `task${lark.wikiMoves.size + 1}`;
+    lark.wikiMoves.set(task, `wikFile${lark.wikiMoves.size + 1}`);
+    return send({ code: 0, data: { task_id: task } });
+  }
+  const moveTask = p.match(/^\/wiki\/v2\/tasks\/(\w+)$/);
+  if (moveTask) {
+    const node = lark.wikiMoves.get(moveTask[1]);
+    return send({ code: 0, data: { task: { task_id: moveTask[1], move_result: [{ node: { node_token: node, obj_type: 'file' }, status: node ? 0 : -1, status_msg: node ? 'success' : 'failed' }] } } });
+  }
   if (p === '/wiki/v2/spaces/get_node' && url.searchParams.get('token') === 'wik1020') {
     return send({ code: 0, data: { node: { space_id: 'sp1', node_token: 'wik1020', title: '团队工作日报 1020', obj_type: 'docx', obj_token: 'doxDaily' } } });
   }
@@ -1959,6 +2006,14 @@ try {
   const after = await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url, tables: true }) as typeof report;
   check(edited.edited?.length === 2 && after.tables[0].rows[1].slice(1).map((c) => c.text).join('|') === '写完日报工具\n修好网关|接 GitHub webhook|', 'edit_lark_doc replaces the cells given, one paragraph per line');
   check(after.tables[0].rows[2][1].text === '招募 47 位创作者\n完善 SOP' && after.tables[0].rows[1][0].people?.[0].id === 'ou_dev_alex', "and leaves the rest as it was");
+  const styled = '**写完**日报工具，见[说明](https://x.com/a)\n2\\*3 用 `pnpm test`';
+  await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits: [{ id: mineRow[1].id, text: styled }] });
+  const styledCell = (await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url, tables: true }) as typeof report).tables[0].rows[1][1];
+  const cellRuns = lark.doc.get(lark.doc.get(mineRow[1].id)!.children![0])!.text as { elements: { text_run: { content: string; text_element_style?: Record<string, unknown> } }[] };
+  check(cellRuns.elements[0].text_run.content === '写完' && cellRuns.elements[0].text_run.text_element_style?.bold === true && cellRuns.elements.some((e) => (e.text_run.text_element_style?.link as { url?: string })?.url === encodeURIComponent('https://x.com/a')),
+    'edits take inline Markdown: bold and links become Lark styles');
+  check(styledCell.text === styled && (lark.doc.get(lark.doc.get(mineRow[1].id)!.children![1])!.text as typeof cellRuns).elements[0].text_run.content === '2*3 用 ',
+    'and a cell reads back as the same Markdown, a literal * escaped, so reading and writing back changes nothing');
   const headingId = [...lark.doc.values()].find((x) => x.block_type === 3)!.block_id;
   await tool(alex.token, 'edit_lark_doc', { url: listedWiki.pages[0].url, edits: [{ id: headingId, text: '二、本周项目' }] });
   check(((await tool(alex.token, 'read_lark_doc', { url: listedWiki.pages[0].url })).markdown as string).startsWith('# 二、本周项目'), 'and the text of a paragraph or heading');
@@ -1988,12 +2043,43 @@ try {
   check(lark.made.get(String(inFolder.url).split('/').pop()!)?.folder === 'fldAbc123', 'or in a Drive folder');
   const appendedDoc = await tool(alex.token, 'edit_lark_doc', { url: inFolder.url, append: '## 补充\n\n- 第二行' });
   check(appendedDoc.appendedBlocks === 2 && lark.made.get(String(inFolder.url).split('/').pop()!)!.blocks.length === 3, 'edit_lark_doc adds Markdown at the end of a document');
+
   check(String((await tool(alex.token, 'create_lark_doc', { title: '放进知识库', markdown: '一行', parent: 'https://x.larksuite.com/wiki/wikDaily' })).error).includes('wiki=1'), 'placing it under a wiki page first asks for wiki editing');
   await connect(alex.jar, '&wiki=1');
   check(lark.scopesAsked.split(' ').includes('wiki:wiki') && lark.scopesAsked.split(' ').includes('docx:document:create'), 'which is added on top of document access');
   const inWiki = await tool(alex.token, 'create_lark_doc', { title: '放进知识库', markdown: '一行', parent: 'https://x.larksuite.com/wiki/wikDaily' });
   check(String(inWiki.url).startsWith('https://www.larksuite.com/wiki/wikMade') && [...lark.made.values()].some((d) => d.folder === 'wiki:wikDaily' && d.title === '放进知识库'), 'the document becomes a page under the wiki page');
   check(String((await tool(alex.token, 'create_lark_doc', { title: 'x', markdown: 'y', parent: 'https://x.larksuite.com/docx/doxDaily' })).error).length > 0, 'a document cannot go inside another document');
+
+  // files in the wiki and Drive: an uploaded HTML page read as text, anything else as a download link; uploading one
+  const htmlPage = 'https://x.larksuite.com/wiki/wikHtml';
+  check(String((await tool(alex.token, 'read_lark_doc', { url: htmlPage })).error).includes('drive=1'), 'reading a file first asks the person to let the hub download files');
+  await connect(alex.jar, '&drive=1');
+  check(lark.scopesAsked.split(' ').includes('drive:file:readonly') && !lark.scopesAsked.split(' ').includes('drive:file'), 'that asks only for downloading, nothing more');
+  const htmlRead = await tool(alex.token, 'read_lark_doc', { url: htmlPage });
+  check(htmlRead.title === 'aisa-one-site-suggestions.html' && htmlRead.text === lark.driveFiles.get('boxHtml')!.bytes && htmlRead.url === htmlPage && String(htmlRead.download).includes('/lark-drive-file/boxHtml'),
+    'a wiki link to an uploaded HTML page reads the page as text, with a download link');
+  const got = await fetch(String(htmlRead.download));
+  check(got.status === 200 && (await got.text()) === lark.driveFiles.get('boxHtml')!.bytes && (got.headers.get('content-disposition') ?? '').includes(encodeURIComponent('aisa-one-site-suggestions.html')), 'the link streams the file, under its name');
+  check((await fetch(String(htmlRead.download).replace(/t=[^&]+/, 't=forged'))).status === 403, 'a link that was not given out does not work');
+  const pdf = await tool(alex.token, 'read_lark_doc', { url: 'https://x.larksuite.com/file/boxPdf' });
+  check(pdf.text === undefined && pdf.file?.name === '合同.pdf' && String(pdf.download).includes('/lark-drive-file/boxPdf'), 'a file that is not text comes as a download link only');
+
+  const html = { name: '官网改版建议.html', mime_type: 'text/html', data: Buffer.from('<html>建议</html>').toString('base64') };
+  const filesBefore = lark.driveFiles.size;
+  const noUpload = await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/wiki/wik1020' });
+  check(String(noUpload.error).includes('upload=1') && String(noUpload.error).includes('wiki=1') && lark.driveFiles.size === filesBefore, 'uploading first asks the person to let the hub upload files (and place them in the wiki), before anything goes up');
+  await connect(alex.jar, '&upload=1&wiki=1');
+  const asked = lark.scopesAsked.split(' ');
+  check(asked.includes('drive:file') && asked.includes('drive:drive.metadata:readonly') && asked.includes('wiki:wiki') && !asked.includes('drive:drive'), 'that asks for uploading, never for managing or deleting files');
+  const fileInWiki = await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/wiki/wik1020' });
+  const uploaded = [...lark.driveFiles.values()].at(-1)!;
+  check(fileInWiki.place === 'wiki' && String(fileInWiki.url).endsWith('/wiki/wikFile1') && uploaded.name === '官网改版建议.html' && uploaded.bytes === '<html>建议</html>' && uploaded.folder === 'fldRoot' && uploaded.wiki === 'wik1020',
+    'upload_lark_file puts the file in the person\'s space and moves it under the wiki page, returning the page');
+  const inFolderFile = await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/drive/folder/fldTeam' });
+  check(String(inFolderFile.url).includes('/file/boxUp') && [...lark.driveFiles.values()].at(-1)!.folder === 'fldTeam' && !(await tool(alex.token, 'read_lark_doc', { url: htmlPage })).error,
+    'or into a Drive folder; and downloading still works with the upload access');
+  check(String((await tool(alex.token, 'upload_lark_file', { file: html, parent: 'https://x.larksuite.com/docx/doxDaily' })).error).includes('wiki'), 'but not inside a document');
 
   // the admin's picker: Lark's own features always; the company's apps once the hub may read them
   check((await api(alice.jar, 'GET', '/lark-links/catalog')).status === 400, 'only admins see the Lark app picker');
@@ -2463,6 +2549,14 @@ try {
     fsDb.prepare('UPDATE users SET locale = ? WHERE id = ?').run(bobLocale, 'ou_dev_bob');
     check(String((await tool(alex.token, 'send_lark_message', { send_code: preview.send_code })).error).includes('already sent') && lark.messages.length === before + 1, 'a code sends once');
     check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
+    const md = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '**三点**改到：\n1. 会议室 A\n2. [日程](https://example.com)', format: 'markdown' });
+    check(md.preview?.format === 'markdown' && md.send_code !== (await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '**三点**改到：\n1. 会议室 A\n2. [日程](https://example.com)' })).send_code, 'the same text as Markdown is a different message from plain text');
+    await tool(alex.token, 'send_lark_message', { send_code: md.send_code });
+    const post = lark.messages.at(-1)!;
+    const postBody = JSON.parse(post.text) as Record<string, { content: { tag: string; text: string }[][] }>;
+    const mdText = Object.values(postBody)[0]?.content[0][0];
+    check(post.msgType === 'post' && mdText?.tag === 'md' && mdText.text.startsWith('**三点**改到：\n1. 会议室 A') && mdText.text.includes('\n\n—— ') && post.as === 'user',
+      'format markdown goes out as Lark rich text (md), signed after a blank line, as the person');
 
     // an agent whose app can ask (MCP elicitation): the person says yes there, and it goes out in the same call
     const asker = (await api(alex.jar, 'POST', '/tokens', { name: 'Claude Code' })).body.token as string;
@@ -2520,7 +2614,7 @@ try {
       console.log(JSON.stringify(await (${js})));
     `], { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_CONFIRM_CARDS: 'on' } },
       (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(JSON.parse(out.trim().split('\n').at(-1)!)))));
-    const withCard = (text: string, answer = 'null') => inHub(`m.sendOrPrepare(user, ['ou_dev_bob'], ${JSON.stringify(text)}, null, 'en', async () => ${answer})`);
+    const withCard = (text: string, answer = 'null', markdown = false) => inHub(`m.sendOrPrepare(user, ${JSON.stringify({ to: ['ou_dev_bob'], text, file: null, markdown })}, 'en', async () => ${answer})`);
     const tap = (operator: string, code: string, choice: 'send' | 'decline') => inHub(`m.onCardTap(${JSON.stringify({ operator: { open_id: operator }, action: { value: { hub: 'send_message', code, choice } } })})`);
     const byCard = await withCard('五点见');
     const sentBefore = lark.messages.length;
@@ -2548,6 +2642,9 @@ try {
     const cards = lark.cards.length;
     const notAsked = await withCard('七点见', "'accept'");
     check(!!notAsked.send_code && lark.cards.length === cards + 1 && lark.messages.length === sentBefore + 2, 'and the card is used even for an agent whose app could ask');
+    const rich = await withCard('**周五**前要：\n- 报价单\n- 合同', 'null', true);
+    const richCard = lark.cards.at(-1)!.card;
+    check(rich.preview.format === 'markdown' && richCard.includes('"tag":"markdown"') && richCard.includes('**周五**'), 'a Markdown message is previewed on the card as formatted text');
     // a file, uploaded as it is, then sent before the text
     const up = await tool(alex.token, 'create_upload', { purpose: 'file' });
     check((await fetch(up.upload_url, { method: 'PUT', body: 'PDF-BYTES' })).ok && String(up.command).includes('--data-binary @<FILE>'), 'a file is uploaded as it is');

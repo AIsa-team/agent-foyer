@@ -28,6 +28,7 @@ import { startBoardSync } from './data/importBoard.ts';
 import { run, now } from './db.ts';
 import { pruneReads } from './cache.ts';
 import { fetchMessageFile } from './lark/reading.ts';
+import { fetchDriveFile } from './lark/files.ts';
 
 seedDevUsers();
 reconcileInterruptedBuilds();
@@ -72,6 +73,7 @@ app.put('/upload/:id', async (c) => {
 
 // a file from a Lark message, fetched as the person a read_lark_messages link was made for (lark/reading.ts)
 app.get('/lark-file/:message/:key', (c) => fetchMessageFile(c.req.param('message'), c.req.param('key'), new URL(c.req.url).searchParams));
+app.get('/lark-drive-file/:token', (c) => fetchDriveFile(c.req.param('token'), new URL(c.req.url).searchParams));
 
 app.get('/skills/:slug/:file{v[0-9]+\\.tgz}', (c) => {
   const slug = c.req.param('slug');

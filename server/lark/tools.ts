@@ -18,6 +18,7 @@ import { okrBoard } from './okrBoard.ts';
 import * as workspace from './workspace.ts';
 import { inspect } from './baseSource.ts';
 import { createDoc, editDoc, listWiki, readDoc, searchDocs } from './docs.ts';
+import { uploadFile } from './files.ts';
 import { calendarEvents, localTime, today as calendarToday } from './calendar.ts';
 import { inlineFile, sendOrPrepare, sendPrepared, type FileRef, type InlineFile } from './messages.ts';
 import { findChats, readMessages } from './reading.ts';
@@ -117,9 +118,9 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard(async () => ({ periods: await listPeriods(user, locale) })));
 
   server.registerTool('read_lark_doc', {
-    description: 'Reads a Lark document (or the document behind a wiki page) as Markdown, with the user\'s own Lark access: policies, SOPs, meeting notes, specs, reports. Give its link. tables: true also returns each table under the heading it sits under, row by row, each cell with its id, text and the people @mentioned in it, for edit_lark_doc.',
+    description: 'Reads a Lark document (or the document behind a wiki page) as Markdown, with the user\'s own Lark access: policies, SOPs, meeting notes, specs, reports. Give its link. tables: true also returns each table under the heading it sits under, row by row, each cell with its id, text and the people @mentioned in it, for edit_lark_doc. A link to a file in the wiki or Drive (e.g. an uploaded HTML page) returns the file: its text when it is a small text file (HTML, Markdown, CSV, JSON…), and always a download link valid 10 minutes.',
     inputSchema: {
-      url: z.string().describe('link to a Lark document (/docx/...) or wiki page (/wiki/...)'),
+      url: z.string().describe('link to a Lark document (/docx/...), wiki page (/wiki/...) or file (/file/...)'),
       tables: z.boolean().optional(),
     },
   }, guard((a: { url: string; tables?: boolean }) => readDoc(user, a.url, { tables: a.tables })));
@@ -163,7 +164,7 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }, guard((a: { url: string; title?: string }) => listWiki(user, a.url, a.title)));
 
   server.registerTool('edit_lark_doc', {
-    description: 'Changes a Lark document as the user: edits replace the whole text of table cells or paragraphs by their id (from read_lark_doc with tables: true; a line break starts a new paragraph in a cell), append adds Markdown at the end. The user can only change documents they may edit in Lark, and Lark shows them as the editor. Read the document first, change only what the user meant, and keep everything else.',
+    description: 'Changes a Lark document as the user: edits replace the whole text of table cells or paragraphs by their id (from read_lark_doc with tables: true; a line break starts a new paragraph in a cell), written with inline Markdown as read: **bold**, *italic*, ~~strikethrough~~, `code`, [links](https://…) (\\* for a literal *); @mentions cannot be written, so a replaced cell loses its mentions. append adds Markdown at the end. The user can only change documents they may edit in Lark, and Lark shows them as the editor. Read the document first, change only what the user meant, and keep everything else.',
     inputSchema: {
       url: z.string().describe('link to the document or wiki page'),
       edits: z.array(z.object({ id: z.string(), text: z.string() })).max(200).optional(),
@@ -180,21 +181,33 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
     },
   }, guard((a: { title: string; markdown: string; parent?: string }) => createDoc(user, a)));
 
+  server.registerTool('upload_lark_file', {
+    description: 'Puts a file in Lark as the user (they own it) and returns its link, e.g. an HTML page, which Lark shows as a web page, or a PDF. Without parent it goes to the user\'s own space; parent can be a wiki page (the file becomes a page under it and takes its sharing) or a Drive folder. At most 20 MB. For text that people will edit or comment on, create_lark_doc is better. If you can run commands, create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}. On a platform that cannot run commands, the platform may put the attached file in as file {name, mime_type, data} (data: the file in base64); never write data yourself.',
+    inputSchema: {
+      file: z.union([
+        z.object({ upload_id: z.string(), name: z.string().describe('the file name people see, e.g. 官网改版建议.html') }),
+        z.object({ name: z.string(), mime_type: z.string().optional(), data: z.string().describe('the file in base64, put in by the platform') }),
+      ]),
+      parent: z.string().optional().describe('link to a wiki page or Drive folder to put it in'),
+    },
+  }, guard((a: { file: FileRef | InlineFile; parent?: string }) => uploadFile(user, 'data' in a.file ? inlineFile(user, a.file) : a.file, a.parent)));
+
   server.registerTool('send_lark_message', {
-    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Call with to, text and/or file. If your app can show the user a question, the hub asks them there and sends once they accept (the result says what happened). Otherwise you get a preview and a send_code: show the user exactly who gets what; only after they agree, call again with only send_code (copied from the preview result, valid 10 minutes) and that exact message is sent. Where the hub sends the user the preview as a card in Lark, they may send it there instead; then calling with the send_code says so, and nothing is sent twice. Calling with to/text again never sends; it only repeats the preview. Never send anything the user has not seen. If the user turned off confirming on their Me page, the first call sends at once (the result says so): only call it when they asked for that message, and tell them afterwards what went to whom. Up to 10 colleagues. A file (at most 30 MB): if you can run commands, create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}. On a platform that cannot run commands, the platform may put the attached file in as file {name, mime_type, data} (data: the file in base64); never write data yourself. Pictures (up to 10 MB) are sent as images that show in the chat.',
+    description: 'Sends a Lark message, and optionally a file, as the user (colleagues see it from them), only if the user turned this on (Me page, Lark data card). Every message ends with a line saying it was sent by the user\'s AI twin. Call with to, text and/or file. If your app can show the user a question, the hub asks them there and sends once they accept (the result says what happened). Otherwise you get a preview and a send_code: show the user exactly who gets what; only after they agree, call again with only send_code (copied from the preview result, valid 10 minutes) and that exact message is sent. Where the hub sends the user the preview as a card in Lark, they may send it there instead; then calling with the send_code says so, and nothing is sent twice. Calling with to/text again never sends; it only repeats the preview. Never send anything the user has not seen. If the user turned off confirming on their Me page, the first call sends at once (the result says so): only call it when they asked for that message, and tell them afterwards what went to whom. Up to 10 colleagues. A file (at most 30 MB): if you can run commands, create_upload with purpose "file", upload it with the command it gives, then pass file {upload_id, name}. On a platform that cannot run commands, the platform may put the attached file in as file {name, mime_type, data} (data: the file in base64); never write data yourself. Pictures (up to 10 MB) are sent as images that show in the chat. For formatting (bold, lists, links, code), write the text in Markdown and pass format "markdown"; Lark shows it as rich text.',
     inputSchema: {
       to: z.array(z.string()).max(10).optional().describe('colleagues: email, name or open_id'),
       text: z.string().optional(),
+      format: z.enum(['text', 'markdown']).optional().describe('markdown: the text is Markdown, sent as Lark rich text. Lark shows **bold**, *italic*, ~~strikethrough~~, [links](https://…), lists (- or 1.), > quotes, ``` code blocks and --- lines; no headings (use a bold line). Default text: sent as written'),
       file: z.union([
         z.object({ upload_id: z.string(), name: z.string().describe('the file name the recipients see, e.g. 报价单.pdf') }),
         z.object({ name: z.string(), mime_type: z.string().optional(), data: z.string().describe('the file in base64, put in by the platform') }),
       ]).optional(),
       send_code: z.string().optional().describe('the send_code from the preview result (8 characters), once the user agreed: sends that message'),
     },
-  }, guard((a: { to?: string[]; text?: string; file?: FileRef | InlineFile; send_code?: string }, ask) => {
+  }, guard((a: { to?: string[]; text?: string; format?: 'text' | 'markdown'; file?: FileRef | InlineFile; send_code?: string }, ask) => {
     if (a.send_code) return sendPrepared(user, a.send_code.trim());
     const file = !a.file ? null : 'data' in a.file ? inlineFile(user, a.file) : a.file;
-    return sendOrPrepare(user, resolveColleagues(a.to ?? []), a.text ?? '', file, locale, ask);
+    return sendOrPrepare(user, { to: resolveColleagues(a.to ?? []), text: a.text ?? '', file, markdown: a.format === 'markdown' }, locale, ask);
   }));
 
   server.registerTool('read_lark_messages', {

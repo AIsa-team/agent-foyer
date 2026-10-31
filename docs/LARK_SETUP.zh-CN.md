@@ -64,6 +64,8 @@
 | `calendar:calendar:readonly`（获取日历、日程及忙闲信息）**可选** | 首页「今日日程」模块和 Agent 的 `list_calendar_events`：只读这个人自己的日历。第一次用到时才会请求 |
 | `search:docs:read`（搜索云文档）**可选** | Agent 的 `search_lark_docs`：按关键词搜这个人能打开的文档和知识库页面。第一次用到时才会请求 |
 | `wiki:wiki`（编辑知识库）**可选** | Agent 把新文档直接建在某个知识库页面下面。只在第一次这样做时请求 |
+| `drive:file:readonly`（查看和下载云空间中的文件）**可选** | Agent 读取本人能打开的云空间或知识库里的文件（比如上传到知识库的 HTML 页面）。只在第一次这样做时请求 |
+| `drive:file`、`drive:drive.metadata:readonly`（上传、下载文件；查看文件元数据）**可选** | Agent 以本人身份上传文件（`upload_lark_file`），放进本人空间、某个文件夹或知识库页面下（还要 `wiki:wiki`）。只能上传和下载，不能管理或删除文件；元数据权限用来找到本人的云空间根目录。只在第一次这样做时请求 |
 
 指标提醒要由中台机器人在 Lark 里发消息：
 

@@ -11,7 +11,8 @@ import { get, type User } from '../db.ts';
 import { UserError } from '../i18n/index.ts';
 import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
 import { asUser } from './userToken.ts';
-import { markdownToBlocks, type NewBlock } from './markdown.ts';
+import { inlineElements, markdownToBlocks, type NewBlock } from './markdown.ts';
+import { readFile } from './files.ts';
 
 /** Editing and creating documents; asked for when someone first has an agent write one. */
 export const DOCS_SCOPES = ['docx:document', 'docx:document:create'];
@@ -37,14 +38,14 @@ export async function docCall<T>(user: User, path: string, init?: RequestInit, w
 }
 
 /** A link people can open: the generic Lark address forwards to the company's own one. */
-export const larkLink = (kind: 'docx' | 'wiki', token: string) => `https://www.${config.lark.domain === 'feishu.cn' ? 'feishu.cn' : 'larksuite.com'}/${kind}/${token}`;
+export const larkLink = (kind: 'docx' | 'wiki' | 'file', token: string) => `https://www.${config.lark.domain === 'feishu.cn' ? 'feishu.cn' : 'larksuite.com'}/${kind}/${token}`;
 
-type Ref = { kind: 'docx' | 'wiki' | 'folder'; token: string };
-/** Document, wiki page or Drive folder from a link (or a bare token, taken as a document). */
+type Ref = { kind: 'docx' | 'wiki' | 'folder' | 'file'; token: string };
+/** Document, wiki page, Drive folder or Drive file from a link (or a bare token, taken as a document). */
 export function parseDocRef(raw: string): Ref {
   const s = raw.trim();
-  const m = s.match(/\/(docx|wiki|drive\/folder)\/([A-Za-z0-9]+)/);
-  if (m) return { kind: m[1] === 'drive/folder' ? 'folder' : (m[1] as 'docx' | 'wiki'), token: m[2] };
+  const m = s.match(/\/(docx|wiki|drive\/folder|file)\/([A-Za-z0-9]+)/);
+  if (m) return { kind: m[1] === 'drive/folder' ? 'folder' : (m[1] as 'docx' | 'wiki' | 'file'), token: m[2] };
   if (/^[A-Za-z0-9]{20,}$/.test(s)) return { kind: 'docx', token: s };
   throw new UserError('err.docs.badLink', { url: raw });
 }
@@ -54,7 +55,7 @@ const wikiNode = async (user: User, token: string) =>
   (await docCall<{ data: { node: WikiNode } }>(user, `/wiki/v2/spaces/get_node?token=${encodeURIComponent(token)}`)).data.node;
 
 /** A link on the company's own Lark address when the person gave one, else the generic address. */
-function linkLike(given: string, kind: 'docx' | 'wiki', token: string) {
+function linkLike(given: string, kind: 'docx' | 'wiki' | 'file', token: string) {
   try {
     const u = new URL(given.trim());
     if (/^https?:$/.test(u.protocol) && /(larksuite\.com|feishu\.cn|larkoffice\.com)$/.test(u.hostname)) return `https://${u.host}/${kind}/${token}`;
@@ -141,12 +142,12 @@ export async function listWiki(user: User, url: string, title?: string) {
 
 // ---------------------------------------------------------------- reading
 /** The document behind a link: a document, or the document of a wiki page. */
-async function openDoc(user: User, url: string) {
+async function openDoc(user: User, url: string, known?: WikiNode) {
   const ref = parseDocRef(url);
-  if (ref.kind === 'folder') throw new UserError('err.docs.notDoc', { type: 'folder' });
+  if (ref.kind === 'folder' || ref.kind === 'file') throw new UserError('err.docs.notDoc', { type: ref.kind });
   let doc = ref.token, title = '', link = larkLink(ref.kind, ref.token);
   if (ref.kind === 'wiki') {
-    const node = await wikiNode(user, ref.token);
+    const node = known ?? await wikiNode(user, ref.token);
     if (node.obj_type !== 'docx') throw new UserError('err.docs.notDoc', { type: node.obj_type });
     doc = node.obj_token;
     title = node.title;
@@ -160,7 +161,12 @@ async function openDoc(user: User, url: string) {
  * people mentioned) under the heading it sits under, so particular cells can be changed with editDoc.
  */
 export async function readDoc(user: User, url: string, opts: { tables?: boolean } = {}) {
-  const { doc, title, link } = await openDoc(user, url);
+  // a file (an uploaded HTML page, a PDF…) is read as a file
+  const ref = parseDocRef(url);
+  if (ref.kind === 'file') return readFile(user, ref.token, '', linkLike(url, 'file', ref.token));
+  const node = ref.kind === 'wiki' ? await wikiNode(user, ref.token) : undefined;
+  if (node?.obj_type === 'file') return readFile(user, node.obj_token, node.title, linkLike(url, 'wiki', ref.token));
+  const { doc, title, link } = await openDoc(user, url, node);
   // built from the blocks, which reading a document already allows (Lark's own Markdown export needs another scope)
   const blocks = await allBlocks(user, doc);
   const markdown = toMarkdown(blocks, doc);
@@ -171,11 +177,14 @@ export async function readDoc(user: User, url: string, opts: { tables?: boolean 
 }
 
 // ---------------------------------------------------------------- changing
-/** Replaces a table cell's content with text, one paragraph per line: the new text goes in first (a cell is never empty). */
+/**
+ * Replaces a table cell's content with text, one paragraph per line, with inline Markdown (bold, links…) as Lark styles:
+ * the new text goes in first (a cell is never empty).
+ */
 async function replaceCell(user: User, doc: string, cell: DocBlock, text: string) {
   const old = cell.children?.length ?? 0;
   const lines = text.split('\n').map((l) => l.trimEnd());
-  const children = (lines.length ? lines : ['']).map((content) => ({ block_type: 2, text: { elements: [{ text_run: { content } }] } }));
+  const children = (lines.length ? lines : ['']).map((line) => ({ block_type: 2, text: { elements: inlineElements(line) } }));
   await docCall(user, `/docx/v1/documents/${doc}/blocks/${cell.block_id}/children?document_revision_id=-1`, { method: 'POST', body: JSON.stringify({ index: 0, children }) });
   if (old) {
     await docCall(user, `/docx/v1/documents/${doc}/blocks/${cell.block_id}/children/batch_delete?document_revision_id=-1`, {
@@ -207,7 +216,8 @@ export async function editDoc(user: User, url: string, input: { edits?: { id: st
     if (b.block_type === 32) await replaceCell(user, doc, b, text);
     else {
       await docCall(user, `/docx/v1/documents/${doc}/blocks/${b.block_id}?document_revision_id=-1`, {
-        method: 'PATCH', body: JSON.stringify({ update_text_elements: { elements: [{ text_run: { content: text } }] } }),
+        // a code block keeps the text as written; anything else takes inline Markdown as Lark styles
+        method: 'PATCH', body: JSON.stringify({ update_text_elements: { elements: b.block_type === 14 ? [{ text_run: { content: text } }] : inlineElements(text) } }),
       });
     }
   }
@@ -236,7 +246,7 @@ export async function createDoc(user: User, input: { title: string; markdown: st
   const title = input.title.trim().slice(0, 800);
   if (!title) throw new UserError('err.docs.noTitle');
   const parent = input.parent?.trim() ? parseDocRef(input.parent) : null;
-  if (parent?.kind === 'docx') throw new UserError('err.docs.badParent');
+  if (parent?.kind === 'docx' || parent?.kind === 'file') throw new UserError('err.docs.badParent');
   // converted and checked before anything is created, so a problem never leaves an empty document behind
   const { top, blocks: all, images } = markdownToBlocks(input.markdown.trim());
   const byId = new Map(all.map((b) => [b.block_id, b]));
@@ -320,7 +330,9 @@ function inline(b: DocBlock, raw = false): string {
     let t = e.text_run?.content ?? '';
     if (raw || !t.trim()) return t;
     const st = e.text_run?.text_element_style ?? {};
+    // characters that would read as Markdown are escaped, so text read here and written back stays as it was
     if (st.inline_code) t = `\`${t}\``;
+    else t = t.replace(/[\\`*~]/g, '\\$&');
     if (st.bold) t = `**${t}**`;
     if (st.italic) t = `*${t}*`;
     if (st.strikethrough) t = `~~${t}~~`;
@@ -329,7 +341,7 @@ function inline(b: DocBlock, raw = false): string {
   }).join('');
 }
 
-/** Every table in document order, under the last heading before it, as rows of cells: id, text, people mentioned. */
+/** Every table in document order, under the last heading before it, as rows of cells: id, text (inline Markdown), people mentioned. */
 export function tablesOf(blocks: Map<string, DocBlock>, root: string) {
   const kids = (id: string) => (blocks.get(id)?.children ?? []).map((k) => blocks.get(k)).filter((x): x is DocBlock => !!x);
   const cellOf = (id: string) => {
@@ -340,7 +352,7 @@ export function tablesOf(blocks: Map<string, DocBlock>, root: string) {
         if (e.mention_user?.user_id) people.set(e.mention_user.user_id, personName(e.mention_user.user_id));
       }
     }
-    return { id, text: inside.map((b) => inline(b, true)).join('\n').trim(), ...(people.size ? { people: [...people].map(([pid, name]) => ({ id: pid, name })) } : {}) };
+    return { id, text: inside.map((b) => inline(b, b.block_type === 14)).join('\n').trim(), ...(people.size ? { people: [...people].map(([pid, name]) => ({ id: pid, name })) } : {}) };
   };
   const out: { id: string; heading: string; rows: ReturnType<typeof cellOf>[][] }[] = [];
   let heading = '';
