@@ -235,8 +235,8 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
  */
 export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKit) {
   server.registerTool('twin_guide', {
-    description: 'How to run the user\'s AI twin (cold start, patrol, reflection, morning prep, guardrails). Read it first whenever the user asks you to act as their AI twin / 分身, or to keep an eye on their Lark messages for them.',
-  }, guard(() => ({ guide: TWIN_GUIDE, status: { on: twin.twinOn(user.id) } })));
+    description: 'How to run the user\'s AI twin (cold start, patrol, reflection, morning prep, guardrails), with its progress so far and the step to take next. Call it at the start of every session in which you act as the user\'s AI twin / 分身 or keep an eye on their Lark messages: the twin\'s state lives in the hub and the user\'s Lark, not in your conversation.',
+  }, guard(async () => ({ guide: TWIN_GUIDE, progress: await twin.twinProgress(user) })));
 
   server.registerTool('setup_twin', {
     description: 'Creates the AI twin\'s memory in the user\'s own Lark, once: a Base (memories, shadow predictions, corrections) and two documents ("who I am", "how I reply"). Later calls return the links. Needs the user to have turned on the AI twin on their Me page.',

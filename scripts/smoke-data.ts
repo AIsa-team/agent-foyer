@@ -2831,6 +2831,8 @@ try {
     const base = [...lark.bases.entries()].at(-1)!;
     check(String(setup.memory).includes(base[0]) && base[1].tables.length === 3 && lark.made.size === docsBefore + 2 && String(setup.style).includes('/docx/'),
       'setup_twin makes a Base with three tables and two documents in the person\'s own space');
+    const fresh = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; missing: string[] }; next: string };
+    check(fresh.coldStart.done === false && fresh.coldStart.missing.length === 4 && fresh.next.includes('cold start'), 'a new session learns from twin_guide that the cold start is still to do, and which steps');
     check((await tool(alex.token, 'setup_twin', {})).memory === setup.memory && lark.made.size === docsBefore + 2 && lark.bases.size === [...lark.bases.keys()].length, 'and a second call only returns the links');
 
     const first = await tool(alex.token, 'check_new_messages', {}) as { conversations: { chat_id: string; kind: string; with?: string; messages: { message_id: string; text: string; mentions_me?: boolean }[]; you_replied: boolean }[] };
@@ -2925,6 +2927,9 @@ try {
     const bobHist = await tool(alex.token, 'my_message_history', { chat_id: 'oc_p2p_bob' });
     check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation oldest first');
 
+    const later = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; documents: Record<string, string> }; toReview: number; lastCheck: string; next: string };
+    check(later.coldStart.done === true && later.coldStart.documents.style === 'approved' && later.toReview === 2 && !!later.lastCheck && later.next.includes('Patrol'),
+      'once memories, both documents and a replay exist, a new session goes straight to patrolling instead of starting over');
     const status = (await api(alex.jar, 'GET', '/lark/twin')).body as { week: { predictions: number; accuracy: number } };
     check(status.week.predictions === 3 && status.week.accuracy === 33, 'the Me page shows the week in numbers');
     await api(alex.jar, 'POST', '/lark/reading', { on: false });

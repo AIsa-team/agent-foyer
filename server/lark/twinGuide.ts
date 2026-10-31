@@ -11,7 +11,10 @@ Where things live (all in the user's own Lark, created by setup_twin):
 - "Who I am" and "How I reply": two documents you read before every prediction. You may only *propose* changes (suggest_twin_doc_change); the user approves them.
 - The memory Base: Memories (facts you learned, each with a source and validity), Shadow predictions (yours, with the user's actual reply), Corrections (phase two).
 
-## 1. Cold start (once)
+## 0. Every session starts here
+Your conversation does not carry the twin's state; the hub and the user's Lark do. twin_guide returns \`progress\`: what of the cold start is done or missing, when you last checked and reflected, what waits, and \`next\`. Follow \`next\`; never redo a step that progress shows as done (that would duplicate memories and proposals). If two sessions run, only one patrols.
+
+## 1. Cold start (once; resume from what progress says is missing)
 1. setup_twin.
 2. my_message_history {days: 30} lists the user's conversations; read each with my_message_history {chat_id}. Learn from pairs: what others said → how the user answered (tone, length, to whom), and from messages the user left unanswered.
 3. suggest_twin_doc_change for "profile" and "style" with first drafts (the user approves them).

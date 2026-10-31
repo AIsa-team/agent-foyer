@@ -650,6 +650,14 @@ const MIGRATIONS: string[] = [
   CREATE TABLE twin_proposals (code TEXT PRIMARY KEY, user_id TEXT NOT NULL, doc TEXT NOT NULL, payload TEXT NOT NULL, card TEXT, state TEXT NOT NULL DEFAULT 'waiting', at INTEGER NOT NULL, expires INTEGER NOT NULL);
   CREATE TABLE twin_log (user_id TEXT NOT NULL, kind TEXT NOT NULL, at INTEGER NOT NULL);
   `,
+  // how far the twin got, so an agent in a new session picks up where the last one stopped: when each document was
+  // first approved, when it last reflected, and which predictions it already learned from
+  `
+  ALTER TABLE twin ADD COLUMN profile_at INTEGER;
+  ALTER TABLE twin ADD COLUMN style_at INTEGER;
+  ALTER TABLE twin ADD COLUMN reflected_at INTEGER;
+  ALTER TABLE twin_predictions ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0;
+  `,
 ];
 
 {

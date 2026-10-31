@@ -119,6 +119,7 @@ function fromFields(t: TableMap, fields: Record<string, unknown>) {
 interface TwinRow {
   user_id: string; enabled: number; base: string | null; base_url: string | null; tables: string | null; profile_doc: string | null; style_doc: string | null;
   cursor: number | null; last_check: number | null; group_mode: 'mentions' | 'all'; watch: string; weekly_at: number | null;
+  profile_at: number | null; style_at: number | null; reflected_at: number | null;
 }
 const twinOf = (userId: string): TwinRow | undefined => get<TwinRow>('SELECT * FROM twin WHERE user_id = ?', userId);
 const ensureRow = (userId: string) => run('INSERT INTO twin (user_id) VALUES (?) ON CONFLICT(user_id) DO NOTHING', userId);
@@ -189,6 +190,40 @@ async function call<T>(user: User, path: string, init?: RequestInit): Promise<T>
     if (e instanceof LarkError && DENIED_CODES.has(e.code)) throw new UserError('err.reading.denied');
     throw e;
   }
+}
+
+// ---------------------------------------------------------------- how far the twin got
+/**
+ * Where the twin stands, for an agent starting a new session: what of the cold start is done (and what is missing),
+ * when it last checked and reflected, what waits, and the step to take next. Everything comes from the hub and the
+ * person's Base, never from the agent's own conversation.
+ */
+export async function twinProgress(user: User) {
+  const t = twinOf(user.id);
+  if (!twinOn(user.id)) return { on: false, next: `The twin is off. Ask the user to turn on "AI twin" on their Me page: ${config.hubUrl}/me` };
+  if (!granted(user.id)) return { on: true, allowed: false, next: `Ask the user to allow it once in Lark: ${twinConnectUrl()}` };
+  if (!t?.base || !t.tables) return { on: true, setUp: false, next: 'setup_twin, then the cold start.' };
+  const memories = (await memoryRows(user, t as TwinRow & { base: string; tables: string }).catch(() => [])).length;
+  const count = (where: string) => get<{ n: number }>(`SELECT COUNT(*) AS n FROM twin_predictions WHERE user_id = ? AND ${where}`, user.id)!.n;
+  const waiting = all<{ doc: string }>("SELECT doc FROM twin_proposals WHERE user_id = ? AND state = 'waiting' AND expires > ?", user.id, now()).map((p) => p.doc);
+  const docs = { profile: t.profile_at ? 'approved' : waiting.includes('profile') ? 'waiting for the user' : 'template', style: t.style_at ? 'approved' : waiting.includes('style') ? 'waiting for the user' : 'template' };
+  const replayed = count("source = 'replay'");
+  const missing = [
+    ...(memories ? [] : ['first memories (read past conversations with my_message_history, then remember)']),
+    ...(['profile', 'style'] as const).filter((d) => docs[d] === 'template').map((d) => `first draft of "${d}" (suggest_twin_doc_change)`),
+    ...(replayed ? [] : ['replay of the last 30 days (record_prediction with replay)']),
+  ];
+  const toReview = count("outcome IS NOT NULL AND reviewed = 0");
+  const reflectionDue = toReview > 0 && (!t.reflected_at || now() - t.reflected_at > 20 * 3600_000);
+  return {
+    on: true, setUp: true,
+    coldStart: { done: !missing.length, missing, memories, replayed, documents: docs },
+    lastCheck: t.last_check ? localTime(t.last_check) : null, lastReflection: t.reflected_at ? localTime(t.reflected_at) : null,
+    live: count("source = 'live'"), toReview, waitingForUser: waiting.length,
+    next: missing.length ? `Continue the cold start; still missing: ${missing.join('; ')}. Steps already done are not repeated.`
+      : reflectionDue ? `Cold start done. Reflection due: list_predictions (${toReview} to review), then patrol.`
+      : 'Cold start done. Patrol: check_new_messages every 1–2 minutes.',
+  };
 }
 
 // ---------------------------------------------------------------- setting up the twin's memory in the person's Lark
@@ -535,8 +570,9 @@ export async function reviewPrediction(user: User, a: { id: string; cause?: stri
   await updateRecord(user, t.base, tbl.id, a.id, toFields(tbl, {
     cause: a.cause, closeness, distilled: a.distilled, ...(a.replied_elsewhere ? { actual: 'elsewhere' } : {}),
   }));
-  run('UPDATE twin_predictions SET cause = COALESCE(?, cause), closeness = COALESCE(?, closeness), outcome = CASE WHEN ? THEN \'elsewhere\' ELSE outcome END WHERE record_id = ?',
-    a.cause ?? null, closeness ?? null, a.replied_elsewhere ? 1 : 0, a.id);
+  run('UPDATE twin_predictions SET cause = COALESCE(?, cause), closeness = COALESCE(?, closeness), outcome = CASE WHEN ? THEN \'elsewhere\' ELSE outcome END, reviewed = MAX(reviewed, ?) WHERE record_id = ?',
+    a.cause ?? null, closeness ?? null, a.replied_elsewhere ? 1 : 0, a.distilled ? 1 : 0, a.id);
+  if (a.distilled) run('UPDATE twin SET reflected_at = ? WHERE user_id = ?', now(), user.id);
   return { id: a.id, reviewed: true };
 }
 
@@ -640,7 +676,10 @@ export async function answerProposal(user: User, code: string, apply: boolean) {
   if (!p || p.state !== 'waiting' || p.expires < now()) throw new UserError('err.twin.proposalGone');
   const t = twinOf(user.id)!;
   const { markdown, reason } = JSON.parse(decrypt(p.payload)) as { markdown: string; reason: string };
-  if (apply) await replaceDocBody(user, (p.doc === 'profile' ? t.profile_doc : t.style_doc)!, markdown);
+  if (apply) {
+    await replaceDocBody(user, (p.doc === 'profile' ? t.profile_doc : t.style_doc)!, markdown);
+    run(`UPDATE twin SET ${p.doc === 'profile' ? 'profile_at' : 'style_at'} = COALESCE(${p.doc === 'profile' ? 'profile_at' : 'style_at'}, ?) WHERE user_id = ?`, now(), user.id);
+  }
   run("UPDATE twin_proposals SET state = ?, payload = '' WHERE code = ?", apply ? 'applied' : 'declined', code);
   const end = tr(localeOf(user.id), apply ? 'twin.card.applied' : 'twin.card.declined');
   if (p.card) {
