@@ -622,6 +622,11 @@ const MIGRATIONS: string[] = [
   `ALTER TABLE users ADD COLUMN send_no_confirm INTEGER NOT NULL DEFAULT 0;`,
   // previews waiting for the person's yes (lark/messages.ts), encrypted, gone once sent or after 10 minutes
   `CREATE TABLE lark_pending (code TEXT PRIMARY KEY, user_id TEXT NOT NULL, payload TEXT NOT NULL, expires INTEGER NOT NULL);`,
+  // the confirmation card the hub's bot sent the person for a preview, and whether it was sent or declined (then emptied)
+  `
+  ALTER TABLE lark_pending ADD COLUMN card TEXT;
+  ALTER TABLE lark_pending ADD COLUMN state TEXT NOT NULL DEFAULT 'waiting';
+  `,
 ];
 
 {

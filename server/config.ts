@@ -68,6 +68,11 @@ export const config = {
     /** Overrides for tests against a fake Lark; normally derived from the domain */
     apiBase: env('LARK_API_BASE', `https://open.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
     accountsBase: env('LARK_ACCOUNTS_BASE', `https://accounts.${env('LARK_DOMAIN', 'larksuite.com')}/open-apis`),
+    /**
+     * The long connection that brings taps on the bot's cards to the hub (no public callback address needed). Off
+     * against a fake Lark, which has none.
+     */
+    longConnection: env('LARK_LONG_CONNECTION', process.env.LARK_API_BASE ? 'off' : 'on') === 'on',
   },
   /**
    * Google, for apps that save email drafts in Gmail (Google Workspace). Each person connects their own Google account

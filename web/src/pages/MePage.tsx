@@ -90,13 +90,15 @@ function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading
           : <>{t(k('allowBody'))} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>}
       </p>
       {direct && (
-        <div className="conn-card__sub">
-          <label className="aisa-switch">
+        <label className="conn-card__option">
+          <span className="grow">
+            <span className="conn-card__option-title">{t('me.messages.noConfirm')}</span>
+            {!data.noConfirm && <span className="small muted">{t('me.messages.noConfirmBody')}</span>}
+          </span>
+          <span className="aisa-switch">
             <input type="checkbox" checked={!!data.noConfirm} disabled={busy} onChange={(e) => setNoConfirm(e.target.checked)} />
-            <span>{t('me.messages.noConfirm')}</span>
-          </label>
-          {!data.noConfirm && <p className="small muted" style={{ margin: 0 }}>{t('me.messages.noConfirmBody')}</p>}
-        </div>
+          </span>
+        </label>
       )}
     </div>
   );

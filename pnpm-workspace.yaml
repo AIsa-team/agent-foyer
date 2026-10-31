@@ -1,0 +1,3 @@
+allowBuilds:
+  # its install script only checks versions of its own CLI tools, which the hub does not use
+  protobufjs: false

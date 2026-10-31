@@ -95,6 +95,8 @@ const lark = {
   refresh: new Set<string>(),
   refreshes: 0,
   messages: [] as { type: string; id: string; text: string; as?: 'bot' | 'user' }[],
+  /** the bot's interactive cards, and what each was updated to */
+  cards: [] as { id: string; to: string; card: string; updates: string[] }[],
   sendTokens: new Set<string>(),
   fileTokens: new Set<string>(),
   readTokens: new Set<string>(),
@@ -548,6 +550,19 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const key = `file_v3_${lark.uploads.length + 1}`;
     lark.uploads.push({ name: field('file_name'), key, as: 'user', bytes: field('file') });
     return send({ code: 0, data: { file_key: key } });
+  }
+  if (p === '/im/v1/messages' && body.msg_type === 'interactive') {
+    if (bearer !== 't-app') return send({ code: 99991663, msg: 'cards come from the bot' });
+    const id = `om_card_${lark.cards.length + 1}`;
+    lark.cards.push({ id, to: body.receive_id, card: body.content, updates: [] });
+    return send({ code: 0, data: { message_id: id } });
+  }
+  const cardPatch = p.match(/^\/im\/v1\/messages\/(om_card_\d+)$/);
+  if (cardPatch && req.method === 'PATCH') {
+    const c = lark.cards.find((x) => x.id === cardPatch[1]);
+    if (bearer !== 't-app' || !c) return send({ code: 230001, msg: 'no such card' });
+    c.updates.push(body.content);
+    return send({ code: 0, data: {} });
   }
   if (p === '/im/v1/messages') {
     // the bot, or a person who allowed the hub to send as them
@@ -2422,8 +2437,11 @@ try {
     check(['im:message', 'im:message.send_as_user'].every((s) => lark.scopesAsked.split(' ').includes(s)), 'allowing it asks Lark to send as them');
     const preview = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
     check(preview.preview?.to?.[0] === '周明' && preview.preview.text === "会议改到三点\n—— Sent by Alex's AI twin" && !!preview.send_code && lark.messages.length === before, 'the first call only shows who gets what, signed as sent by their AI twin');
+    const firstCard = lark.cards.at(-1)!;
+    check(lark.cards.length === 1 && firstCard.to === 'ou_dev_alex' && firstCard.card.includes('会议改到三点') && firstCard.card.includes(preview.send_code) && firstCard.card.includes('"Send"')
+      && String(preview.next).includes('card'), 'the hub\'s bot also shows Alex the preview in Lark, with Send and Don\'t send');
     const again = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '会议改到三点' });
-    check(again.send_code === preview.send_code && lark.messages.length === before, 'preparing the same message again keeps its send_code and still sends nothing');
+    check(again.send_code === preview.send_code && lark.messages.length === before && lark.cards.length === 1, 'preparing the same message again keeps its send_code and card, and still sends nothing');
     const waiting = JSON.stringify(fsDb.prepare('SELECT * FROM lark_pending').all());
     check(waiting.includes(preview.send_code) && !waiting.includes('三点'), 'a preview waits in the database (so a restart keeps it), encrypted');
     check(String((await tool(alex.token, 'send_lark_message', { send_code: '确认' })).error).includes('send_code') && lark.messages.length === before, 'a send_code that is not one says how to send');
@@ -2433,10 +2451,33 @@ try {
     const m = lark.messages.at(-1)!;
     check(sent.sent?.[0] === '周明' && m.id === 'ou_dev_bob' && m.text.startsWith('会议改到三点\n') && m.as === 'user', 'the code sends exactly that, as the person');
     check(m.text === '会议改到三点\n—— 由 Alex 的 AI 分身发送', 'the signature is in the recipient\'s language');
-    check(!JSON.stringify(fsDb.prepare('SELECT code FROM lark_pending').all()).includes(preview.send_code), 'and is gone once sent');
+    check((fsDb.prepare('SELECT state, payload FROM lark_pending WHERE code = ?').get(preview.send_code) as { state: string; payload: string }).payload === '', 'and is emptied once sent');
+    await new Promise((ok) => setTimeout(ok, 200));
+    check(firstCard.updates.length === 1 && firstCard.updates[0].includes('✓') && !firstCard.updates[0].includes('"button"'), 'and the card in Lark says it was sent, without the buttons');
     fsDb.prepare('UPDATE users SET locale = ? WHERE id = ?').run(bobLocale, 'ou_dev_bob');
-    check(!!(await tool(alex.token, 'send_lark_message', { send_code: preview.send_code })).error && lark.messages.length === before + 1, 'a code sends once');
-    check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 1 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged, never the text');
+    check(String((await tool(alex.token, 'send_lark_message', { send_code: preview.send_code })).error).includes('already sent') && lark.messages.length === before + 1, 'a code sends once');
+    // the person answers on the card in Lark instead (a tap comes through the long connection; here, called directly)
+    const { execFile } = await import('node:child_process');
+    const tap = (operator: string, code: string, choice: 'send' | 'decline') => new Promise<{ toast?: { type: string; content: string }; card?: { data: unknown } }>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
+      const { onCardTap } = await import(${JSON.stringify(path.resolve('server/lark/messages.ts'))});
+      console.log(JSON.stringify(await onCardTap(${JSON.stringify({ operator: { open_id: operator }, action: { value: { hub: 'send_message', code, choice } } })})));
+    `], { env: { ...process.env, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis` } },
+      (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(JSON.parse(out.trim().split('\n').at(-1)!)))));
+    const byCard = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '五点见' });
+    const sentBefore = lark.messages.length;
+    const notHis = await tap('ou_dev_bob', byCard.send_code, 'send');
+    check(notHis.toast?.type === 'error' && !notHis.card && lark.messages.length === sentBefore, 'only the sender can answer the card');
+    const tapped = await tap('ou_dev_alex', byCard.send_code, 'send');
+    check(tapped.toast?.type === 'success' && JSON.stringify(tapped.card).includes('✓') && lark.messages.length === sentBefore + 1 && lark.messages.at(-1)!.text.startsWith('五点见\n') && lark.messages.at(-1)!.as === 'user',
+      'tapping Send sends it as the person and turns the card into a sent note');
+    check(String((await tool(alex.token, 'send_lark_message', { send_code: byCard.send_code })).error).includes('already sent') && lark.messages.length === sentBefore + 1, 'the agent\'s yes afterwards is told it went out already, and nothing goes twice');
+    check((await tap('ou_dev_alex', byCard.send_code, 'send')).toast?.type === 'info' && lark.messages.length === sentBefore + 1, 'and a second tap does nothing');
+    const unwanted = await tool(alex.token, 'send_lark_message', { to: ['ou_dev_bob'], text: '算了' });
+    const declined = await tap('ou_dev_alex', unwanted.send_code, 'decline');
+    check(JSON.stringify(declined.card).includes('Cancelled') && String((await tool(alex.token, 'send_lark_message', { send_code: unwanted.send_code })).error).includes("Don't send") && lark.messages.length === sentBefore + 1,
+      'tapping Don\'t send cancels it, and the agent is told so');
+    check((await tap('ou_dev_alex', 'nope1234', 'send')).toast?.type === 'error', 'an unknown or expired preview only says so');
+    check((await api(alex.jar, 'GET', '/lark/messages')).body.sentThisWeek === 2 && !JSON.stringify(fsDb.prepare('SELECT * FROM lark_sent').all()).includes('三点'), 'the hub counts who was messaged (by the agent\'s yes or the card), never the text');
     // a file, uploaded as it is, then sent before the text
     const up = await tool(alex.token, 'create_upload', { purpose: 'file' });
     check((await fetch(up.upload_url, { method: 'PUT', body: 'PDF-BYTES' })).ok && String(up.command).includes('--data-binary @<FILE>'), 'a file is uploaded as it is');

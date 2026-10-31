@@ -73,6 +73,16 @@
 
 提醒消息有这些限制，避免打扰：同一条规则 6 小时内最多一条（数值来回波动会合并），晚上 10 点到早上 9 点不发、攒到早上合成一条，同一个人多条提醒合成一条，谁都能在首页点「不再提醒我」。**默认只发给中台管理员**，其他收件人只在首页看到；管理员可以在「管理」页改成发给所有收件人。时间窗口可用环境变量 `ALERT_COOLDOWN_MINUTES`、`ALERT_QUIET_HOURS`（如 `22-9`）调整。
 
+让 Agent 以本人身份发、读 Lark 消息（可选。每个人在「我的」页面的 Lark 卡片里自己打开，打开时 Lark 才请求这些权限）：
+
+| 权限 | 用途 |
+|---|---|
+| `im:message`、`im:message.send_as_user` | `send_lark_message`：以本人身份发消息，每条先预览 |
+| `im:resource` | 随消息发文件 |
+| `im:message:readonly`、`im:message.p2p_msg:get_as_user`、`im:message.group_msg:get_as_user`、`im:chat:read` | `read_lark_messages`、`find_lark_chat`：只读本人指定的那一个会话 |
+
+机器人还会把每条预览以卡片发给本人，带「发送」「不发」按钮。按钮点击通过中台主动连向 Lark 的长连接送回来，不需要公网回调地址：在 **Events & Callbacks（事件与回调）→ 回调配置** 里选「使用长连接接收回调」（保存时中台要在运行，Lark 才能看到连接在线），添加「卡片回传交互」（`card.action.trigger`），再发布新版本。不配也能用，卡片只展示预览，确认在 Agent 里完成。
+
 回调地址不用新加：连接 Lark 数据和登录用的是同一个 `https://hub.example.com/auth/callback`。
 
 ## 5. 发布

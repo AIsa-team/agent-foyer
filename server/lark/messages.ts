@@ -1,8 +1,9 @@
 /**
  * Lark messages and files sent as the person by their agent ("send Alex the quote and tell him it moved to three").
  * Off until the person turns it on on their Me page and allows it in Lark. Every message is previewed first and sent
- * only with the code from that preview, so it goes out exactly as the person saw it, signed as sent by their AI twin;
- * someone who trusts their agents can turn the preview off, and then messages go out at once.
+ * only with the code from that preview, so it goes out exactly as the person saw it, signed as sent by their AI twin.
+ * The hub's bot also shows the person the preview in Lark with Send and Don't send, so their yes does not depend on the
+ * agent passing it on. Someone who trusts their agents can turn the preview off, and then messages go out at once.
  * The hub keeps who was messaged and when, never the text or the file, and never reads anyone's messages with their
  * access (asUser refuses).
  */
@@ -13,7 +14,9 @@ import { all, get, now, run, type User } from '../db.ts';
 import { decrypt, encrypt } from '../crypto.ts';
 import { tr, UserError } from '../i18n/index.ts';
 import { peekUpload, takeUpload } from '../uploads.ts';
-import { DENIED_CODES, LarkError, SCOPE_CODES } from './client.ts';
+import { getTenantToken } from './auth.ts';
+import { localTime } from './calendar.ts';
+import { DENIED_CODES, larkFetch, LarkError, SCOPE_CODES } from './client.ts';
 import { asUser, connection } from './userToken.ts';
 
 /** Lark asks for both to send as a person; the hub only ever sends with them. */
@@ -67,17 +70,19 @@ function ready(user: User) {
 
 export interface FileRef { upload_id: string; name: string }
 /**
- * A preview waiting for the person's yes. Kept in the database (so a restart does not lose it), encrypted, and deleted
- * once sent, when it expires, or when the person turns sending off.
+ * A preview waiting for the person's yes. Kept in the database (so a restart does not lose it), encrypted, emptied once
+ * sent or declined, and deleted when it expires or when the person turns sending off.
  */
 interface Pending { to: string[]; text: string; file: FileRef | null }
-const pendingOf = (userId: string) => {
+interface Waiting extends Pending { code: string; card: string | null }
+const pendingOf = (userId: string): Waiting[] => {
   run('DELETE FROM lark_pending WHERE expires < ?', now());
-  return all<{ code: string; payload: string }>('SELECT code, payload FROM lark_pending WHERE user_id = ?', userId)
-    .map((r) => ({ code: r.code, ...(JSON.parse(decrypt(r.payload)) as Pending) }));
+  return all<{ code: string; payload: string; card: string | null }>("SELECT code, payload, card FROM lark_pending WHERE user_id = ? AND state = 'waiting'", userId)
+    .map((r) => ({ code: r.code, card: r.card, ...(JSON.parse(decrypt(r.payload)) as Pending) }));
 };
 const nameOf = (id: string) => get<{ name: string }>('SELECT name FROM users WHERE id = ?', id)?.name ?? id;
 const localeOf = (id: string) => get<{ locale: string | null }>('SELECT locale FROM users WHERE id = ?', id)?.locale ?? config.defaultLocale;
+const names = (ids: string[], locale: string) => new Intl.ListFormat(locale, { type: 'conjunction' }).format(ids.map(nameOf));
 
 /** The last lines of every message, in the recipient's language: who sent it, through their AI twin. */
 const signed = (text: string, sender: User, locale: string) => [text, tr(locale, 'lark.msg.sentByTwin', { name: sender.name })].filter(Boolean).join('\n');
@@ -122,18 +127,48 @@ export function prepareMessage(user: User, to: string[], text: string, file: Fil
 /** The preview to show the person, or, if they turned confirming off, the message sent at once. */
 export async function sendOrPrepare(user: User, to: string[], text: string, file: FileRef | null, locale: string) {
   const prepared = prepareMessage(user, to, text, file, locale);
-  if (!withoutConfirm(user.id)) return prepared;
-  return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
+  if (withoutConfirm(user.id)) {
+    return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
+  }
+  if (!(await askInLark(user, prepared.send_code))) return prepared;
+  return {
+    ...prepared,
+    next: `NOT SENT YET. The hub also sent the user this preview in Lark, as a card with Send and Don't send. Show them who gets this and tell them they can tap Send there, or tell you to send it; then call send_lark_message with only {"send_code": "${prepared.send_code}"}. If that says it was already sent, they sent it from the card: do not send again. If they want changes, prepare a new one.`,
+  };
 }
 
-/** Sends the message a preview showed, as the person, to each recipient in turn. */
+/** Sends the message a preview showed, as the person, and updates its confirmation card in Lark. */
 export async function sendPrepared(user: User, code: string) {
+  const p = claim(user, code);
+  try {
+    const result = await deliver(user, p);
+    if (p.card) void updateCard(p.card, user, p, sentLine(result, localeOf(user.id)));
+    return result;
+  } catch (e) {
+    if (p.card) void updateCard(p.card, user, p, tr(localeOf(user.id), 'lark.card.failed', { reason: (e as Error).message }));
+    throw e;
+  }
+}
+
+/**
+ * Takes a waiting message for sending: from then on neither the agent nor the card can send it a second time. Done in
+ * one go, without waiting on anything, so a tap and the agent's call cannot both get it.
+ */
+function claim(user: User, code: string): Waiting {
   ready(user);
   const p = pendingOf(user.id).find((x) => x.code === code);
-  if (!p) throw new UserError('err.messages.expired');
+  if (!p) {
+    const done = get<{ state: string }>('SELECT state FROM lark_pending WHERE code = ? AND user_id = ?', code, user.id)?.state;
+    throw new UserError(done === 'sent' ? 'err.messages.alreadySent' : done === 'declined' ? 'err.messages.declined' : 'err.messages.expired');
+  }
   const recent = get<{ n: number }>('SELECT COUNT(*) AS n FROM lark_sent WHERE user_id = ? AND at > ?', user.id, now() - 3_600_000)!.n;
   if (recent + p.to.length > PER_HOUR) throw new UserError('err.messages.rateLimited', { n: PER_HOUR });
-  run('DELETE FROM lark_pending WHERE code = ?', code);
+  run("UPDATE lark_pending SET state = 'sent', payload = '' WHERE code = ?", code);
+  return p;
+}
+
+/** Sends a claimed message, as the person, to each recipient in turn. */
+async function deliver(user: User, p: Waiting) {
   // the file goes up to Lark once, as the person, and is then sent to each recipient
   let fileKey = '';
   if (p.file) {
@@ -167,4 +202,95 @@ export async function sendPrepared(user: User, code: string) {
     }
   }
   return { sent, ...(p.file ? { file: p.file.name } : {}), ...(failed.length ? { failed } : {}) };
+}
+
+// ---- the confirmation card: the preview from the hub's bot, with Send and Don't send ----
+type Result = Awaited<ReturnType<typeof deliver>>;
+const sentLine = (r: Result, locale: string) => [
+  r.sent.length ? tr(locale, 'lark.card.sent', { time: localTime(now()).slice(-5), names: new Intl.ListFormat(locale, { type: 'conjunction' }).format(r.sent) }) : '',
+  r.failed?.length ? tr(locale, 'lark.card.notSentTo', { names: r.failed.map((f) => `${f.to} (${f.reason})`).join(', ') }) : '',
+].filter(Boolean).join('\n');
+const size = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`);
+
+/** The card: who gets what, then the buttons, or, once it is settled, a line saying what happened. */
+function card(user: User, p: Waiting, end?: string) {
+  const locale = localeOf(user.id);
+  const plain = (content: string) => ({ tag: 'plain_text', content });
+  const button = (choice: 'send' | 'decline') => ({
+    tag: 'button', type: choice === 'send' ? 'primary' : 'default', text: plain(tr(locale, `lark.card.${choice}`)),
+    value: { hub: 'send_message', code: p.code, choice },
+  });
+  const file = p.file && get<{ size: number }>('SELECT size FROM uploads WHERE id = ?', p.file.upload_id)?.size;
+  return {
+    config: { wide_screen_mode: true, update_multi: true },
+    header: { template: end ? 'grey' : 'blue', title: plain(tr(locale, 'lark.card.title')) },
+    elements: [
+      { tag: 'div', text: plain(tr(locale, 'lark.card.to', { names: names(p.to, locale) })) },
+      ...(p.file ? [{ tag: 'div', text: plain(tr(locale, 'lark.card.file', { name: p.file.name, size: file ? size(file) : '' })) }] : []),
+      { tag: 'hr' },
+      { tag: 'div', text: plain(signed(p.text, user, locale)) },
+      ...(end
+        ? [{ tag: 'note', elements: [plain(end)] }]
+        : [{ tag: 'action', actions: [button('send'), button('decline')] }, { tag: 'note', elements: [plain(tr(locale, 'lark.card.hint'))] }]),
+    ],
+  };
+}
+
+/** Sends the person the card for a preview (once per preview). False if Lark did not take it; the agent's yes still works. */
+async function askInLark(user: User, code: string): Promise<boolean> {
+  const p = pendingOf(user.id).find((x) => x.code === code);
+  if (!p) return false;
+  if (p.card) return true;
+  try {
+    const r = await larkFetch<{ data: { message_id: string } }>('/im/v1/messages?receive_id_type=open_id', {
+      method: 'POST', token: await getTenantToken(), body: JSON.stringify({ receive_id: user.id, msg_type: 'interactive', content: JSON.stringify(card(user, p)) }),
+    });
+    run('UPDATE lark_pending SET card = ? WHERE code = ?', r.data.message_id, code);
+    return true;
+  } catch (e) {
+    console.warn('[messages] confirmation card not sent:', (e as Error).message);
+    return false;
+  }
+}
+
+async function updateCard(messageId: string, user: User, p: Waiting, end: string) {
+  await larkFetch(`/im/v1/messages/${encodeURIComponent(messageId)}`, {
+    method: 'PATCH', token: await getTenantToken(), body: JSON.stringify({ content: JSON.stringify(card(user, p, end)) }),
+  }).catch((e) => console.warn('[messages] confirmation card not updated:', (e as Error).message));
+}
+
+/** What Lark asks the hub when someone taps a button on one of its cards (through the long connection, lark/events.ts). */
+export interface CardTap { operator?: { open_id?: string }; action?: { value?: { hub?: string; code?: string; choice?: string } } }
+
+/**
+ * A tap on Send or Don't send. Lark waits about three seconds for the answer, so a slow send (a big file) answers
+ * "sending" and updates the card when it is done.
+ */
+export async function onCardTap(tap: CardTap) {
+  const v = tap.action?.value;
+  if (v?.hub !== 'send_message' || !v.code) return undefined;
+  const user = get<User>('SELECT * FROM users WHERE id = ?', tap.operator?.open_id ?? '');
+  const locale = user ? localeOf(user.id) : config.defaultLocale;
+  const toast = (type: 'info' | 'success' | 'error', content: string) => ({ toast: { type, content } });
+  const row = get<{ user_id: string; state: string }>('SELECT user_id, state FROM lark_pending WHERE code = ? AND expires >= ?', v.code, now());
+  if (!row) return toast('error', tr(locale, 'lark.card.expired'));
+  if (!user || row.user_id !== user.id) return toast('error', tr(locale, 'lark.card.notYours'));
+  const p = pendingOf(user.id).find((x) => x.code === v.code);
+  if (!p) return toast('info', tr(locale, 'lark.card.handled'));
+  const settled = (type: 'info' | 'success' | 'error', end: string) => ({ ...toast(type, end), card: { type: 'raw', data: card(user, p, end) } });
+  if (v.choice === 'decline') {
+    run("UPDATE lark_pending SET state = 'declined', payload = '' WHERE code = ?", p.code);
+    return settled('info', tr(locale, 'lark.card.declined'));
+  }
+  let claimed: Waiting;
+  try {
+    claimed = claim(user, p.code);
+  } catch (e) {
+    return toast('error', (e as Error).message);
+  }
+  const outcome = deliver(user, claimed).then((r) => ({ ok: !!r.sent.length, end: sentLine(r, locale) }), (e: Error) => ({ ok: false, end: tr(locale, 'lark.card.failed', { reason: e.message }) }));
+  const quick = await Promise.race([outcome, new Promise<null>((ok) => setTimeout(ok, 2500, null))]);
+  if (quick) return settled(quick.ok ? 'success' : 'error', quick.end);
+  void outcome.then((o) => { if (p.card) void updateCard(p.card, user, p, o.end); });
+  return settled('info', tr(locale, 'lark.card.sending'));
 }

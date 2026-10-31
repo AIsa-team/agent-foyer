@@ -84,6 +84,21 @@ anyone can click "Stop telling me" on their home page. **By default only hub adm
 recipients see alerts on their home page. Admins can switch messages on for all recipients on the Admin page. Tune
 the windows with `ALERT_COOLDOWN_MINUTES` and `ALERT_QUIET_HOURS` (e.g. `22-9`, or `off`), in `HUB_TIMEZONE`.
 
+Agents sending and reading Lark messages as the person (optional; each person turns it on in the Lark card of their Me
+page, and Lark asks them for these when they do):
+
+| Scope | Why |
+|---|---|
+| `im:message`, `im:message.send_as_user` | `send_lark_message`: messages sent as the person, each one previewed first |
+| `im:resource` | sending a file with a message |
+| `im:message:readonly`, `im:message.p2p_msg:get_as_user`, `im:message.group_msg:get_as_user`, `im:chat:read` | `read_lark_messages` and `find_lark_chat`: reading the one conversation the person asks about |
+
+The bot also shows the person each preview as a card with **Send** and **Don't send**. Taps reach the hub over a long
+connection the hub opens to Lark, so no public callback address is needed: under **Events & Callbacks → Callback
+Configuration**, choose **Receive callbacks through persistent connection** (with the hub running, so Lark sees it
+connected), add **Card action trigger** (`card.action.trigger`), and release a new version. Without it the card still
+shows the preview, and people confirm in their agent.
+
 No extra redirect URL is needed: connecting Lark data uses the same `https://hub.example.com/auth/callback`.
 
 ## 5. Release
