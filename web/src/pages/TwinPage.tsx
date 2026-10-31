@@ -12,6 +12,7 @@ interface Dashboard {
   scenarios: { name: string; n: number; accuracy: number }[];
   calls: { replyReplied: number; replyNone: number; noReplyReplied: number; noReplyNone: number };
   closeness: number[];
+  forms: { text: number; reaction: number; guessed: number; right: number };
   sources: { live: number; replay: number };
   changes: { doc: 'profile' | 'style'; state: string; at: number }[];
 }
@@ -114,6 +115,12 @@ export function TwinPage() {
                     <tr><th>{t('twin.dash.itSaidNo')}</th><td><b>{c.noReplyReplied}</b> <span className="muted">{share(c.noReplyReplied)}</span><div className="small muted">{t('twin.dash.missed')}</div></td><td className="is-right"><b>{c.noReplyNone}</b> <span className="muted">{share(c.noReplyNone)}</span></td></tr>
                   </tbody>
                 </table>
+                {data.forms.text + data.forms.reaction > 0 && (
+                  <p className="small" style={{ margin: '14px 0 0' }}>
+                    {t('twin.dash.forms', { n: data.forms.text + data.forms.reaction, reaction: data.forms.reaction, share: `${Math.round((data.forms.reaction / (data.forms.text + data.forms.reaction)) * 100)}%` })}
+                    {data.forms.guessed > 0 && <>{t('twin.dash.formsRight', { share: `${Math.round((data.forms.right / data.forms.guessed) * 100)}%` })}</>}
+                  </p>
+                )}
               </div>
             </div>
 

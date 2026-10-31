@@ -541,6 +541,12 @@ const zhCN = {
   'twin.col.conversations.lastSeen': '最近互动',
   'twin.opt.kind.direct': '私聊',
   'twin.opt.kind.group': '群聊',
+  'twin.col.predictions.form': '预测的回复形式',
+  'twin.col.predictions.actualForm': '你的回复形式',
+  'twin.opt.form.text': '文字',
+  'twin.opt.form.reaction': '表情回复',
+  'twin.opt.actualForm.text': '文字',
+  'twin.opt.actualForm.reaction': '表情回复',
 };
 
 export default zhCN;

@@ -213,7 +213,7 @@ export function larkWorkTools({ server, user, locale, guard, resolveColleagues }
   }));
 
   server.registerTool('read_lark_messages', {
-    description: 'Reads one Lark conversation as the user, only if they turned reading on (Me page, Lark data card): their direct chat with a colleague (e.g. what they replied) or a group chat (chat_id from find_lark_chat). Recent messages, oldest first, with sender, time (company time zone) and text; files and images come with a download link valid 10 minutes. Read only the conversation the user asked about.',
+    description: 'Reads one Lark conversation as the user, only if they turned reading on (Me page, Lark data card): their direct chat with a colleague (e.g. what they replied) or a group chat (chat_id from find_lark_chat). Recent messages, oldest first, with sender, time (company time zone) and text; files and images come with a download link valid 10 minutes. Read only the conversation the user asked about. Each message may carry reactions (Lark\'s emoji replies, 表情回复), e.g. ["OK (me)", "THUMBSUP (周明)"]: "me" is the user, and a reaction is an answer in itself.',
     inputSchema: {
       colleague: z.string().optional().describe('the colleague of a direct chat: email, name or open_id'),
       chat_id: z.string().optional().describe('a group chat, from find_lark_chat'),
@@ -243,11 +243,11 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
   }, guard(() => twin.setupTwin(user)));
 
   server.registerTool('check_new_messages', {
-    description: 'The user\'s new Lark messages since the last check (at most once a minute), grouped by conversation: direct chats, and groups where they were @mentioned or that they chose to watch. Bots and the user\'s own messages are left out; you_replied says the user already answered. Shadow mode: predict with record_prediction, never send.',
+    description: 'The user\'s new Lark messages since the last check (at most once a minute), grouped by conversation: direct chats, and groups where they were @mentioned or that they chose to watch. Bot messages are left out unless they @mention the user, and so are the user\'s own; you_replied says the user already answered. Shadow mode: predict with record_prediction, never send. Each message may carry reactions (Lark\'s emoji replies, 表情回复), e.g. ["OK (me)", "THUMBSUP (周明)"]: "me" is the user, and a reaction is an answer in itself.',
   }, guard(() => twin.checkNewMessages(user)));
 
   server.registerTool('my_message_history', {
-    description: 'The user\'s past Lark conversations, for the twin\'s cold start and replay. Without chat_id: the conversations of the last `days` (default 30, at most 90). With chat_id: that conversation\'s messages, oldest first, 100 per page (page_token for the next). Learn from what the user answered to what, and what they left unanswered; keep conclusions with remember, never the messages.',
+    description: 'The user\'s past Lark conversations, for the twin\'s cold start and replay. Without chat_id: the conversations of the last `days` (default 30, at most 90). With chat_id: that conversation\'s latest messages from people, about 100 a page in time order, with the bot messages that matter to them (ones people replied to or answered right after, or that @mention the user; from "bot"); other bot messages are left out and counted. older_page_token as page_token reads further back. Learn from what the user answered to what, and what they left unanswered; keep conclusions with remember, never the messages. Each message may carry reactions (Lark\'s emoji replies, 表情回复), e.g. ["OK (me)", "THUMBSUP (周明)"]: "me" is the user, and a reaction is an answer in itself.',
     inputSchema: {
       days: z.number().int().min(1).max(90).optional(),
       chat_id: z.string().optional(),
@@ -269,7 +269,7 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
   }, guard((a: { ids?: string[]; query?: string }) => twin.recallMemory(user, a)));
 
   server.registerTool('remember', {
-    description: 'Adds one memory to the twin\'s Base (one fact per memory, with its source), or changes one by id. Never delete: mark it replaced (with replaced_by) or wrong. Things that change get valid_until. Do not keep message text, sensitive personal matters about colleagues, or passwords and codes.',
+    description: 'Adds one memory to the twin\'s Base (one fact per memory, with its source), or changes one by id. A memory that got something wrong is corrected in place (Lark keeps the record\'s history); mark it replaced (with replaced_by) when a newer one supersedes it, or wrong only when nothing true is left. Never delete. Things that change get valid_until. Do not keep message text, sensitive personal matters about colleagues, or passwords and codes.',
     inputSchema: {
       id: z.string().optional().describe('to change an existing memory'),
       type: z.enum(['person', 'project', 'preference', 'decision', 'commitment', 'correction', 'today']).optional(),
@@ -296,11 +296,12 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
       message_id: z.string(),
       should_reply: z.boolean(),
       urgency: z.enum(['now', 'today', 'later']).optional(),
-      reply: z.string().optional().describe('what you predict the user would say'),
+      form: z.enum(['text', 'reaction']).optional().describe('how the user would answer: a written reply (default) or only an emoji reaction'),
+      reply: z.string().optional().describe('what you predict the user would say; for a reaction, the emoji type, e.g. "OK"'),
       scenario: z.string().optional().describe('a short, stable label, e.g. "schedule", "status question"; accuracy is counted per scenario'),
       replay: z.object({
-        replied: z.boolean(), reply: z.string().optional(), gap_minutes: z.number().int().min(0).optional(),
-      }).optional().describe('past messages only: what the user actually did'),
+        replied: z.boolean(), form: z.enum(['text', 'reaction']).optional(), reply: z.string().optional(), gap_minutes: z.number().int().min(0).optional(),
+      }).optional().describe('past messages only: what the user actually did (form: a written reply or only a reaction; reply: their words, or the emoji type)'),
     },
   }, guard((a: twin.Prediction) => twin.recordPrediction(user, a)));
 

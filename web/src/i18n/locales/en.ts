@@ -1014,6 +1014,8 @@ const en: Record<MessageKey, string> = {
   'twin.dash.youDidNot': 'You did not',
   'twin.dash.itSaidReply': 'It said reply',
   'twin.dash.itSaidNo': 'It said no reply',
+  'twin.dash.forms': 'Of the {n} you answered, {reaction} were only an emoji reaction ({share}).',
+  'twin.dash.formsRight': ' Your twin guessed the form (text or reaction) right {share} of the time.',
   'twin.dash.extra': 'Extra',
   'twin.dash.missed': 'Missed',
   'twin.dash.closenessDist': 'How close its replies came',

@@ -1015,6 +1015,8 @@ const zhCN = {
   'twin.dash.youDidNot': '你没回',
   'twin.dash.itSaidReply': '分身说要回',
   'twin.dash.itSaidNo': '分身说不用回',
+  'twin.dash.forms': '你回复的 {n} 条里，{reaction} 条只点了表情回复（{share}）。',
+  'twin.dash.formsRight': '分身猜对回复形式（文字还是表情）的比例是 {share}。',
   'twin.dash.extra': '多回',
   'twin.dash.missed': '漏回',
   'twin.dash.closenessDist': '回复内容接近度',

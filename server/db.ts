@@ -674,6 +674,11 @@ const MIGRATIONS: string[] = [
     seen_at INTEGER NOT NULL, synced_at INTEGER, PRIMARY KEY (user_id, chat_id)
   );
   `,
+  // how a prediction expected the person to answer (a written reply or only an emoji reaction), and how they did
+  `
+  ALTER TABLE twin_predictions ADD COLUMN reply_form TEXT;
+  ALTER TABLE twin_predictions ADD COLUMN actual_form TEXT;
+  `,
 ];
 
 {

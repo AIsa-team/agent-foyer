@@ -543,6 +543,12 @@ const en: Record<MessageKey, string> = {
   'twin.col.conversations.lastSeen': 'Last seen',
   'twin.opt.kind.direct': 'Direct',
   'twin.opt.kind.group': 'Group',
+  'twin.col.predictions.form': 'Predicted form',
+  'twin.col.predictions.actualForm': 'Your form',
+  'twin.opt.form.text': 'Text',
+  'twin.opt.form.reaction': 'Reaction',
+  'twin.opt.actualForm.text': 'Text',
+  'twin.opt.actualForm.reaction': 'Reaction',
 };
 
 export default en;

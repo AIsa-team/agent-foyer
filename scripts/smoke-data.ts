@@ -537,7 +537,8 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const end = body.end_time ? Number(body.end_time) * 1000 + 999 : Infinity;
     const hits = [...lark.inbox.values()].filter((m) => m.at >= start && m.at <= end
       && (!body.chat_type || (body.chat_type === 'p2p_chat') === m.chat.startsWith('oc_p2p'))
-      && (body.from_type !== 'user' || !m.bot)
+      && (body.from_type !== 'user' || !m.bot) && (body.from_type !== 'bot' || !!m.bot)
+      && (!body.at_chatter_ids?.length || body.at_chatter_ids.some((id: string) => m.mentions?.includes(id)))
       && (!body.from_ids?.length || body.from_ids.includes(m.from))
       && (!body.chat_ids?.length || body.chat_ids.includes(m.chat)))
       .sort((x, y) => y.at - x.at).map((m) => m.id);
@@ -581,6 +582,18 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     if (!lark.readTokens.has(bearer)) return readScope();
     const chat = url.searchParams.get('container_id')!;
     const size = Number(url.searchParams.get('page_size'));
+    if (chat === 'oc_botty') {
+      // a group a bot fills: 120 notices around 5 messages from people, newest first, in pages
+      const all = Array.from({ length: 125 }, (_, i) => ({
+        message_id: `ob_${i}`, msg_type: 'text', create_time: String(1_790_000_000_000 - i * 60_000),
+        sender: i % 25 === 3 ? { id: 'ou_dev_bob', id_type: 'open_id', sender_type: 'user' } : { id: 'cli_bot', id_type: 'app_id', sender_type: 'app' },
+        body: { content: JSON.stringify({ text: i % 25 === 3 ? `人话 ${i}` : `告警 ${i}` }) },
+        // someone answers an older alert; one alert @mentions Alex
+        ...(i === 28 ? { parent_id: 'ob_40' } : {}), ...(i === 60 ? { mentions: [{ key: '@_user_1', id: 'ou_dev_alex', name: 'Alex' }] } : {}),
+      }));
+      const from = Number(url.searchParams.get('page_token') || 0);
+      return send({ code: 0, data: { items: all.slice(from, from + size), has_more: from + size < all.length, page_token: String(from + size) } });
+    }
     lark.messageReads.push({ chat, size });
     const msg = (id: string, at: number, type: string, content: object, extra = {}) =>
       ({ message_id: id, msg_type: type, create_time: String(at), sender: { id: 'ou_dev_bob', id_type: 'open_id', sender_type: 'user' }, body: { content: JSON.stringify(content) }, ...extra });
@@ -2960,7 +2973,13 @@ try {
     check(hist.conversations.some((c) => c.chat_id === 'oc_p2p_bob' && c.kind === 'direct') && hist.conversations.some((c) => c.chat_id === 'oc_grp1' && c.kind === 'group') && !hist.conversations.some((c) => c.chat_id === 'oc_grp2'),
       'my_message_history lists direct chats with colleagues and the groups the person spoke in');
     const bobHist = await tool(alex.token, 'my_message_history', { chat_id: 'oc_p2p_bob' });
-    check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation oldest first');
+    check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation: the latest messages, in time order');
+    const botty = await tool(alex.token, 'my_message_history', { chat_id: 'oc_botty' });
+    const bottyText = (botty.messages as { text: string; from: string }[]).map((m) => m.text);
+    check(bottyText.filter((x) => x.startsWith('人话')).length === 5 && botty.bots_left_out === 113 && !botty.older_page_token,
+      'a chat a bot fills still yields what people said: bots are skipped and counted, pages read on until there is enough');
+    check(bottyText[0] === '告警 104' && bottyText[1] === '人话 103' && bottyText.includes('告警 40') && bottyText.includes('告警 60') && botty.messages[0].from === 'bot',
+      'but bot messages people answered, replied to, or that @mention the person stay, in time order');
 
     const later = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; documents: Record<string, string> }; toReview: number; lastCheck: string; next: string };
     check(later.coldStart.done === true && later.coldStart.documents.style === 'change waiting for the user' && later.toReview === 0 && !!later.lastCheck && later.next.includes('Patrol'),
@@ -2997,16 +3016,30 @@ try {
     check(JSON.stringify(withOk.messages[1].reactions) === '["OK (me)"]', 'messages come with their reactions, so an OK the person tapped counts as their answer');
     inbox('om_t8', 'oc_p2p_bob', 'ou_dev_bob', 1000, '生图的 MCP tool 我来接？');
     inbox('om_t9', 'oc_grp2', 'ou_dev_alice', 1000, '', { card: { title: '周报提醒', elements: [[{ tag: 'text', text: '本周五前交周报' }]] } });
+    inbox('om_t11', 'oc_grp1', 'ou_bot', 1000, '@Alex 构建失败，请看一下', { bot: true, mentions: ['ou_dev_alex'] });
+    inbox('om_t12', 'oc_grp1', 'ou_bot', 1000, '构建成功', { bot: true });
     fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
     const fourth = await tool(alex.token, 'check_new_messages', {});
     const cardText = fourth.conversations.find((x: { chat_id: string }) => x.chat_id === 'oc_grp2')?.messages[0].text as string;
     check(cardText.includes('周报提醒') && cardText.includes('本周五前交周报'), 'a card message is read as its title and text');
-    const toolRouter = await tool(alex.token, 'record_prediction', { message_id: 'om_t8', should_reply: true, reply: '[reaction: OK]', scenario: '承接任务' });
+    const botAsk = fourth.conversations.find((x: { chat_id: string }) => x.chat_id === 'oc_grp1')?.messages as { text: string; from: string }[] | undefined;
+    check(botAsk?.length === 1 && botAsk[0].from === 'bot' && botAsk[0].text.includes('构建失败'), 'a bot message that @mentions the person comes in to predict; other bot messages do not');
+    // a Base made before the reply form existed gets its columns added (a fresh process, as after a deploy)
+    const tablesJson = JSON.parse(String(twinDb('SELECT tables FROM twin WHERE user_id = ?', 'ou_dev_alex')[0].tables));
+    delete tablesJson.predictions.names.form; delete tablesJson.predictions.names.actualForm;
+    fsDb.prepare('UPDATE twin SET tables = ? WHERE user_id = ?').run(JSON.stringify(tablesJson), 'ou_dev_alex');
+    const fieldsBefore = lark.addedFields.length;
+    const toolRouter = await inTwin("t.recordPrediction(user, { message_id: 'om_t8', should_reply: true, form: 'reaction', reply: 'OK', scenario: '承接任务' })");
+    check(lark.addedFields.length === fieldsBefore + 2 && !!JSON.parse(String(twinDb('SELECT tables FROM twin WHERE user_id = ?', 'ou_dev_alex')[0].tables)).predictions.names.form,
+      'an older Base gets the new columns added before they are written');
     lark.reactions.set('om_t8', [{ emoji: 'OK', by: 'ou_dev_alex', at: Date.now() }]);
     fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
     await tool(alex.token, 'check_new_messages', {});
-    check(twinDb('SELECT outcome FROM twin_predictions WHERE record_id = ?', toolRouter.id)[0]?.outcome === 'replied' && JSON.stringify(predRows.get(toolRouter.id)).includes('[reaction: OK]'),
-      'the person\'s reaction settles the prediction as a reply');
+    const settledByReaction = twinDb('SELECT outcome, reply_form, actual_form FROM twin_predictions WHERE record_id = ?', toolRouter.id)[0];
+    check(settledByReaction?.outcome === 'replied' && settledByReaction.reply_form === 'reaction' && settledByReaction.actual_form === 'reaction' && /"OK"/.test(JSON.stringify(predRows.get(toolRouter.id))),
+      'the person\'s reaction settles the prediction as a reply, in the form of a reaction');
+    const forms = (await api(alex.jar, 'GET', '/lark/twin/dashboard')).body.forms as { reaction: number; guessed: number; right: number };
+    check(forms.reaction === 1 && forms.right >= 1, 'and the dashboard counts answers that were only a reaction, and how often the form was guessed right');
 
     await api(alex.jar, 'POST', '/lark/reading', { on: false });
     check((await api(alex.jar, 'GET', '/lark/twin')).body.on === false && String((await tool(alex.token, 'check_new_messages', {})).error).includes('/me'), 'turning reading off turns the twin off too');
