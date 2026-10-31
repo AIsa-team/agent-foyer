@@ -608,15 +608,17 @@ export async function messageHistory(user: User, a: { days?: number; chat_id?: s
   const conversations: { chat_id: string; kind: 'direct' | 'group'; name: string }[] = [];
   const colleagues = all<{ id: string }>("SELECT id FROM users WHERE id != ? AND id LIKE 'ou_%' LIMIT 300", user.id).map((u) => u.id);
   for (let i = 0; i < colleagues.length; i += 50) {
-    const r = await call<{ data: { p2p_chats?: { chat_id: string; chatter_id: string }[] } }>(user, '/im/v1/chat_p2p/batch_query?user_id_type=open_id', {
+    const r = await call<{ data: { p2p_chats?: { chat_id: string; chatter_id1?: string; chatter_id2?: string }[] } }>(user, '/im/v1/chat_p2p/batch_query?user_id_type=open_id', {
       method: 'POST', body: JSON.stringify({ chatter_ids: colleagues.slice(i, i + 50) }),
     });
     for (const p of r.data.p2p_chats ?? []) {
+      // Lark names both people in the chat; the colleague is the one who is not the person
+      const other = [p.chatter_id1, p.chatter_id2].find((x) => x && x !== user.id) ?? '';
       const any = await call<{ data: { items?: unknown[] } }>(user,
         `/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(p.chat_id)}&sort_type=ByCreateTimeDesc&page_size=1&start_time=${sec(since)}`);
       if (any.data.items?.length) {
-        conversations.push({ chat_id: p.chat_id, kind: 'direct', name: nameOf(p.chatter_id) });
-        await noteConversation(user, { chat_id: p.chat_id, kind: 'direct', name: nameOf(p.chatter_id), person_id: p.chatter_id });
+        conversations.push({ chat_id: p.chat_id, kind: 'direct', name: nameOf(other) });
+        await noteConversation(user, { chat_id: p.chat_id, kind: 'direct', name: nameOf(other), person_id: other || undefined });
       }
     }
   }

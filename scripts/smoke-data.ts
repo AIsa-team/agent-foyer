@@ -576,7 +576,7 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   }
   if (p === '/im/v1/chat_p2p/batch_query' && req.method === 'POST') {
     if (!lark.readTokens.has(bearer)) return readScope();
-    return send({ code: 0, data: { p2p_chats: (body.chatter_ids as string[]).includes('ou_dev_bob') ? [{ chat_id: 'oc_p2p_bob', chatter_id: 'ou_dev_bob' }] : [] } });
+    return send({ code: 0, data: { p2p_chats: (body.chatter_ids as string[]).includes('ou_dev_bob') ? [{ chat_id: 'oc_p2p_bob', chatter_id1: 'ou_dev_alex', chatter_id2: 'ou_dev_bob' }] : [] } });
   }
   if (p === '/im/v1/messages' && req.method === 'GET') {
     if (!lark.readTokens.has(bearer)) return readScope();
@@ -2970,7 +2970,7 @@ try {
 
     // the person's past conversations, for the cold start
     const hist = await tool(alex.token, 'my_message_history', { days: 30 }) as { conversations: { chat_id: string; kind: string }[] };
-    check(hist.conversations.some((c) => c.chat_id === 'oc_p2p_bob' && c.kind === 'direct') && hist.conversations.some((c) => c.chat_id === 'oc_grp1' && c.kind === 'group') && !hist.conversations.some((c) => c.chat_id === 'oc_grp2'),
+    check(hist.conversations.some((c) => c.chat_id === 'oc_p2p_bob' && c.kind === 'direct' && (c as { name?: string }).name === '周明') && hist.conversations.some((c) => c.chat_id === 'oc_grp1' && c.kind === 'group') && !hist.conversations.some((c) => c.chat_id === 'oc_grp2'),
       'my_message_history lists direct chats with colleagues and the groups the person spoke in');
     const bobHist = await tool(alex.token, 'my_message_history', { chat_id: 'oc_p2p_bob' });
     check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation: the latest messages, in time order');
