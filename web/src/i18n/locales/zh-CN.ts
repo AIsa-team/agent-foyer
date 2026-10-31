@@ -957,6 +957,7 @@ const zhCN = {
   'me.messages.onBodyDirect': '你的 Agent 会直接以你的身份发出，不再先给你确认。中台只记下发给了谁、什么时候发的，不存内容。最近 7 天发了 {n} 条。',
   'me.messages.noConfirm': '发送前不用我确认（完全访问）',
   'me.messages.noConfirmBody': '打开后，Agent 不再先给你看预览，直接以你的身份发出。消息仍会带「由你的 AI 分身发送」的署名，每小时最多 30 条。只在你信任自己的 Agent 时打开。',
+  'me.messages.twinHolds': 'AI 分身开着时这个开关暂停生效：分身整天读别人的消息，为防有人借消息诱导它发出内容，每条消息仍要你确认。',
   'me.messages.noConfirmConfirm': '打开后，你的 Agent 发消息前不会再问你，会直接以你的身份发出。确定打开？',
   'me.reading.title': '让 Agent 读我的消息',
   'me.reading.body': '开启后，你让 Agent 看某个对话时，它可以用你的身份读：同事回了什么、某个群最近在聊什么、别人发给你的文件。它只读你指定的那一个对话。需要在 Lark 里授权一次。',

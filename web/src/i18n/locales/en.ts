@@ -956,6 +956,7 @@ const en: Record<MessageKey, string> = {
   'me.messages.onBodyDirect': 'Your agent sends as you right away, without asking you first. The hub keeps only who was messaged and when, never the text. {n} sent in the last 7 days.',
   'me.messages.noConfirm': "Don't ask me before sending (full access)",
   'me.messages.noConfirmBody': 'Once on, your agent no longer shows you a preview and sends as you right away. Messages still end with the AI twin line, at most 30 an hour. Turn it on only if you trust your agents.',
+  'me.messages.twinHolds': 'Paused while your AI twin is on: it reads other people\'s messages all day, so in case a message tries to talk it into sending something, every message still waits for your yes.',
   'me.messages.noConfirmConfirm': 'Once on, your agent sends messages as you without asking you first. Turn it on?',
   'me.reading.title': 'Let my agent read my messages',
   'me.reading.body': 'Once on, when you ask your agent to look at a conversation it can read it as you: what a colleague replied, what a group has been discussing, files people sent you. It reads only the conversation you name. You allow it once in Lark.',

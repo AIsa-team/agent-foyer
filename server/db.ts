@@ -658,6 +658,13 @@ const MIGRATIONS: string[] = [
   ALTER TABLE twin ADD COLUMN reflected_at INTEGER;
   ALTER TABLE twin_predictions ADD COLUMN reviewed INTEGER NOT NULL DEFAULT 0;
   `,
+  // the hub's watch over the twin: the last thing it warned the person about, and how often a prediction was redone
+  `
+  ALTER TABLE twin ADD COLUMN alert TEXT;
+  ALTER TABLE twin ADD COLUMN alerted_at INTEGER;
+  ALTER TABLE twin_predictions ADD COLUMN updates INTEGER NOT NULL DEFAULT 0;
+  ALTER TABLE twin_predictions ADD COLUMN updated_at INTEGER;
+  `,
 ];
 
 {

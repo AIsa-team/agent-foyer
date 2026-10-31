@@ -21,6 +21,7 @@ import { localTime } from './calendar.ts';
 import { DENIED_CODES, larkFetch, LarkError, SCOPE_CODES } from './client.ts';
 import type { Answer } from '../mcp.ts';
 import { asUser, connection } from './userToken.ts';
+import { twinOn } from './twin.ts';
 
 /** Lark asks for both to send as a person; the hub only ever sends with them. */
 export const MESSAGE_SCOPES = ['im:message', 'im:message.send_as_user'];
@@ -51,11 +52,16 @@ const granted = (userId: string) => {
 /** For the Me page: whether it is on, whether Lark allows it yet, and how many messages went out this week. */
 export function messagesStatus(user: User) {
   const sent = get<{ n: number }>('SELECT COUNT(*) AS n FROM lark_sent WHERE user_id = ? AND at > ?', user.id, now() - 7 * 86_400_000)!.n;
-  return { on: messagesOn(user.id), noConfirm: withoutConfirm(user.id), granted: granted(user.id), connectUrl: messagesConnectUrl(), sentThisWeek: sent };
+  return { on: messagesOn(user.id), noConfirm: withoutConfirm(user.id), twinHolds: withoutConfirm(user.id) && twinOn(user.id), granted: granted(user.id), connectUrl: messagesConnectUrl(), sentThisWeek: sent };
 }
 
 /** Whether the person lets their agents send without showing them each message first (off again when sending is). */
 const withoutConfirm = (userId: string) => !!get<{ send_no_confirm: number }>('SELECT send_no_confirm FROM users WHERE id = ?', userId)?.send_no_confirm;
+/**
+ * While the person's AI twin reads other people's messages all day (lark/twin.ts), a message written to talk their
+ * agent into sending something could reach it; so then every message waits for the person's yes, whatever they chose.
+ */
+const sendsDirect = (userId: string) => withoutConfirm(userId) && !twinOn(userId);
 
 export function setMessagesOn(user: User, on: boolean) {
   run('UPDATE users SET send_as_me = ? WHERE id = ?', on ? 1 : 0, user.id);
@@ -161,7 +167,7 @@ export function prepareMessage(user: User, { to, text, file, markdown }: Pending
  */
 export async function sendOrPrepare(user: User, message: Pending, locale: string, ask?: (message: string) => Promise<Answer>) {
   const prepared = prepareMessage(user, message, locale);
-  if (withoutConfirm(user.id)) {
+  if (sendsDirect(user.id)) {
     return { ...(await sendPrepared(user, prepared.send_code)), message: prepared.preview, note: 'Sent at once: the user turned off confirming each message. Tell them briefly what was sent to whom.' };
   }
   if (config.lark.confirmCards) {

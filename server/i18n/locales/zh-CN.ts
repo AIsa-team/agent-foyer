@@ -520,6 +520,10 @@ const zhCN = {
   'twin.week.remembered': '新记住：{n} 条',
   'twin.week.byScenario': '按场景：',
   'twin.week.open': '打开记忆表',
+  'err.twin.tooMany': '这一小时里分身已经记了 {n} 次，达到上限，请一小时后再试。如果不是有意的，它可能在空转。',
+  'twin.watch.stalled': '你的 AI 分身已经 {minutes} 分钟没有查看新消息了，可能是 Studio 那边的定时任务停了。需要的话，让你的 Agent 调 twin_guide 接着做；不想用了可以在「我的」页关掉：{url}',
+  'twin.watch.repeating': '你的 AI 分身在一小时内对同一条消息预测了 {n} 次，可能在空转。请看一下你的 Agent 是否卡在循环里。',
+  'twin.watch.limit': '你的 AI 分身这一小时记了 {predictions} 条预测、{memories} 条记忆，已到上限，中台暂停接收，一小时后恢复。如果不是你让它批量处理的，它可能在空转。',
 };
 
 export default zhCN;

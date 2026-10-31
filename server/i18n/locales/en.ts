@@ -522,6 +522,10 @@ const en: Record<MessageKey, string> = {
   'twin.week.remembered': 'New memories: {n}',
   'twin.week.byScenario': 'By scenario:',
   'twin.week.open': 'Open the memory Base',
+  'err.twin.tooMany': 'The twin reached its limit of {n} in this hour; try again in an hour. If this was not intended, it may be spinning.',
+  'twin.watch.stalled': 'Your AI twin has not looked at new messages for {minutes} minutes; the scheduled task in Studio may have stopped. To resume, have your agent call twin_guide; to stop, turn it off on your Me page: {url}',
+  'twin.watch.repeating': 'Your AI twin predicted the same message {n} times within an hour and may be stuck in a loop. Please check your agent.',
+  'twin.watch.limit': 'Your AI twin recorded {predictions} predictions and {memories} memories this hour and reached the limit; the hub accepts more in an hour. If you did not ask for a batch, it may be spinning.',
 };
 
 export default en;

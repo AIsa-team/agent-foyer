@@ -64,7 +64,7 @@ function LarkDataCard() {
 /** Features of the Lark connection each person switches on themselves: their agents sending, and reading, Lark messages as them. */
 function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading' }) {
   const { t } = useI18n();
-  const { data, reload } = useApi<{ on: boolean; noConfirm?: boolean; granted: boolean; connectUrl: string; sentThisWeek?: number; readsThisWeek?: number }>(path);
+  const { data, reload } = useApi<{ on: boolean; noConfirm?: boolean; twinHolds?: boolean; granted: boolean; connectUrl: string; sentThisWeek?: number; readsThisWeek?: number }>(path);
   const { busy, run } = useAction();
   if (!data) return null;
   const k = (key: string) => `me.${kind}.${key}` as MessageKey;
@@ -86,14 +86,15 @@ function LarkFeature({ path, kind }: { path: string; kind: 'messages' | 'reading
         <span>{t(k('title'))}</span>
       </label>
       <p className="small muted" style={{ margin: 0 }}>
-        {!data.on ? t(k('body')) : data.granted ? t(data.noConfirm ? 'me.messages.onBodyDirect' : k('onBody'), { n: data.sentThisWeek ?? data.readsThisWeek ?? 0 })
+        {!data.on ? t(k('body')) : data.granted ? t(data.noConfirm && !data.twinHolds ? 'me.messages.onBodyDirect' : k('onBody'), { n: data.sentThisWeek ?? data.readsThisWeek ?? 0 })
           : <>{t(k('allowBody'))} <a href={data.connectUrl} style={{ textDecoration: 'underline', whiteSpace: 'nowrap' }}>{t('me.messages.allow')}</a></>}
       </p>
       {direct && (
         <label className="conn-card__option">
           <span className="grow">
             <span className="conn-card__option-title">{t('me.messages.noConfirm')}</span>
-            {!data.noConfirm && <span className="small muted">{t('me.messages.noConfirmBody')}</span>}
+            {data.twinHolds ? <span className="small muted">{t('me.messages.twinHolds')}</span>
+              : !data.noConfirm && <span className="small muted">{t('me.messages.noConfirmBody')}</span>}
           </span>
           <span className="aisa-switch">
             <input type="checkbox" checked={!!data.noConfirm} disabled={busy} onChange={(e) => setNoConfirm(e.target.checked)} />
