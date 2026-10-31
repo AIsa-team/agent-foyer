@@ -94,7 +94,39 @@ export function asText(m: Item): { text: string; file?: { file_key: string; type
     return { text: `[${m.msg_type}${c.file_name ? `: ${c.file_name}` : ''}]`, file: { file_key: String(c.file_key ?? ''), type: 'file', name: c.file_name ? String(c.file_name) : undefined } };
   }
   if (m.msg_type === 'image') return { text: '[image]', file: { file_key: String(c.image_key ?? ''), type: 'image' } };
+  if (m.msg_type === 'interactive') {
+    // a card: its title and the words in it, in order (buttons and layout left out)
+    const words: string[] = [];
+    const walk = (v: unknown, key = ''): void => {
+      if (typeof v === 'string') { if (['text', 'content', 'title'].includes(key) && v.trim() && words.at(-1) !== v.trim()) words.push(v.trim()); return; }
+      if (Array.isArray(v)) v.forEach((x) => walk(x, key));
+      else if (v && typeof v === 'object') for (const [k, x] of Object.entries(v)) if (k !== 'tag' && k !== 'url' && k !== 'href') walk(x, k);
+    };
+    walk(c);
+    const text = words.join('\n');
+    return { text: `[card]${text ? `\n${at(text.length > 2000 ? `${text.slice(0, 2000)}…` : text)}` : ''}` };
+  }
   return { text: `[${m.msg_type}]` };
+}
+
+/**
+ * The emoji reactions on a message (Lark's "表情回复": a reply in itself, often all someone answers), read as the
+ * person; an empty list when Lark gives none.
+ */
+export async function reactionsOf(user: Pick<User, 'id'>, messageId: string) {
+  const r = await asUser<{ data: { items?: { operator: { operator_id: string; operator_type: string }; action_time: string; reaction_type: { emoji_type: string } }[] } }>(
+    user, `/im/v1/messages/${encodeURIComponent(messageId)}/reactions?page_size=50&user_id_type=open_id`).catch(() => ({ data: { items: [] } }));
+  return (r.data.items ?? []).map((x) => ({ emoji: x.reaction_type.emoji_type, by: x.operator.operator_id, me: x.operator.operator_id === user.id, at: Number(x.action_time) }));
+}
+
+/** Reactions as an agent reads them: "OK (me)", "THUMBSUP (周明)". */
+export const reactionWords = (rs: Awaited<ReturnType<typeof reactionsOf>>) => rs.map((r) => `${r.emoji} (${r.me ? 'me' : nameOf(r.by)})`);
+
+/** Runs `fn` over `xs` a few at a time, keeping the order. */
+export async function inBatches<T, R>(xs: T[], fn: (x: T) => Promise<R>, size = 8): Promise<R[]> {
+  const out: R[] = [];
+  for (let i = 0; i < xs.length; i += size) out.push(...await Promise.all(xs.slice(i, i + size).map(fn)));
+  return out;
 }
 
 /** Recent messages of one conversation, oldest first, read as the person. */
@@ -116,11 +148,13 @@ export async function readMessages(user: User, a: { colleague?: string; chat_id?
     page = r.data.has_more ? r.data.page_token ?? '' : '';
   } while (page && items.length < limit);
   run('INSERT INTO lark_reads (user_id, chat_id, at) VALUES (?, ?, ?)', user.id, chat, now());
-  const messages = items.filter((m) => !m.deleted).reverse().map((m) => {
+  const kept = items.filter((m) => !m.deleted).reverse();
+  const reactions = await inBatches(kept, (m) => reactionsOf(user, m.message_id));
+  const messages = kept.map((m, i) => {
     const { text, file } = asText(m);
     const from = m.sender?.sender_type === 'app' ? 'bot' : nameOf(m.sender?.id);
     return {
-      message_id: m.message_id, time: localTime(Number(m.create_time)), from, text,
+      message_id: m.message_id, time: localTime(Number(m.create_time)), from, text, ...(reactions[i].length ? { reactions: reactionWords(reactions[i]) } : {}),
       ...(file?.file_key ? { file: { ...file, download: fileLink(user, m.message_id, file.file_key, file.type) } } : {}),
     };
   });

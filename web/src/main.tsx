@@ -15,6 +15,7 @@ import './styles.css';
 const AppDetailPage = lazy(() => import('./pages/AppDetail').then((m) => ({ default: m.AppDetailPage })));
 const SkillDetailPage = lazy(() => import('./pages/SkillDetail').then((m) => ({ default: m.SkillDetailPage })));
 const MePage = lazy(() => import('./pages/MePage').then((m) => ({ default: m.MePage })));
+const TwinPage = lazy(() => import('./pages/TwinPage').then((m) => ({ default: m.TwinPage })));
 const AdminPage = lazy(() => import('./pages/Admin').then((m) => ({ default: m.AdminPage })));
 const LibraryPage = lazy(() => import('./pages/Library').then((m) => ({ default: m.LibraryPage })));
 const DataPage = lazy(() => import('./pages/Data').then((m) => ({ default: m.DataPage })));
@@ -120,6 +121,7 @@ function Shell() {
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/skills/:slug" element={<SkillDetailPage />} />
           <Route path="/me" element={<MePage />} />
+          <Route path="/me/twin" element={<TwinPage />} />
           <Route path="/admin" element={<AdminPage />} />
           <Route path="*" element={<div className="empty"><b>{t('common.pageNotFound')}</b></div>} />
         </Routes>

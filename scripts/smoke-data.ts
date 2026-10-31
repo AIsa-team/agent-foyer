@@ -102,7 +102,9 @@ const lark = {
   readTokens: new Set<string>(),
   twinTokens: new Set<string>(),
   // messages the AI twin finds through search (id → where, who, when, what)
-  inbox: new Map<string, { id: string; chat: string; from: string; at: number; text: string; bot?: boolean; mentions?: string[]; parent?: string }>(),
+  inbox: new Map<string, { id: string; chat: string; from: string; at: number; text: string; bot?: boolean; mentions?: string[]; parent?: string; card?: object }>(),
+  // emoji reactions (Lark's 表情回复) per message id
+  reactions: new Map<string, { emoji: string; by: string; at: number }[]>(),
   // records of Bases created during the run, per app/table
   records: new Map<string, Map<string, Record<string, unknown>>>(),
   messageReads: [] as { chat: string; size: number }[],
@@ -542,14 +544,21 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
     const from = Number(url.searchParams.get('page_token') || 0);
     return send({ code: 0, data: { items: hits.slice(from, from + 20), has_more: from + 20 < hits.length, page_token: String(from + 20) } });
   }
+  const reactions = p.match(/^\/im\/v1\/messages\/(\w+)\/reactions$/);
+  if (reactions && req.method === 'GET') {
+    if (!lark.readTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message:readonly]' });
+    return send({ code: 0, data: { items: (lark.reactions.get(reactions[1]) ?? []).map((r, i) => ({
+      reaction_id: `r${i}`, operator: { operator_id: r.by, operator_type: 'user' }, action_time: String(r.at), reaction_type: { emoji_type: r.emoji },
+    })), has_more: false } });
+  }
   const oneMessage = p.match(/^\/im\/v1\/messages\/(om_t\w+)$/);
   if (oneMessage && req.method === 'GET') {
     if (!lark.readTokens.has(bearer)) return send({ code: 99991679, msg: 'Unauthorized. required one of these privileges under the user identity: [im:message:readonly]' });
     const m = lark.inbox.get(oneMessage[1]);
     if (!m) return send({ code: 230011, msg: 'message not found' });
     return send({ code: 0, data: { items: [{
-      message_id: m.id, msg_type: 'text', create_time: String(m.at), chat_id: m.chat, sender: { id: m.from, id_type: 'open_id', sender_type: m.bot ? 'app' : 'user' },
-      body: { content: JSON.stringify({ text: m.text }) }, ...(m.parent ? { parent_id: m.parent } : {}), ...(m.mentions ? { mentions: m.mentions.map((id, i) => ({ key: `@_user_${i + 1}`, id, name: id })) } : {}),
+      message_id: m.id, msg_type: m.card ? 'interactive' : 'text', create_time: String(m.at), chat_id: m.chat, sender: { id: m.from, id_type: 'open_id', sender_type: m.bot ? 'app' : 'user' },
+      body: { content: JSON.stringify(m.card ?? { text: m.text }) }, ...(m.parent ? { parent_id: m.parent } : {}), ...(m.mentions ? { mentions: m.mentions.map((id, i) => ({ key: `@_user_${i + 1}`, id, name: id })) } : {}),
     }] } });
   }
   const oneChat = p.match(/^\/im\/v1\/chats\/(oc_\w+)$/);
@@ -2818,7 +2827,7 @@ try {
     const asked = lark.scopesAsked.split(' ');
     check(['search:message', 'im:message.p2p_msg:get_as_user', 'bitable:app', 'docx:document'].every((x) => asked.includes(x)), 'one authorisation asks for searching messages, reading them, and writing its Base and documents');
 
-    const inbox = (id: string, chat: string, from: string, ago: number, text: string, more: { bot?: boolean; mentions?: string[]; parent?: string } = {}) =>
+    const inbox = (id: string, chat: string, from: string, ago: number, text: string, more: { bot?: boolean; mentions?: string[]; parent?: string; card?: object } = {}) =>
       lark.inbox.set(id, { id, chat, from, at: Date.now() - ago, text, ...more });
     inbox('om_t1', 'oc_p2p_bob', 'ou_dev_bob', 600_000, '周五的报价能发我吗？');
     inbox('om_t2', 'oc_grp1', 'ou_dev_alice', 500_000, '@Alex 方案看了吗', { mentions: ['ou_dev_alex'] });
@@ -2954,7 +2963,7 @@ try {
     check(bobHist.messages.length === 3 && bobHist.messages[0].text === '报价单收到了', 'and reads one conversation oldest first');
 
     const later = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; documents: Record<string, string> }; toReview: number; lastCheck: string; next: string };
-    check(later.coldStart.done === true && later.coldStart.documents.style === 'approved' && later.toReview === 0 && !!later.lastCheck && later.next.includes('Patrol'),
+    check(later.coldStart.done === true && later.coldStart.documents.style === 'change waiting for the user' && later.toReview === 0 && !!later.lastCheck && later.next.includes('Patrol'),
       'once memories, both documents and a replay exist, a new session goes straight to patrolling instead of starting over');
     // the hub watches the twin from outside: a silent patrol, a prediction redone again and again
     const warnings = () => lark.messages.filter((m) => m.id === 'ou_dev_alex' && m.as === 'bot' && /AI (分身|twin)/.test(m.text));
@@ -2975,8 +2984,30 @@ try {
     check((await api(alex.jar, 'GET', '/lark/messages')).body.twinHolds === true, 'while the twin is on, sending as the person without confirming is held');
     fsDb.prepare("UPDATE users SET send_no_confirm = 0 WHERE id = 'ou_dev_alex'").run();
 
+    const dash = (await api(alex.jar, 'GET', '/lark/twin/dashboard')).body as { week: { predictions: number }; days: { predictions: number }[]; calls: Record<string, number>; scenarios: { name: string; n: number }[]; changes: { state: string }[]; memories: number };
+    check(dash.days.length === 30 && dash.days.reduce((n, d) => n + d.predictions, 0) === 3 && dash.calls.replyReplied === 1 && dash.calls.replyNone === 1 && dash.calls.noReplyReplied === 1
+      && dash.scenarios.some((x) => x.name === '要资料') && dash.changes.some((x) => x.state === 'reverted') && dash.memories === 2 && !JSON.stringify(dash).includes('下午发'),
+      'the dashboard counts days, right and wrong calls, scenarios and document changes, never message text');
+    check((await api(bob.jar, 'GET', '/lark/twin/dashboard')).body.setUp === false, 'and each person sees only their own');
     const status = (await api(alex.jar, 'GET', '/lark/twin')).body as { week: { predictions: number; accuracy: number } };
     check(status.week.predictions === 3 && status.week.accuracy === 33, 'the Me page shows the week in numbers');
+    // a reaction (表情回复) is a reply: the twin sees it, and it settles the prediction; cards are read as text
+    lark.reactions.set('om_2', [{ emoji: 'OK', by: 'ou_dev_alex', at: Date.now() - 5000 }]);
+    const withOk = await tool(alex.token, 'my_message_history', { chat_id: 'oc_p2p_bob' });
+    check(JSON.stringify(withOk.messages[1].reactions) === '["OK (me)"]', 'messages come with their reactions, so an OK the person tapped counts as their answer');
+    inbox('om_t8', 'oc_p2p_bob', 'ou_dev_bob', 1000, '生图的 MCP tool 我来接？');
+    inbox('om_t9', 'oc_grp2', 'ou_dev_alice', 1000, '', { card: { title: '周报提醒', elements: [[{ tag: 'text', text: '本周五前交周报' }]] } });
+    fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
+    const fourth = await tool(alex.token, 'check_new_messages', {});
+    const cardText = fourth.conversations.find((x: { chat_id: string }) => x.chat_id === 'oc_grp2')?.messages[0].text as string;
+    check(cardText.includes('周报提醒') && cardText.includes('本周五前交周报'), 'a card message is read as its title and text');
+    const toolRouter = await tool(alex.token, 'record_prediction', { message_id: 'om_t8', should_reply: true, reply: '[reaction: OK]', scenario: '承接任务' });
+    lark.reactions.set('om_t8', [{ emoji: 'OK', by: 'ou_dev_alex', at: Date.now() }]);
+    fsDb.prepare('UPDATE twin SET last_check = 0 WHERE user_id = ?').run('ou_dev_alex');
+    await tool(alex.token, 'check_new_messages', {});
+    check(twinDb('SELECT outcome FROM twin_predictions WHERE record_id = ?', toolRouter.id)[0]?.outcome === 'replied' && JSON.stringify(predRows.get(toolRouter.id)).includes('[reaction: OK]'),
+      'the person\'s reaction settles the prediction as a reply');
+
     await api(alex.jar, 'POST', '/lark/reading', { on: false });
     check((await api(alex.jar, 'GET', '/lark/twin')).body.on === false && String((await tool(alex.token, 'check_new_messages', {})).error).includes('/me'), 'turning reading off turns the twin off too');
   }

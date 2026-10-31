@@ -14,7 +14,7 @@ import { decrypt, encrypt } from '../crypto.ts';
 import { getTenantToken } from './auth.ts';
 import { DENIED_CODES, larkFetch, LarkError, SCOPE_CODES } from './client.ts';
 import { asUser, connection, WRITE_SCOPE } from './userToken.ts';
-import { asText, nameOf, READ_SCOPES, readingOn, setReadingOn, type Item } from './reading.ts';
+import { asText, inBatches, nameOf, reactionsOf, reactionWords, READ_SCOPES, readingOn, setReadingOn, type Item } from './reading.ts';
 import { createDoc, docMarkdown, DOCS_SCOPES, larkLink, replaceDocBody } from './docs.ts';
 import { createBase, larkField, type Column } from './workspace.ts';
 import { createRecord, fetchRecords, getRecord, updateRecord } from './base.ts';
@@ -238,12 +238,13 @@ export async function twinProgress(user: User) {
   const memories = (await memoryRows(user, t as TwinRow & { base: string; tables: string }).catch(() => [])).length;
   const count = (where: string) => get<{ n: number }>(`SELECT COUNT(*) AS n FROM twin_predictions WHERE user_id = ? AND ${where}`, user.id)!.n;
   const waiting = all<{ doc: string }>("SELECT doc FROM twin_proposals WHERE user_id = ? AND state = 'waiting' AND expires > ?", user.id, now()).map((p) => p.doc);
-  const docs = { profile: t.profile_at ? 'approved' : waiting.includes('profile') ? 'waiting for the user' : 'template', style: t.style_at ? 'approved' : waiting.includes('style') ? 'waiting for the user' : 'template' };
+  const docState = (d: DocKey) => (waiting.includes(d) ? (t[stampColumn(d)] ? 'change waiting for the user' : 'waiting for the user') : t[stampColumn(d)] ? 'approved' : 'template');
+  const docs = { profile: docState('profile'), style: docState('style') };
   const replayed = count("source = 'replay'");
   // documents written before the rules (or edited by hand in Lark) are brought back within them first
   const fix: string[] = [];
   for (const d of ['profile', 'style'] as const) {
-    if (docs[d] !== 'approved') continue;
+    if (docs[d] !== 'approved' || waiting.includes(d)) continue;
     const md = await docMarkdown(user, docOf(t, d)).catch(() => '');
     if (md.length > DOC_MAX || RAW_ID.test(md)) fix.push(`"${d}" ${md.length > DOC_MAX ? `is ${md.length} characters (at most ${DOC_MAX})` : ''}${md.length > DOC_MAX && RAW_ID.test(md) ? ' and ' : ''}${RAW_ID.test(md) ? 'contains raw ids (name people and chats instead)' : ''}`);
   }
@@ -405,12 +406,13 @@ async function around(user: User, chat: string, incoming: Msg[]) {
     .then((r) => (r.data.items ?? []).filter((m) => !m.deleted && m.sender?.sender_type !== 'app' && Number(m.create_time) < first).reverse())
     .catch(() => [] as Msg[]);
   const known = new Set([...before, ...incoming].map((m) => m.message_id));
+  const shownNew = await withReactions(user, incoming);
   const messages = [];
-  for (const m of incoming) {
+  for (const [i, m] of incoming.entries()) {
     const parent = m.parent_id && !known.has(m.parent_id) ? await getMessage(user, m.parent_id).catch(() => null) : null;
-    messages.push({ ...shown(m, user.id), ...(parent ? { reply_to: shown(parent, user.id, CONTEXT_TEXT_MAX) } : m.parent_id ? { reply_to_id: m.parent_id } : {}) });
+    messages.push({ ...shownNew[i], ...(parent ? { reply_to: shown(parent, user.id, CONTEXT_TEXT_MAX) } : m.parent_id ? { reply_to_id: m.parent_id } : {}) });
   }
-  return { context: before.map((m) => shown({ ...m, chat_id: chat }, user.id, CONTEXT_TEXT_MAX)), messages };
+  return { context: await withReactions(user, before.map((m) => ({ ...m, chat_id: chat })), CONTEXT_TEXT_MAX), messages };
 }
 
 /**
@@ -470,6 +472,7 @@ export async function checkNewMessages(user: User) {
       you_replied: c.mine.some((m) => time(m) > last),
     });
   }
+  await settleByReactions(user);
   run('UPDATE twin SET cursor = ? WHERE user_id = ?', at, user.id);
   return {
     from: localTime(from), to: localTime(at), timezone: config.timezone, conversations, ...(conversations.length ? { content_note: UNTRUSTED } : {}),
@@ -480,9 +483,13 @@ export async function checkNewMessages(user: User) {
 
 /** The person's own message in a conversation answers the predictions waiting there. */
 async function settle(user: User, chat: string, mine: Msg) {
-  const at = Number(mine.create_time);
+  await settleWith(user, "chat_id = ?", chat, Number(mine.create_time), asText(mine).text);
+}
+
+/** Predictions answered by the person: by a message in their chat, or by a reaction to the message itself. */
+async function settleWith(user: User, where: string, value: string, at: number, reply: string) {
   const open = all<{ record_id: string; received: number }>(
-    "SELECT record_id, received FROM twin_predictions WHERE user_id = ? AND chat_id = ? AND outcome IS NULL AND source = 'live' AND received < ?", user.id, chat, at);
+    `SELECT record_id, received FROM twin_predictions WHERE user_id = ? AND ${where} AND outcome IS NULL AND source = 'live' AND received < ?`, user.id, value, at);
   if (!open.length) return;
   const t = twinOf(user.id);
   for (const p of open) {
@@ -490,11 +497,31 @@ async function settle(user: User, chat: string, mine: Msg) {
     run("UPDATE twin_predictions SET outcome = 'replied', gap_min = ? WHERE record_id = ?", gap, p.record_id);
     if (t?.base && t.tables) {
       const tbl = tablesOf(t as { tables: string }).predictions;
-      await updateRecord(user, t.base, tbl.id, p.record_id, toFields(tbl, { actual: 'replied', gap, actualReply: asText(mine).text }))
+      await updateRecord(user, t.base, tbl.id, p.record_id, toFields(tbl, { actual: 'replied', gap, actualReply: reply }))
         .catch((e) => console.warn('[twin] prediction not updated:', (e as Error).message));
     }
   }
 }
+
+/**
+ * A reaction (Lark's 表情回复) is a reply: predictions still open for messages the person reacted to are settled with
+ * it. Reactions are not messages, so search does not find them; the open predictions of the last day are looked at.
+ */
+async function settleByReactions(user: User) {
+  const open = all<{ message_id: string; received: number }>(
+    "SELECT message_id, received FROM twin_predictions WHERE user_id = ? AND outcome IS NULL AND source = 'live' AND received > ? ORDER BY received DESC LIMIT 20",
+    user.id, now() - SETTLE_AFTER_MS - 3600_000);
+  await inBatches(open, async (p) => {
+    const mine = (await reactionsOf(user, p.message_id)).filter((r) => r.me).sort((a, b) => a.at - b.at)[0];
+    if (mine) await settleWith(user, 'message_id = ?', p.message_id, Math.max(mine.at, p.received + 1), `[reaction: ${mine.emoji}]`);
+  });
+}
+
+/** A message as the agent sees it, with its reactions. */
+const withReactions = async (user: User, ms: Msg[], max = TEXT_MAX) => {
+  const rs = await inBatches(ms, (m) => reactionsOf(user, m.message_id));
+  return ms.map((m, i) => ({ ...shown(m, user.id, max), ...(rs[i].length ? { reactions: reactionWords(rs[i]) } : {}) }));
+};
 
 /**
  * The person's past conversations, for the twin's cold start and replay. Without chat_id: the conversations of the
@@ -519,7 +546,7 @@ export async function messageHistory(user: User, a: { days?: number; chat_id?: s
     run('INSERT INTO lark_reads (user_id, chat_id, at) VALUES (?, ?, ?)', user.id, a.chat_id, now());
     return {
       chat_id: a.chat_id, days, timezone: config.timezone, content_note: UNTRUSTED,
-      messages: items.filter((m) => !m.deleted && m.sender?.sender_type !== 'app').map((m) => shown(m, user.id)),
+      messages: await withReactions(user, items.filter((m) => !m.deleted && m.sender?.sender_type !== 'app')),
       ...(page ? { next_page_token: page } : {}),
     };
   }
@@ -723,8 +750,8 @@ async function settleOverdue(user: User) {
   const t = twinOf(user.id);
   if (!t?.base || !t.tables) return;
   const tbl = tablesOf(t as { tables: string }).predictions;
-  const due = all<{ record_id: string; chat_id: string; received: number }>(
-    "SELECT record_id, chat_id, received FROM twin_predictions WHERE user_id = ? AND outcome IS NULL AND source = 'live' AND received < ? LIMIT 50",
+  const due = all<{ record_id: string; chat_id: string; message_id: string; received: number }>(
+    "SELECT record_id, chat_id, message_id, received FROM twin_predictions WHERE user_id = ? AND outcome IS NULL AND source = 'live' AND received < ? LIMIT 50",
     user.id, now() - SETTLE_AFTER_MS);
   for (const p of due) {
     const { ids } = await searchIds(user, { chat_ids: [p.chat_id], from_ids: [user.id], start_time: sec(p.received), end_time: sec(p.received + SETTLE_AFTER_MS) }, 1);
@@ -733,7 +760,9 @@ async function settleOverdue(user: User) {
       const m = await getMessage(user, id);
       if (m && Number(m.create_time) > p.received && (!first || Number(m.create_time) < Number(first.create_time))) first = m;
     }
-    if (first) await settle(user, p.chat_id, first);
+    const reacted = (await reactionsOf(user, p.message_id)).filter((r) => r.me).sort((a, b) => a.at - b.at)[0];
+    if (reacted && (!first || reacted.at < Number(first.create_time))) await settleWith(user, 'message_id = ?', p.message_id, Math.max(reacted.at, p.received + 1), `[reaction: ${reacted.emoji}]`);
+    else if (first) await settle(user, p.chat_id, first);
     else {
       run("UPDATE twin_predictions SET outcome = 'none' WHERE record_id = ?", p.record_id);
       await updateRecord(user, t.base, tbl.id, p.record_id, toFields(tbl, { actual: 'none' })).catch(() => {});
@@ -1037,6 +1066,59 @@ async function round() {
       }).catch((e) => console.warn('[twin] weekly brief not sent:', (e as Error).message));
     }
   }
+}
+
+// ---------------------------------------------------------------- the person's dashboard
+/**
+ * The twin in numbers, for the person alone (their Me page's dashboard): the last 7 days, accuracy and volume per day
+ * over 30 days, per scenario, right and wrong calls, how close the replies were, and the changes to its documents.
+ * Counts only, from what the hub keeps; never message text.
+ */
+export async function twinDashboard(user: User) {
+  const t = twinOf(user.id);
+  const at = now();
+  const since = at - 30 * DAY;
+  const preds = all<{ received: number; should_reply: number; outcome: string | null; scenario: string; closeness: number | null; source: string; reviewed: number }>(
+    'SELECT received, should_reply, outcome, scenario, closeness, source, reviewed FROM twin_predictions WHERE user_id = ? AND received > ?', user.id, since);
+  const settled = preds.filter((p) => p.outcome);
+  const right = (p: typeof preds[number]) => (p.should_reply ? p.outcome !== 'none' : p.outcome === 'none');
+  const rate = (xs: typeof preds) => { const s = xs.filter((p) => p.outcome); return s.length ? s.filter(right).length / s.length : null; };
+  const dayOf = (ms: number) => localTime(ms).slice(0, 10);
+  const days = Array.from({ length: 30 }, (_, i) => dayOf(at - (29 - i) * DAY));
+  const week = preds.filter((p) => p.received > at - 7 * DAY);
+  const scored = week.filter((p) => p.closeness != null);
+  const scenarios = [...new Set(settled.map((p) => p.scenario).filter(Boolean))]
+    .map((name) => { const xs = settled.filter((p) => p.scenario === name); return { name, n: xs.length, accuracy: xs.filter(right).length / xs.length }; })
+    .sort((a, b) => b.n - a.n).slice(0, 8);
+  const memories = t?.base && t.tables && twinOn(user.id) && granted(user.id)
+    ? await memoryRows(user, t as TwinRow & { base: string; tables: string }).then((r) => r.length, () => null) : null;
+  return {
+    on: twinOn(user.id), setUp: !!t?.base, timezone: config.timezone,
+    lastCheck: t?.last_check ?? null, stalled: !!(t?.last_check && at - t.last_check > STALLED_MS),
+    week: {
+      conversations: get<{ n: number }>('SELECT COUNT(DISTINCT chat_id) AS n FROM twin_seen WHERE user_id = ? AND at > ?', user.id, at - 7 * DAY)!.n,
+      predictions: week.length, accuracy: rate(week),
+      closeness: scored.length ? scored.reduce((s, p) => s + p.closeness!, 0) / scored.length : null,
+    },
+    memories, toReview: preds.filter((p) => p.outcome && !p.reviewed).length,
+    // a day's accuracy is over the 7 days ending that day: one day holds too few answers to say much
+    days: days.map((d, i) => {
+      const xs = preds.filter((p) => dayOf(p.received) === d);
+      const window = new Set(days.slice(Math.max(0, i - 6), i + 1));
+      return { day: d, predictions: xs.length, accuracy: rate(preds.filter((p) => window.has(dayOf(p.received)))) };
+    }),
+    scenarios,
+    calls: {
+      replyReplied: settled.filter((p) => p.should_reply && p.outcome !== 'none').length,
+      replyNone: settled.filter((p) => p.should_reply && p.outcome === 'none').length,
+      noReplyReplied: settled.filter((p) => !p.should_reply && p.outcome !== 'none').length,
+      noReplyNone: settled.filter((p) => !p.should_reply && p.outcome === 'none').length,
+    },
+    closeness: [1, 2, 3, 4, 5].map((v) => preds.filter((p) => p.closeness === v).length),
+    sources: { live: preds.filter((p) => p.source === 'live').length, replay: preds.filter((p) => p.source === 'replay').length },
+    changes: all<{ doc: string; state: string; at: number }>(
+      "SELECT doc, state, at FROM twin_proposals WHERE user_id = ? AND at > ? AND state IN ('applied', 'auto', 'reverted', 'declined', 'waiting') ORDER BY at DESC LIMIT 20", user.id, since),
+  };
 }
 
 // ---------------------------------------------------------------- the hub's watch over the twin

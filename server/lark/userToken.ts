@@ -91,7 +91,8 @@ export function imAllowed(userId: string, path: string, method = 'GET'): boolean
   if (path.startsWith('/search/v2/message')) return method === 'POST' && twin();
   if (!path.startsWith('/im/')) return true;
   if (method === 'POST' && (path.startsWith('/im/v1/messages?') || path === '/im/v1/files' || path === '/im/v1/images')) return true;
-  const read = (method === 'GET' && (/^\/im\/v1\/messages\?/.test(path) || /^\/im\/v1\/messages\/[^/?]+\/resources\/[^/?]+\?/.test(path) || path.startsWith('/im/v1/chats/search?')))
+  const read = (method === 'GET' && (/^\/im\/v1\/messages\?/.test(path) || /^\/im\/v1\/messages\/[^/?]+\/resources\/[^/?]+\?/.test(path)
+    || /^\/im\/v1\/messages\/[^/?]+\/reactions\?/.test(path) || path.startsWith('/im/v1/chats/search?')))
     || (method === 'POST' && path.startsWith('/im/v1/chat_p2p/batch_query?'));
   // the twin also looks up single messages its search found, and the chats they are in
   const twinRead = method === 'GET' && (/^\/im\/v1\/messages\/[^/?]+\?user_id_type=open_id$/.test(path) || /^\/im\/v1\/chats\/oc_[\w-]+\?user_id_type=open_id$/.test(path));

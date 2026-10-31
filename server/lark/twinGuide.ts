@@ -16,7 +16,7 @@ Your conversation does not carry the twin's state; the hub and the user's Lark d
 
 ## 1. Cold start (once; resume from what progress says is missing)
 1. setup_twin.
-2. my_message_history {days: 30} lists the user's conversations; read each with my_message_history {chat_id}. Learn from pairs: what others said → how the user answered (tone, length, to whom), and from messages the user left unanswered.
+2. my_message_history {days: 30} lists the user's conversations; read each with my_message_history {chat_id}. Learn from pairs: what others said → how the user answered (tone, length, to whom; a reaction counts as an answer), and from messages the user left unanswered (no reply and no reaction).
 3. suggest_twin_doc_change for "profile" and "style" with first drafts (the user approves them).
 4. remember the first memories: people (role, how the user talks to them), projects, preferences. One fact per memory, with source and, when it can change, valid_until.
 5. Replay: for messages from the last part of that history, record_prediction with replay {replied, reply, gap_minutes} taken from what the user actually did. This gives a first accuracy per scenario.
@@ -25,7 +25,7 @@ Your conversation does not carry the twin's state; the hub and the user's Lark d
 1. check_new_messages. Nothing new → stop.
 2. For each conversation: twin_context {colleague: with_id, chat_id} (profile, style, index of relevant memories). recall_memory for details; read_lark_messages if you need more of the conversation; search_lark_docs / read_lark_doc, list_calendar_events, Linear or Metabase tools when the message refers to them (read, never copy documents into memory: remember where it is and the key conclusion).
 3. If you_replied is true, the user already answered: just learn.
-4. For each message that matters, record_prediction {message_id, should_reply, urgency, reply, scenario}. Scenario is a short, stable label (e.g. "schedule", "status question", "asks for a file"): accuracy is counted per scenario.
+4. For each message that matters, record_prediction {message_id, should_reply, urgency, reply, scenario}. An emoji reaction (Lark's 表情回复, shown as reactions: ["OK (me)"]) is a reply in itself, and often all the user answers: when that is what they would do, predict should_reply true with reply "[reaction: OK]". Never read "no written reply" as "not acknowledged" when the user reacted. Scenario is a short, stable label (e.g. "schedule", "status question", "asks for a file"): accuracy is counted per scenario.
 5. remember new facts the messages reveal.
 Never send, never call send_lark_message from the patrol.
 

@@ -19,7 +19,7 @@ import { botChats } from './chats.ts';
 import { calendarAppUrl, calendarEvents, today as calendarToday } from './calendar.ts';
 import { messagesStatus, setMessagesOn, setWithoutConfirm } from './messages.ts';
 import { readingStatus, setReadingOn } from './reading.ts';
-import { answerProposal, revertChange, setTwinOn, setTwinSettings, twinStatus } from './twin.ts';
+import { answerProposal, revertChange, setTwinOn, setTwinSettings, twinDashboard, twinStatus } from './twin.ts';
 
 export const larkApi = new Hono<HubEnv>();
 
@@ -64,6 +64,8 @@ larkApi.post('/lark/reading', async (c) => {
 });
 /** The AI twin in shadow mode: the person's own switch, its settings, and the changes to its documents waiting for them. */
 larkApi.get('/lark/twin', (c) => c.json(twinStatus(c.get('user'))));
+/** The twin's dashboard: the person's own numbers, nobody else's. */
+larkApi.get('/lark/twin/dashboard', async (c) => c.json(await twinDashboard(c.get('user'))));
 larkApi.post('/lark/twin', async (c) => {
   const b = await body<{ on?: boolean; groupMode?: 'mentions' | 'all'; unwatch?: string[] }>(c);
   if (b.on !== undefined) setTwinOn(c.get('user'), b.on === true);

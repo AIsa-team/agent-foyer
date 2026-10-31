@@ -729,3 +729,22 @@ dialog.kit-dialog .aisa-dialog__head h2 { font-size: var(--aisa-text-lg); }
 .proj-more { font-size: 9px; }
 @media (max-width: 900px) { .proj-two { grid-template-columns: 1fr; } }
 @media (max-width: 640px) { .aisa-todo__tag { display: none; } }
+
+/* the AI twin's dashboard (TwinPage) */
+.twin-patrol { display: flex; align-items: center; gap: 10px; font-size: 14px; }
+.twin-patrol__dot { width: 8px; height: 8px; border-radius: 50%; background: var(--aisa-success, #2f9e6b); flex: none; }
+.twin-patrol.is-off .twin-patrol__dot { background: var(--muted); }
+.twin-tiles { display: grid; gap: 12px; grid-template-columns: repeat(6, minmax(0, 1fr)); }
+@media (max-width: 1180px) { .twin-tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .twin-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.twin-card-title { font-size: 15px; margin: 0 0 4px; }
+.twin-calls { width: 100%; border-collapse: collapse; font-size: 13px; }
+.twin-calls th, .twin-calls td { padding: 10px 12px; border: 1px solid var(--line); text-align: left; vertical-align: top; }
+.twin-calls thead th { font-weight: 500; color: var(--muted); }
+.twin-calls tbody th { font-weight: 500; width: 34%; }
+.twin-calls td b { font-size: 18px; }
+.twin-calls td.is-right { background: var(--surface-2); }
+.twin-changes { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.twin-changes li { display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
+.twin-change { margin-left: auto; font-size: 12px; color: var(--muted); }
+.twin-change--auto, .twin-change--applied { color: var(--fg); }

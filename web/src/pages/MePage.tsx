@@ -1,5 +1,5 @@
 import { useState, type ReactNode } from 'react';
-import { useNavigate } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { api, type Agent, type AppInfo, type SkillInfo } from '../api';
 import { useI18n, type MessageKey } from '../i18n';
 import { connectPrompt, publishPrompt } from '../prompts';
@@ -147,6 +147,7 @@ function TwinFeature() {
       </p>
       {ready && data.links && (
         <p className="small" style={{ margin: 0, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          <Link to="/me/twin" style={{ textDecoration: 'underline', fontWeight: 500 }}>{t('me.twin.dashboard')}</Link>
           {([['memory', 'me.twin.memory'], ['profile', 'me.twin.profile'], ['style', 'me.twin.style']] as const).map(([k, label]) => data.links![k] && (
             <a key={k} href={data.links![k]!} target="_blank" rel="noreferrer" style={{ textDecoration: 'underline' }}>{t(label)}</a>
           ))}
