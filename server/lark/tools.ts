@@ -7,7 +7,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { appUrl, config } from '../config.ts';
 import type { User } from '../db.ts';
-import type { Answer } from '../mcp.ts';
+import type { ToolKit } from '../integration.ts';
 import { UserError } from '../i18n/index.ts';
 import * as apps from '../apps/service.ts';
 import * as appLark from '../apps/larkApi.ts';
@@ -24,16 +24,6 @@ import { inlineFile, sendOrPrepare, sendPrepared, type FileRef, type InlineFile 
 import { findChats, nameOf, readMessages } from './reading.ts';
 import * as twin from './twin.ts';
 import { TWIN_GUIDE } from './twinGuide.ts';
-
-/** What a group of tools needs from the server being built: the person, their language and the result wrapper. */
-export interface ToolKit {
-  server: McpServer;
-  user: User;
-  locale: string;
-  /** Wraps a tool; it may ask the person a yes or no in their agent's app (null: that app cannot show it). */
-  guard: <A>(fn: (args: A, ask: (message: string) => Promise<Answer>) => Promise<unknown> | unknown) => (args: A) => Promise<{ content: { type: 'text'; text: string }[]; isError?: boolean }>;
-  resolveColleagues: (refs: string[]) => string[];
-}
 
 /** Whether the person connected their Lark data, and looking inside a Base or spreadsheet. */
 export function larkDataTools({ server, user, guard }: ToolKit) {

@@ -37,8 +37,14 @@ pnpm test       # typecheck + data features end to end; run before every pull re
     schedules the sync (`server/directory.ts`);
   - kinds of data source read as each viewer: a `SourceKind` (`server/data/kinds.ts`) recognises a link, checks it,
     reads fields and rows as the viewer, and can keep shared copies fresh (Lark Base: `server/lark/baseSource.ts`);
-  - its own agent tools and API routes, registered only when it is on (Lark: `server/lark/tools.ts`, `routes.ts`).
+  - everything else it brings as an integration (below: Lark's is `server/lark/integration.ts`).
   Sign-in providers live in `server/auth/`, message senders behind `server/notify.ts`.
+- **A service the hub has its own code for** (GitHub, Google, Linear, and Lark's own parts) is an integration: one
+  module (`server/<service>/integration.ts`, the shape is in `server/integration.ts`) listed in
+  `server/integrations.ts`. It can bring linking a person's account (the hub runs `/auth/<id>/connect` and
+  `/auth/<id>/callback` for it), routes under `/api` and other browser routes (webhooks, consent pages), agent tools, a
+  mailbox for apps' email drafts (picked with `MAIL_DRAFTS=<id>`), a paragraph for the agents' instructions, and
+  background work. The core walks the list; adding a service never touches `api.ts`, `mcp.ts` or `index.ts`.
 - **A system read with one shared key** (Metabase today) is a connector in `server/data/connectors/`: test the key,
   browse items, fetch rows; optionally dashboards to import, read-only SQL, and its own MCP server.
 - **Another tool's MCP server** needs no code: admins add it on the admin page (each person's own OAuth, or a data

@@ -5,7 +5,7 @@
  */
 import { config } from './config.ts';
 import { all } from './db.ts';
-import { githubEnabled } from './github/app.ts';
+import { integrationEnabled } from './integrations.ts';
 
 type Counts = Map<string, number>;
 const counts = (sql: string, ...params: (string | number)[]): Counts =>
@@ -26,7 +26,7 @@ export function profileRadar(userId: string): { axes: Axis[]; people: number } {
   const kinds = [
     config.lark.enabled && 'SELECT user_id AS id FROM lark_tokens',
     config.mailDrafts === 'google' && 'SELECT user_id AS id FROM google_tokens',
-    githubEnabled() && 'SELECT id FROM users WHERE github_login IS NOT NULL',
+    integrationEnabled('github') && 'SELECT id FROM users WHERE github_login IS NOT NULL',
   ].filter(Boolean) as string[];
 
   const axes: [string, Counts, number?][] = [

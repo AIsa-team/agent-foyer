@@ -12,7 +12,7 @@ import { canAccessApp } from './apps/access.ts';
 import { fetchFromApp } from './gateway.ts';
 import { pick as pickText } from './library.ts';
 import { CHART_KINDS, querySchema } from './data/query.ts';
-import { githubEnabled } from './github/app.ts';
+import { integrationEnabled } from './integrations.ts';
 import { canReadSource, type SourceRow } from './data/sources.ts';
 import { sourceKind } from './channels.ts';
 
@@ -182,7 +182,7 @@ export function parseLayout(raw: unknown): Layout {
       throw new UserError('err.home.badLayout', { details: `modules.${i}.kind: "${m.kind}" cannot use a data source (use ${CHART_KINDS.join(', ')})` });
     }
     if ((m.type === 'okr' || m.type === 'agenda') && !config.lark.enabled) throw new UserError('err.lark.disabled');
-    if (m.type === 'github' && !githubEnabled()) throw new UserError('err.github.disabled');
+    if (m.type === 'github' && !integrationEnabled('github')) throw new UserError('err.github.disabled');
   });
   return r.data;
 }

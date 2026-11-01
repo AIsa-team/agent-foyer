@@ -8,7 +8,6 @@ import { appUrl, config, paths } from './config.ts';
 import { verifyToken } from './crypto.ts';
 import { api } from './api.ts';
 import { authRoutes } from './auth/routes.ts';
-import { githubHook } from './github/hook.ts';
 import { authenticateBearer, MCP_PATH, oauth, wwwAuthenticate } from './auth/oauth.ts';
 import { seedDevUsers } from './auth/users.ts';
 import { handleMcp } from './mcp.ts';
@@ -20,16 +19,14 @@ import { requestLocale, tr } from './i18n/index.ts';
 import { handleAppRequest, handleAppUpgrade, slugFromHost } from './gateway.ts';
 import { startAlertScheduler } from './data/alerts.ts';
 import { startCheckScheduler } from './data/checks.ts';
-import { startLarkEvents } from './lark/events.ts';
-import { startTwin } from './lark/twin.ts';
 import { directoryProvider, syncDirectory } from './directory.ts';
 import { sourceKinds } from './channels.ts';
 import { startConnectorRefresher } from './data/sources.ts';
+import { enabledIntegrations, integrations } from './integrations.ts';
+import { connectRoutes } from './auth/connect.ts';
 import { startBoardSync } from './data/importBoard.ts';
 import { run, now } from './db.ts';
 import { pruneReads } from './cache.ts';
-import { fetchMessageFile } from './lark/reading.ts';
-import { fetchDriveFile } from './lark/files.ts';
 
 seedDevUsers();
 reconcileInterruptedBuilds();
@@ -48,7 +45,11 @@ app.use('*', async (c, next) => {
 
 app.route('/', oauth);
 app.route('/', authRoutes);
-app.route('/', githubHook);
+// each outside service's own browser routes: webhooks, consent pages, file links (integrations.ts)
+for (const i of integrations) i.web?.(app);
+// each outside service's own /api routes and account linking (integrations.ts), wired here once every module is loaded
+for (const i of integrations) i.api?.(api);
+connectRoutes(app, integrations);
 app.route('/api', api);
 
 /** The largest request an agent may send: a 30 MB file handed over in base64, with room to spare. */
@@ -73,8 +74,6 @@ app.put('/upload/:id', async (c) => {
 });
 
 // a file from a Lark message, fetched as the person a read_lark_messages link was made for (lark/reading.ts)
-app.get('/lark-file/:message/:key', (c) => fetchMessageFile(c.req.param('message'), c.req.param('key'), new URL(c.req.url).searchParams));
-app.get('/lark-drive-file/:token', (c) => fetchDriveFile(c.req.param('token'), new URL(c.req.url).searchParams));
 
 app.get('/skills/:slug/:file{v[0-9]+\\.tgz}', (c) => {
   const slug = c.req.param('slug');
@@ -185,8 +184,7 @@ startAlertScheduler().unref();
 startCheckScheduler().unref();
 for (const k of sourceKinds()) k.start?.();
 startConnectorRefresher();
-startLarkEvents();
-startTwin();
+for (const i of enabledIntegrations()) i.start?.();
 startBoardSync();
 if (directoryProvider()) {
   // keep departments and colleagues in step with the company's platform (the admin page can still sync on demand)

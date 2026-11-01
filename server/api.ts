@@ -5,12 +5,6 @@ import { homePulse } from './pulse.ts';
 import { config, loginName } from './config.ts';
 import { messenger } from './notify.ts';
 import { mailboxName } from './mail.ts';
-import { forgetGoogle, googleConnection, googleConnectUrl } from './google/auth.ts';
-import { githubEnabled } from './github/app.ts';
-import { githubConnectUrl, unlinkGitHub } from './github/link.ts';
-import { contributions } from './github/contributions.ts';
-import { linearEnabled, linearStatus, unlinkLinear } from './linear/link.ts';
-import { commentOnIssue, createIssue, forgetProjects, getIssue, getProject, listProjects, myIssues, postProjectUpdate, updateIssue } from './linear/projects.ts';
 import * as services from './services/index.ts';
 import * as ai from './ai.ts';
 import { all, get, now, run, type App, type User } from './db.ts';
@@ -39,7 +33,8 @@ import * as boards from './boards.ts';
 import { departmentPage, directoryProvider, organisation, search, syncDirectory } from './directory.ts';
 import { isSupportedLocale, tr, UserError } from './i18n/index.ts';
 import { body, localeOf, requireAdmin, type HubEnv } from './http.ts';
-import { LARK_ONLY, larkAdminSettings, larkApi, larkLinks } from './lark/routes.ts';
+import { larkAdminSettings, larkLinks } from './lark/routes.ts';
+import { integrations as integrationList } from './integrations.ts';
 
 export const api = new Hono<HubEnv>();
 
@@ -59,9 +54,7 @@ api.use('*', async (c, next) => {
 
 
 
-// what only exists when the hub signs in with Lark (server/lark/routes.ts); without it those paths say Lark is off
-if (config.lark.enabled) api.route('/', larkApi);
-else for (const p of LARK_ONLY) api.use(p, () => { throw new UserError('err.lark.disabled'); });
+
 
 api.onError((e, c) => {
   // `code` lets the UI react to specific cases, e.g. offer the "connect Lark data" button
@@ -79,7 +72,7 @@ api.get('/me', (c) => {
       url: config.hubUrl, mcpUrl: config.hubUrl + MCP_PATH, mcpName: config.mcpName, appsDomain: config.appsDomain, companyName: config.companyName,
       accent: config.accent || null, devLogin: config.devLogin, login: loginName,
       // lark: Base data, OKRs, directory, apps acting in Lark; messages: alerts can reach people outside the hub
-      features: { lark: config.lark.enabled, directory: !!directoryProvider(), messages: !!messenger, github: githubEnabled(), linear: linearEnabled() },
+      features: { ...Object.fromEntries(integrationList.map((i) => [i.id, i.enabled()])), directory: !!directoryProvider(), messages: !!messenger },
       /** where apps save email drafts ("Gmail", "Lark Mail"), or null */
       mailbox: mailboxName() || null,
     },
@@ -182,59 +175,6 @@ api.delete('/admin/services/:id', (c) => {
 });
 api.get('/admin/services/:id/tools', async (c) => c.json({ tools: await services.adminTools(c.get('user'), c.req.param('id')) }));
 
-// ---- Linear and the 项目 page
-api.get('/linear/status', (c) => c.json(linearStatus(c.get('user'))));
-api.post('/linear/disconnect', (c) => {
-  unlinkLinear(c.get('user'));
-  forgetProjects(c.get('user'));
-  return c.json({ ok: true });
-});
-api.get('/projects', async (c) => {
-  const u = c.get('user');
-  const status = linearStatus(u);
-  if (!status.available || !status.connected) return c.json({ status, projects: [] });
-  return c.json({ status, projects: await listProjects(u) });
-});
-api.get('/projects/my-issues', async (c) => c.json(await myIssues(c.get('user'))));
-api.get('/projects/:id', async (c) => c.json(await getProject(c.get('user'), c.req.param('id'))));
-api.post('/projects/:id/issues', async (c) => {
-  const b = await body<{ teamId: string; title: string; description?: string; assigneeId?: string | null; priority?: number; milestoneId?: string | null; dueDate?: string | null }>(c);
-  return c.json(await createIssue(c.get('user'), c.req.param('id'), { ...b, teamId: String(b.teamId ?? ''), title: String(b.title ?? '') }));
-});
-api.post('/projects/:id/updates', async (c) => {
-  const b = await body<{ body: string; health: string }>(c);
-  return c.json(await postProjectUpdate(c.get('user'), c.req.param('id'), { body: String(b.body ?? ''), health: String(b.health ?? '') }));
-});
-api.get('/linear/issues/:id', async (c) => c.json(await getIssue(c.get('user'), c.req.param('id'))));
-api.patch('/linear/issues/:id', async (c) => c.json(await updateIssue(c.get('user'), c.req.param('id'), await body<{ stateId?: string; assigneeId?: string | null; priority?: number; dueDate?: string | null }>(c))));
-api.post('/linear/issues/:id/comments', async (c) => {
-  const b = await body<{ body: string }>(c);
-  return c.json(await commentOnIssue(c.get('user'), c.req.param('id'), String(b.body ?? '')));
-});
-
-api.get('/github/status', (c) => {
-  const u = c.get('user');
-  return c.json({ available: githubEnabled(), org: config.github.org, login: u.github_login ?? null, connectUrl: githubConnectUrl('/me') });
-});
-// the viewer's own contribution calendar (home module); never someone else's, since the hub reads every repository
-api.get('/github/contributions', async (c) => {
-  const u = c.get('user');
-  if (!githubEnabled()) throw new UserError('err.github.disabled');
-  if (!u.github_login) return c.json({ linked: false, connectUrl: githubConnectUrl('/') });
-  const weeks = Math.min(53, Math.max(4, Number(c.req.query('weeks') ?? 52) || 52));
-  return c.json({ linked: true, ...(await contributions(u, weeks)) });
-});
-api.post('/github/disconnect', (c) => {
-  unlinkGitHub(c.get('user'));
-  return c.json({ ok: true });
-});
-
-// ---- Google: each person's own connection, for apps that save Gmail drafts ----
-api.get('/google/status', (c) => c.json({ ...googleConnection(c.get('user').id), available: config.mailDrafts === 'google', connectUrl: googleConnectUrl('/me') }));
-api.post('/google/disconnect', (c) => {
-  forgetGoogle(c.get('user').id);
-  return c.json({ ok: true });
-});
 api.get('/data/sources', (c) => c.json({ sources: dataSources.listSources(localeOf(c), c.get('user')) }));
 api.post('/data/module', async (c) => {
   const b = await body<{ source?: string; query?: unknown; kind?: string }>(c);

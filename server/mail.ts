@@ -4,22 +4,24 @@
  */
 import { config } from './config.ts';
 import type { User } from './db.ts';
-import { createGmailDraft } from './google/gmail.ts';
-import { googleConnectUrl, googleConnection } from './google/auth.ts';
-import { createDraft as createLarkDraft } from './lark/mail.ts';
+import { integrations } from './integrations.ts';
 import type { Draft } from './eml.ts';
 
 export type { Draft };
 
-/** "Gmail" or "Lark Mail", for the consent screen and the app page. */
-export const mailboxName = () => (config.mailDrafts === 'google' ? 'Gmail' : config.mailDrafts === 'lark' ? 'Lark Mail' : '');
+/** The mailbox the company picked (MAIL_DRAFTS names the integration that brings it), if any. */
+const mailbox = () => integrations.find((i) => i.id === config.mailDrafts)?.mailbox;
 
-/** Where to send the person before drafts can be saved for them (Lark's mail access is part of "connect Lark data"). */
+/** "Gmail" or "Lark Mail", for the consent screen and the app page. */
+export const mailboxName = () => mailbox()?.name ?? '';
+
+/** Where to send the person before drafts can be saved for them. */
 export function mailConnectUrl(user: User, returnPath: string): string | null {
-  if (config.mailDrafts === 'google' && !googleConnection(user.id).connected) return googleConnectUrl(returnPath);
-  return null;
+  return mailbox()?.connectUrl(user, returnPath) ?? null;
 }
 
 export async function saveDraft(user: User, d: Draft): Promise<{ draftId: string; url?: string }> {
-  return config.mailDrafts === 'google' ? createGmailDraft(user, d) : createLarkDraft(user, d);
+  const box = mailbox();
+  if (!box) throw new Error('no mailbox for drafts on this hub (MAIL_DRAFTS)');
+  return box.saveDraft(user, d);
 }

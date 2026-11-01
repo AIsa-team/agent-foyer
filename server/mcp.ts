@@ -17,9 +17,6 @@ import { querySchema, toStat, type Query } from './data/query.ts';
 import * as checks from './data/checks.ts';
 import * as feedback from './feedback.ts';
 import * as collab from './collab.ts';
-import { githubEnabled } from './github/app.ts';
-import { githubActivity } from './github/activity.ts';
-import { githubConnectUrl } from './github/link.ts';
 import * as boards from './boards.ts';
 import { createUpload, type UploadPurpose } from './uploads.ts';
 import { tr, UserError, type Msg } from './i18n/index.ts';
@@ -32,13 +29,16 @@ import * as appRequests from './requests.ts';
 import * as services from './services/index.ts';
 import * as connectors from './data/connectors/index.ts';
 import { importBoard } from './data/importBoard.ts';
-import { larkAppTools, larkDataTools, larkTwinTools, larkWorkTools, type ToolKit } from './lark/tools.ts';
+import type { ToolKit } from './integration.ts';
+import { enabledIntegrations, integrationEnabled } from './integrations.ts';
 
 const LARK = config.lark.enabled;
 // where hub.lark.mailDraft puts drafts on this hub (Gmail or Lark Mail), so agents describe it right
 const MESSAGES = !!messenger;
 
-const INSTRUCTIONS = `This is the ${config.companyName} company hub (colleagues also call it 中台 or 公司中台; "publish to the hub / 发布到中台" means this server). It lets the user publish web apps to the company server and share/install Skills. When the user mentions the hub, use these tools; do not ask for its address.
+// written on first use: the integrations' paragraphs are only known once every module has loaded
+let instructionsText: string | null = null;
+const instructions = () => (instructionsText ??= `This is the ${config.companyName} company hub (colleagues also call it 中台 or 公司中台; "publish to the hub / 发布到中台" means this server). It lets the user publish web apps to the company server and share/install Skills. When the user mentions the hub, use these tools; do not ask for its address.
 
 Language: the team is multilingual and the hub UI is shown in ${localeCodes().join(', ')}. Always talk to the user in the language they use with you.
 Whenever you publish or update an app or a Skill, pass \`localized\` with a short display name and a one-sentence description for EVERY hub language (${localeCodes().join(', ')}), translating them yourself, so colleagues see the listing in their own language. Do not ask the user to translate; just show them the names you chose. Only this listing text is translated: never translate the Skill content (SKILL.md) or the app itself. Hub messages you receive (errors, notes) are already in the user's hub language.
@@ -69,9 +69,8 @@ Combining (only if an admin turned it on; save_data_source says so otherwise): a
 
 Boards: the Data page holds boards for the whole company or a department (save_board), and each person's own boards (save_board with scope "me", any number, private unless they share them with colleagues, departments or the company); all are built from the same modules as home pages and every number is read as the viewer. Use company and department boards for numbers a team looks at together, someone's own boards for what they put together for themselves, and the home page for their day-to-day view.
 Data quality ("异常项"): the hub can check data sources for records that need fixing. When asked to clean up a table, look at it first (${LARK ? 'inspect_base / ' : ''}inspect_app_data), then work out the business rules with the user: contradictions (paid but no payment date), missing values (signed but no payment method), stale rows (in progress but untouched for 14 days), duplicates (same project twice) and the same value written differently. List the rules for the user to confirm, then save_check each one (it runs at once and shows a sample; tune until the sample is right). Levels: error = definitely wrong, verify = a human must confirm, style = written inconsistently. Set owner_field to the field naming whoever must fix the record (a person field, or names / emails): they see their issues on the issues page and their home page (module {type: "issues"}). Checks rerun every few hours.
-${LARK ? `Lark documents: search_lark_docs finds documents and wiki pages by keyword (only what the user may open); read_lark_doc reads one as Markdown (tables: true adds each table cell by cell, with ids); edit_lark_doc changes the text of cells and paragraphs by those ids or adds Markdown at the end; list_lark_wiki lists the pages under a wiki page (e.g. to find one by its title); create_lark_doc writes Markdown into a new document the user owns (their own space, or under a wiki page / in a folder they give). Files in the wiki or Drive (e.g. an uploaded HTML page) are read with read_lark_doc too; upload_lark_file puts a file there (e.g. an HTML page, which Lark shows as a web page). All of it is done as the user, with their own Lark access. The first time the user writes, they are asked once to let the hub create and edit documents.\n` : ''}${LARK ? `Calendar: list_calendar_events reads the user's own Lark calendar (read-only), e.g. "what meetings do I have this afternoon" or the meetings of a day for a daily report. The first time, the user is asked once to allow reading their calendar. Lark itself reminds people before events; the hub cannot create or change events. The agenda home module {type: "agenda"} shows each viewer their own day.\n` : ''}${LARK ? `Messages: send_lark_message sends a Lark message, and optionally a file, as the user to colleagues (e.g. "send Alex the quote and tell him the meeting moved to three"), once the user turned it on on their Me page; each message ends with a line saying it was sent by the user's AI twin. The user confirms each message: in a question your app shows them (then it is sent in the same call), or, if your app cannot show one, in two steps: a preview with a send_code, then calling again with only that send_code after the user agreed to exactly that message and those recipients (unless the user turned confirming off, then it is sent at once and you tell them what went out). Once the user also turned reading on, read_lark_messages reads one conversation as them (a colleague's replies, a group's recent discussion via find_lark_chat, files people sent them); read only the conversation the user asked about.\n` : ''}${LARK ? `AI twin (分身): when the user asks you to act as their twin or keep an eye on their Lark messages, call twin_guide first and follow it. Phase one is shadow mode: you predict whether and how they would reply (record_prediction) and learn from what they actually did; nothing is sent.\n` : ''}${LARK ? `OKRs: the company tracks goals in Lark OKR. get_okrs reads them with the user's Lark access (default: their own, current period). To show them on a home page, add a module {type: "okr"}; without \`user\` everyone sees their own, so it suits department and company layouts.\n` : ''}
-Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
-Installing a Skill: install_skill returns a download command; run it. Agents that cannot install Skills (no skills folder, e.g. hosted agents or scheduled tasks) use read_skill and follow what it says; a scheduled task that should follow a Skill names it and calls read_skill each run, so it always uses the latest version. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`;
+${enabledIntegrations().map((i) => i.instructions?.() ?? '').join('')}Alerts: save_alert_rule watches one number (a query without groupBy) against a condition (above / below a threshold, or a drop / rise vs the previous date bucket). It is checked on a schedule as its creator and shows on the recipients' home pages (alerts module)${MESSAGES ? `; when it starts or stops firing the hub bot also messages them${LARK ? ' (and optionally a Lark group via chat_id) in Lark' : ''}. Messages are deliberately calm: at most one per rule every few hours, none at night (held until morning), several rules combined into one message, and anyone can opt out on their home page. Unless an admin changes it, the hub only messages hub admins; other recipients see alerts on their home page` : ''}. Ask the user who should be told before saving; recipients will see the numbers, so only add people who should.
+Installing a Skill: install_skill returns a download command; run it. Agents that cannot install Skills (no skills folder, e.g. hosted agents or scheduled tasks) use read_skill and follow what it says; a scheduled task that should follow a Skill names it and calls read_skill each run, so it always uses the latest version. To check for updates, read .hub-skill.json in each installed skill folder and call check_skill_updates.`);
 
 const localizedSchema = () => z.record(z.string(), z.object({ name: z.string().optional(), description: z.string().optional() }))
   .optional()
@@ -100,8 +99,8 @@ const versions = new WeakMap<McpServer, string>();
 export const surfaceVersion = (server: McpServer) => versions.get(server) ?? '';
 
 export function buildMcpServer(user: User, clientId?: string): McpServer {
-  const server = new McpServer({ name: config.mcpName, version: hubVersion }, { instructions: INSTRUCTIONS });
-  const surface: string[] = [INSTRUCTIONS];
+  const server = new McpServer({ name: config.mcpName, version: hubVersion }, { instructions: instructions() });
+  const surface: string[] = [instructions()];
   const register = server.registerTool.bind(server);
   server.registerTool = ((name: string, def: { description?: string; inputSchema?: z.ZodRawShape }, cb: never) => {
     let params = '';
@@ -516,7 +515,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     myDepartments: homepage.userDepartments(user, locale),
     editableDepartments: homepage.editableDepartments(user, locale),
     apps: apps.listAppsFor(user, locale).filter((x) => x.canOpen).map((x) => ({ slug: x.slug, name: x.name })),
-    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Keep each module's id. A person's page is built on their department's or the company's layout: saving scope me keeps that link (shared modules left out become hidden for them, widths remembered, anything new or changed is theirs), so later company changes still reach them; people can also hide, move and resize modules on the page themselves. Modules on data a viewer may not see are left out for them. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card; the agenda module shows each viewer their own Lark calendar for today (or a few days).' : ' (The okr module needs Lark and is not available on this hub.)'}${githubEnabled() ? ' The github module shows the viewer\'s own GitHub contributions as a calendar heatmap (each person sees their own).' : ''} Always preview_homepage and send the user the link; save only after they confirm.`,
+    tip: `Modules render in order on a 6-column grid (full/half/third). Text fields are per language; fill every hub language. Keep each module's id. A person's page is built on their department's or the company's layout: saving scope me keeps that link (shared modules left out become hidden for them, widths remembered, anything new or changed is theirs), so later company changes still reach them; people can also hide, move and resize modules on the page themselves. Modules on data a viewer may not see are left out for them. Data can be static, come from an app via source {app, path, pick}, or from a registered data source via source {data, query} (see list_data_sources). The alerts module lists alert rules the viewer owns or is told about.${LARK ? ' The okr module shows Lark OKRs (default: each viewer their own) as a pace card; the agenda module shows each viewer their own Lark calendar for today (or a few days).' : ' (The okr module needs Lark and is not available on this hub.)'}${integrationEnabled('github') ? ' The github module shows the viewer\'s own GitHub contributions as a calendar heatmap (each person sees their own).' : ''} Always preview_homepage and send the user the link; save only after they confirm.`,
   })));
 
   server.registerTool('preview_homepage', {
@@ -535,7 +534,6 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   }, guard((a: { scope: homepage.Scope; department_id?: string }) => homepage.resetHome(user, a.scope, a.department_id)));
 
   // ---- data sources (Lark Base tables or data apps), alert rules ----
-  if (LARK) larkDataTools(kit);
 
   // the same things as resources: some agents look there first for what a server offers
   server.registerResource('data-sources', 'hub://data-sources', {
@@ -547,7 +545,7 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     title: `How to use the ${config.companyName} hub`,
     description: 'What the hub offers and how to use it: company data, apps, Skills, Lark documents.',
     mimeType: 'text/markdown',
-  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: INSTRUCTIONS }] }));
+  }, async (uri) => ({ contents: [{ uri: uri.href, mimeType: 'text/markdown', text: instructions() }] }));
 
   server.registerTool('list_data_sources', {
     description: 'Data sources registered in the hub (id, title, what it counts, link, owner): Lark Base tables, data apps, and items read through a data connection (e.g. Metabase questions; only those the user may see are listed). Start here when the user asks about company numbers; the description says how each one counts (who is left out, time zone, window).',
@@ -699,7 +697,6 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
   }, guard((a: { id: string }) => boards.deleteBoard(user, a.id)));
 
   // ---- apps that use Lark as the person using them ----
-  if (LARK) larkAppTools(kit);
 
   // ---- data checks ("异常项") ----
   server.registerTool('save_check', {
@@ -742,26 +739,8 @@ export function buildMcpServer(user: User, clientId?: string): McpServer {
     return { counts: r.counts, lastRun: r.lastRun, checks: r.checks.map((c) => ({ id: c.id, title: c.title, level: c.level, rows: keep(c.rows).map(({ owners, ...x }) => ({ ...x, owners: owners.map((o) => o.name) })) })).filter((c) => c.rows.length) };
   }));
 
-  if (LARK) larkWorkTools(kit);
-  if (LARK) larkTwinTools(kit);
-
-  if (githubEnabled()) {
-    server.registerTool('github_activity', {
-      description: `What someone did on GitHub (organisation ${config.github.org}) in a time window: commits they authored (with the branch or pull request when the work is not on the default branch), pull requests they opened or updated (open / merged / closed) and pull requests they reviewed. Use it to write a daily or weekly report, or to see what a colleague is working on. Default: the user, last 24 hours.`,
-      inputSchema: {
-        colleague: z.string().optional().describe('email, name or open_id; default: the user'),
-        since: z.string().optional().describe('ISO date-time, e.g. 2026-10-19T09:00:00+09:00; default: 24 hours ago'),
-        until: z.string().optional().describe('ISO date-time; default: now'),
-      },
-    }, guard(async (a: { colleague?: string; since?: string; until?: string }) => {
-      const person = a.colleague ? all<User>('SELECT * FROM users WHERE id = ?', resolveColleagues([a.colleague])[0])[0] : user;
-      const to = a.until ? Date.parse(a.until) : Date.now();
-      const from = a.since ? Date.parse(a.since) : to - 86_400_000;
-      if (!Number.isFinite(from) || !Number.isFinite(to) || from >= to) throw new UserError('err.github.badWindow');
-      if (!person.github_login) return { linked: false, hint: person.id === user.id ? `Ask the user to link their GitHub account once: ${githubConnectUrl('/me')}` : `${person.name} has not linked a GitHub account in the hub yet.` };
-      return githubActivity(person, from, to);
-    }));
-  }
+  // each outside service's own tools (integrations.ts)
+  for (const i of enabledIntegrations()) i.tools?.(kit);
 
   server.registerTool('install_skill', {
     description: 'Get the download command to install (or update) a skill from the company market.',
