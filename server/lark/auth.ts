@@ -56,13 +56,13 @@ export async function getTenantToken(): Promise<string> {
 
 /** Contacts and departments as Lark returns them. */
 type LarkDept = {
-  open_department_id: string; name: string; parent_department_id?: string; leader_user_id?: string;
-  i18n_name?: { zh_cn?: string; en_us?: string }; leaders?: { leaderType: number; leaderID: string }[];
+  open_department_id: string; name?: string; parent_department_id?: string; leader_user_id?: string;
+  i18n_name?: { zh_cn?: string; en_us?: string }; leaders?: { leaderType: number; leaderID?: string }[];
 };
-type LarkContact = { open_id: string; name: string; en_name?: string; email?: string; enterprise_email?: string; avatar?: { avatar_240?: string } };
+type LarkContact = { open_id: string; name?: string; en_name?: string; email?: string; enterprise_email?: string; avatar?: { avatar_240?: string } };
 /** People are keyed by their Lark open_id; the company email wins over a personal one. */
 const identityOf = (u: LarkContact): Identity => ({
-  id: u.open_id, name: u.name, enName: u.en_name, email: u.enterprise_email || u.email, avatar: u.avatar?.avatar_240,
+  id: u.open_id, name: u.name || u.en_name || u.enterprise_email || u.email || u.open_id, enName: u.en_name, email: u.enterprise_email || u.email, avatar: u.avatar?.avatar_240,
 });
 type Page<K extends string, T> = { data: { [k in K]?: T[] } & { page_token?: string; has_more: boolean } };
 
@@ -80,7 +80,7 @@ async function allPages<K extends string, T>(path: string, key: K, token: string
 /**
  * The company directory as Lark has it, for the hub to keep people and departments in step (see ../directory.ts).
  * Reads only what the app's contact range covers (Lark returns it via /contact/v3/scopes), so it works whether the
- * range is the whole company or a few departments. Needs contact:contact.base:readonly.
+ * range is the whole company or a few departments. Needs contact:contact.base:readonly (and contact:department.base:readonly / contact:department.organize:readonly for department names, parents and leaders).
  */
 export async function readDirectory(): Promise<DirectorySnapshot> {
   const out: DirectorySnapshot = { departments: [], people: [], members: [] };
@@ -103,8 +103,9 @@ export async function readDirectory(): Promise<DirectorySnapshot> {
     const i18n: Record<string, string> = {};
     if (d.i18n_name?.zh_cn) i18n['zh-CN'] = d.i18n_name.zh_cn;
     if (d.i18n_name?.en_us) i18n.en = d.i18n_name.en_us;
+    const name = d.name || d.i18n_name?.zh_cn || d.i18n_name?.en_us || d.open_department_id;
     const leaders = [d.leader_user_id, ...(d.leaders ?? []).map((l) => l.leaderID)].filter((x): x is string => !!x);
-    out.departments.push({ id: d.open_department_id, name: d.name, i18n, parentId: d.parent_department_id ?? null, leaderIds: [...new Set(leaders)] });
+    out.departments.push({ id: d.open_department_id, name, i18n, parentId: d.parent_department_id ?? null, leaderIds: [...new Set(leaders)] });
   };
   for (const dep of scope.departments) {
     try {

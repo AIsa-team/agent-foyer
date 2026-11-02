@@ -43,7 +43,7 @@ export async function syncDirectory(): Promise<number> {
     run(`INSERT INTO departments (id, name, name_i18n, parent_id, leader_ids, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, name_i18n = excluded.name_i18n, parent_id = excluded.parent_id,
            leader_ids = excluded.leader_ids, updated_at = excluded.updated_at`,
-      dep.id, dep.name, dep.i18n && Object.keys(dep.i18n).length ? JSON.stringify(dep.i18n) : null, dep.parentId ?? null, JSON.stringify(dep.leaderIds), now());
+      dep.id, dep.name || dep.id, dep.i18n && Object.keys(dep.i18n).length ? JSON.stringify(dep.i18n) : null, dep.parentId ?? null, JSON.stringify(dep.leaderIds), now());
   }
   for (const p of d.people) upsertUser(p, false);
   for (const m of d.members) {

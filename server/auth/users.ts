@@ -11,6 +11,7 @@ export interface Identity {
 /** Creates or refreshes a person. The first person ever, and anyone listed in HUB_ADMINS, is an admin. */
 export function upsertUser(info: Identity, touch = true): User {
   const email = info.email || null;
+  const name = info.name || info.enName || email || info.id;
   return tx(() => {
     const isFirst = !get('SELECT 1 FROM users LIMIT 1');
     const isConfiguredAdmin = config.admins.includes(info.id) || (!!email && info.emailVerified !== false && config.admins.includes(email));
@@ -20,7 +21,7 @@ export function upsertUser(info: Identity, touch = true): User {
        ON CONFLICT(id) DO UPDATE SET name = excluded.name, en_name = excluded.en_name, email = excluded.email,
          avatar = excluded.avatar, last_seen_at = COALESCE(excluded.last_seen_at, users.last_seen_at),
          role = CASE WHEN ? THEN 'admin' ELSE users.role END`,
-      info.id, info.name, info.enName ?? null, email, info.avatar ?? null,
+      info.id, name, info.enName ?? null, email, info.avatar ?? null,
       isFirst || isConfiguredAdmin ? 'admin' : 'member', now(), touch ? now() : null, isConfiguredAdmin ? 1 : 0,
     );
     return get<User>('SELECT * FROM users WHERE id = ?', info.id)!;
