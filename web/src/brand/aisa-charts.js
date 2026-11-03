@@ -103,6 +103,9 @@ function formatter(fmt = {}, compact = false) {
   if (fmt.style === 'currency') Object.assign(opts, { style: 'currency', currency: fmt.currency ?? 'USD' });
   if (compact && fmt.style !== 'percent') opts.notation = 'compact';
   if (fmt.notation) opts.notation = fmt.notation; // e.g. 'compact': 1.9M in en, 186万 in zh-CN
+  // a short number keeps three significant digits, whatever `decimals` says for the long form: with 0 decimals
+  // 12,500 would otherwise read 1万 next to the 10,000 tick
+  if (opts.notation === 'compact') { delete opts.maximumFractionDigits; delete opts.minimumFractionDigits; opts.maximumSignificantDigits = 3; }
   const nf = new Intl.NumberFormat(locale(), opts);
   return (v) => (v === null || v === undefined || Number.isNaN(v) ? '–' : nf.format(v) + (fmt.unit ? `${fmt.unitSpace === false ? '' : ' '}${fmt.unit}` : ''));
 }
