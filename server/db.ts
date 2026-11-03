@@ -679,6 +679,14 @@ const MIGRATIONS: string[] = [
   ALTER TABLE twin_predictions ADD COLUMN reply_form TEXT;
   ALTER TABLE twin_predictions ADD COLUMN actual_form TEXT;
   `,
+  // backtests of changes to the twin's documents: the cases drawn (prediction ids, no text), the candidate while it
+  // runs (encrypted, emptied once scored), and the scores
+  `
+  CREATE TABLE twin_backtests (
+    id TEXT PRIMARY KEY, user_id TEXT NOT NULL, doc TEXT NOT NULL, payload TEXT NOT NULL, cases TEXT NOT NULL,
+    state TEXT NOT NULL, result TEXT, at INTEGER NOT NULL, expires INTEGER NOT NULL
+  );
+  `,
 ];
 
 {

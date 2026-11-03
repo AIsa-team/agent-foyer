@@ -110,9 +110,12 @@ interface TwinStatus {
   links: { memory: string | null; profile: string | null; style: string | null } | null;
   groupMode: 'mentions' | 'all'; watch: { id: string; name: string }[];
   week: { conversations: number; predictions: number; settled: number; accuracy: number | null };
-  proposals: { code: string; doc: 'profile' | 'style'; at: number; markdown: string; reason: string }[];
-  changes: { code: string; doc: 'profile' | 'style'; at: number; reason: string; added: string[]; removed: string[] }[];
+  proposals: { code: string; doc: 'profile' | 'style'; at: number; markdown: string; reason: string; backtest?: Backtest }[];
+  changes: { code: string; doc: 'profile' | 'style'; at: number; reason: string; added: string[]; removed: string[]; backtest?: Backtest }[];
 }
+interface Backtest { n: number; from: number | null; to: number | null; simFrom: number | null; simTo: number | null }
+const pct = (x: number | null) => (x == null ? '—' : `${Math.round(x * 100)}%`);
+const sim = (x: number | null) => (x == null ? '—' : x.toFixed(2));
 
 /**
  * The AI twin in shadow mode: the person's agent watches their new messages, predicts whether and how they would
@@ -181,6 +184,7 @@ function TwinFeature() {
         <div key={c.code} className="conn-card__option" style={{ flexDirection: 'column', alignItems: 'stretch', cursor: 'default' }}>
           <span className="conn-card__option-title">{t('me.twin.change', { doc: t(c.doc === 'profile' ? 'me.twin.profile' : 'me.twin.style') })}</span>
           <span className="small muted">{c.reason}</span>
+          {c.backtest && <span className="small">{t('me.twin.backtest', { n: c.backtest.n, from: pct(c.backtest.from), to: pct(c.backtest.to), simFrom: sim(c.backtest.simFrom), simTo: sim(c.backtest.simTo) })}</span>}
           <ul className="small" style={{ margin: 0, paddingLeft: 18 }}>
             {c.removed.map((l, i) => <li key={`r${i}`} style={{ textDecoration: 'line-through', color: 'var(--muted)' }}>{l.replace(/^[-*]\s+/, '')}</li>)}
             {c.added.map((l, i) => <li key={`a${i}`}>{l.replace(/^[-*]\s+/, '')}</li>)}
@@ -192,6 +196,7 @@ function TwinFeature() {
         <div key={p.code} className="conn-card__option" style={{ flexDirection: 'column', alignItems: 'stretch', cursor: 'default' }}>
           <span className="conn-card__option-title">{t('me.twin.proposal', { doc: t(p.doc === 'profile' ? 'me.twin.profile' : 'me.twin.style') })}</span>
           <span className="small muted">{p.reason}</span>
+          {p.backtest && <span className="small">{t('me.twin.backtest', { n: p.backtest.n, from: pct(p.backtest.from), to: pct(p.backtest.to), simFrom: sim(p.backtest.simFrom), simTo: sim(p.backtest.simTo) })}</span>}
           <details>
             <summary className="small">{t('me.twin.proposalText')}</summary>
             <pre className="small" style={{ whiteSpace: 'pre-wrap', margin: '6px 0 0', maxHeight: 280, overflow: 'auto' }}>{p.markdown}</pre>

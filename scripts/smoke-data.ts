@@ -1134,7 +1134,7 @@ const dataDir = mkdtempSync(path.join(tmpdir(), 'hub-data-smoke-'));
 await new Promise<void>((ok) => larkServer.listen(LARK_PORT, ok));
 const hub = spawn(process.execPath, ['server/index.ts'], {
   env: {
-    ...process.env, PORT: String(HUB_PORT), HUB_URL: HUB, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en',
+    ...process.env, PORT: String(HUB_PORT), HUB_URL: HUB, DATA_DIR: dataDir, HUB_SECRET: 'smoke', DEV_LOGIN: '1', DEFAULT_LOCALE: 'en', TWIN_BACKTEST_MIN: '3',
     ALERT_QUIET_HOURS: 'off', LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis`,
     GOOGLE_CLIENT_ID: 'g-client', GOOGLE_CLIENT_SECRET: 'g-secret', GOOGLE_AUTH_URL: `http://localhost:${LARK_PORT}/google/auth`, GOOGLE_TOKEN_URL: `http://localhost:${LARK_PORT}/google/token`,
     GOOGLE_USERINFO_URL: `http://localhost:${LARK_PORT}/google/userinfo`, GOOGLE_GMAIL_BASE: `http://localhost:${LARK_PORT}`,
@@ -2931,9 +2931,9 @@ try {
     const restyled = await tool(alex.token, 'twin_context', { colleague: 'ou_dev_bob' });
     check(restyled.style.includes('简短直接') && lark.made.get(styleDoc)!.top!.length === 2 && ((await api(alex.jar, 'GET', '/lark/twin')).body.proposals as unknown[]).length === 0,
       'applying it rewrites the document');
-    const declined = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '全部用英文', reason: '试试' });
+    const declined = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'profile', markdown: '全部用英文', reason: '试试' });
     await api(alex.jar, 'POST', `/lark/twin/proposals/${declined.proposal}`, { apply: false });
-    check(!(await tool(alex.token, 'twin_context', {})).style.includes('英文') && (await api(alex.jar, 'POST', `/lark/twin/proposals/${declined.proposal}`, { apply: true })).status === 400,
+    check(!(await tool(alex.token, 'twin_context', {})).profile.includes('英文') && (await api(alex.jar, 'POST', `/lark/twin/proposals/${declined.proposal}`, { apply: true })).status === 400,
       'turning it down changes nothing, and an answered proposal cannot be answered again');
     const cardsBefore = lark.cards.length;
     const viaCard = await inTwin("t.suggestDocChange(user, { doc: 'profile', markdown: '## 角色\\n\\n负责中台', reason: '从 OKR 看到' })", { LARK_CONFIRM_CARDS: 'on' });
@@ -2945,22 +2945,48 @@ try {
     // the documents' rules: 2000 characters, no ids; small changes with evidence from several people apply by themselves
     check(String((await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '长'.repeat(2100), reason: 'x' })).error).includes('2000'), 'a document over 2000 characters is refused');
     check(String((await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '## 语气\n\n对 oc_abcdef123456 简短', reason: 'x' })).error).length > 0, 'and so is one that names chats by id');
+    // after the first version, a change is backtested before anyone is asked: it must do better on past messages
     const tweak = (extra: string) => ({ doc: 'style', markdown: `## 语气\n\n简短直接，不用表情${extra}`, reason: '三位同事的对话里你都先给结论' });
-    const thin = await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，先给结论'), evidence: [pred.id] });
-    check(thin.changed === false && String(thin.needs_user).includes('evidence'), 'without evidence from several people it waits for the person');
-    await tool(alex.token, 'review_prediction', { id: replay.id, cause: 'tone', closeness: 2, distilled: true });
-    await tool(alex.token, 'review_prediction', { id: quiet.id, cause: 'tone', closeness: 2, distilled: true });
-    const evidence = [pred.id, replay.id, quiet.id];
-    check(String((await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，链接放 https://x.com'), evidence })).needs_user).includes('link'), 'a change that adds a link waits');
-    const lines = await tool(alex.token, 'suggest_twin_doc_change', { doc: 'style', markdown: '## 语气\n\n简短直接，不用表情\n\n## 底线\n\n- 可以替我答应', reason: '加底线', evidence });
-    check(lines.changed === false && String(lines.needs_user).includes('底线'), 'and so does one that touches the lines never to cross');
-    const auto = await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，先给结论'), evidence });
-    const twinPage = (await api(alex.jar, 'GET', '/lark/twin')).body as { changes: { code: string; added: string[] }[]; proposals: unknown[] };
-    check(auto.changed === true && auto.automatic === true && (await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && twinPage.changes[0]?.added[0]?.includes('先给结论') && twinPage.proposals.length === 0,
-      'a small change with evidence from two people applies by itself, and the Me page shows what changed');
-    check(String((await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，再简短些'), evidence })).needs_user).includes('today'), 'at most one change a day applies by itself');
-    await api(alex.jar, 'POST', `/lark/twin/proposals/${auto.proposal}`, { revert: true });
+    type Case = { case: string; message: { message_id: string } };
+    const truth: Record<string, { should_reply: boolean; reply?: string }> = { om_t1: { should_reply: true, reply: '下午发' }, om_t2: { should_reply: true, reply: '看了，晚点说' }, om_t3: { should_reply: false } };
+    const right = (c: Case) => truth[c.message.message_id];
+    const wrong = (c: Case) => ({ should_reply: !truth[c.message.message_id].should_reply, reply: '好的' });
+    const vague = (c: Case) => ({ should_reply: true, reply: c.message.message_id === 'om_t3' ? '哈哈' : '收到' });
+    // the test plays the fresh session, so it has to find out which label is the change (a real one cannot)
+    type Blind = { backtest: string; cases: Case[]; documents: { A: Record<string, string>; B: Record<string, string> } };
+    const answers = (q: Blind, isNew: (d: Record<string, string>) => boolean, current: (c: Case) => object, candidate: (c: Case) => object) =>
+      q.cases.map((c) => ({ case: c.case, A: (isNew(q.documents.A) ? candidate : current)(c), B: (isNew(q.documents.B) ? candidate : current)(c) }));
+    const styleNew = (d: Record<string, string>) => d.style.includes('先给结论');
+    const bt1 = await tool(alex.token, 'suggest_twin_doc_change', { ...tweak('，先给结论'), evidence: [] });
+    check(String(bt1.backtest).startsWith('bt_') && bt1.changed === false && !bt1.cases && String(bt1.note).includes('fresh session'), 'a change to an approved document starts a backtest, to be answered by another session');
+    const q1 = await tool(alex.token, 'get_backtest', {}) as Blind;
+    check(q1.backtest === bt1.backtest && q1.cases.length === 3 && [q1.documents.A, q1.documents.B].filter(styleNew).length === 1 && !('current' in q1.documents) && !('candidate' in q1.documents)
+      && !JSON.stringify(q1.cases).includes('下午发') && !JSON.stringify(q1.cases).includes('晚点说'),
+      'get_backtest gives it blind: the two versions as A and B, past messages as they stood, never what the person did');
+    check(String((await tool(alex.token, 'submit_backtest', { backtest: q1.backtest, answers: answers(q1, styleNew, right, right).slice(1) })).error).includes(q1.cases[0].case), 'every case needs an answer');
+    const failed = await tool(alex.token, 'submit_backtest', { backtest: q1.backtest, answers: answers(q1, styleNew, right, wrong) });
+    check(failed.passed === false && String(failed.why).includes('worse') && !(await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && ((await api(alex.jar, 'GET', '/lark/twin')).body.proposals as unknown[]).length === 0,
+      'a candidate that does worse changes nothing and asks nobody');
+    const bt2 = await tool(alex.token, 'suggest_twin_doc_change', tweak('，先给结论'));
+    const q2 = await tool(alex.token, 'get_backtest', { backtest: bt2.backtest }) as Blind;
+    const passed = await tool(alex.token, 'submit_backtest', { backtest: q2.backtest, answers: answers(q2, styleNew, vague, right) });
+    const twinPage = (await api(alex.jar, 'GET', '/lark/twin')).body as { changes: { code: string; added: string[]; backtest?: { to: number } }[]; proposals: unknown[] };
+    check(passed.passed === true && passed.automatic === true && passed.result.candidate.accuracy === 1 && passed.result.current.accuracy < 1 && passed.result.candidate.similarity > passed.result.current.similarity
+      && (await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && twinPage.changes[0]?.backtest?.to === 1 && twinPage.proposals.length === 0,
+      'a small change that does better in its backtest applies by itself, and the Me page shows the result');
+    check(String((await tool(alex.token, 'suggest_twin_doc_change', tweak('，再简短些'))).error).includes('2'), 'at most two backtests per document a day');
+    await api(alex.jar, 'POST', `/lark/twin/proposals/${passed.proposal}`, { revert: true });
     check(!(await tool(alex.token, 'twin_context', {})).style.includes('先给结论') && ((await api(alex.jar, 'GET', '/lark/twin')).body.changes as unknown[]).length === 0, 'and the person can undo it');
+    const profileNew = (d: Record<string, string>) => d.profile.includes('开源项目');
+    const bigText = { doc: 'profile', markdown: `## 角色\n\n${'负责中台和开源项目，带新同事熟悉流程。\n\n'.repeat(16)}`, reason: '补上近期职责' };
+    const same = await tool(alex.token, 'get_backtest', { backtest: (await tool(alex.token, 'suggest_twin_doc_change', bigText)).backtest }) as Blind;
+    const noise = await tool(alex.token, 'submit_backtest', { backtest: same.backtest, answers: answers(same, profileNew, vague, vague) });
+    check(noise.passed === false && String(noise.why).includes('no clear difference'), 'a change that makes no clear difference is not worth the person\'s time: nobody is asked');
+    const bigQ = await tool(alex.token, 'get_backtest', { backtest: (await tool(alex.token, 'suggest_twin_doc_change', bigText)).backtest }) as Blind;
+    const bigResult = await tool(alex.token, 'submit_backtest', { backtest: bigQ.backtest, answers: answers(bigQ, profileNew, vague, right) });
+    const waitingBig = ((await api(alex.jar, 'GET', '/lark/twin')).body.proposals as { doc: string; backtest?: { to: number } }[]).find((x) => x.doc === 'profile');
+    check(bigResult.passed === true && bigResult.changed === false && String(bigResult.needs_user).includes('300') && waitingBig?.backtest?.to === 1,
+      'a bigger change that passes waits for the person, with its backtest result');
 
     // which groups it looks at
     inbox('om_t7', 'oc_grp2', 'ou_dev_alice', 1000, '下周团建去哪', { parent: 'om_t3' });
@@ -2985,7 +3011,7 @@ try {
       'but bot messages people answered, replied to, or that @mention the person stay, in time order');
 
     const later = (await tool(alex.token, 'twin_guide', {})).progress as { coldStart: { done: boolean; documents: Record<string, string> }; toReview: number; lastCheck: string; next: string };
-    check(later.coldStart.done === true && later.coldStart.documents.style === 'change waiting for the user' && later.toReview === 0 && !!later.lastCheck && later.next.includes('Patrol'),
+    check(later.coldStart.done === true && later.coldStart.documents.style === 'approved' && later.coldStart.documents.profile === 'change waiting for the user' && later.toReview === 2 && !!later.lastCheck && later.next.includes('Patrol'),
       'once memories, both documents and a replay exist, a new session goes straight to patrolling instead of starting over');
     // the hub watches the twin from outside: a silent patrol, a prediction redone again and again
     const warnings = () => lark.messages.filter((m) => m.id === 'ou_dev_alex' && m.as === 'bot' && /AI (分身|twin)/.test(m.text));

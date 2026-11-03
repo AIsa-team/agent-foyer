@@ -53,8 +53,6 @@ const ALERT_AGAIN_MS = 6 * 3600_000;
 // the twin's two documents: how long they may be, and when a change applies without the person's yes
 const DOC_MAX = 2000;
 const AUTO_CHANGE_MAX = 300;
-const AUTO_EVIDENCE = 3;
-const AUTO_SOURCES = 2;
 const AUTO_PER_DAY = 1;
 const AUTO_PER_WEEK = 3;
 const REVERT_MS = 30 * DAY;
@@ -185,7 +183,7 @@ export function twinStatus(user: User) {
     .map((p) => ({ code: p.code, doc: p.doc, at: p.at, ...(JSON.parse(decrypt(p.payload)) as { markdown: string; reason: string }) }));
   const changes = all<{ code: string; doc: string; payload: string; at: number }>(
     "SELECT code, doc, payload, at FROM twin_proposals WHERE user_id = ? AND state = 'auto' AND at > ? ORDER BY at DESC", user.id, now() - 7 * DAY)
-    .map((p) => { const v = JSON.parse(decrypt(p.payload)) as { reason: string; added: string[]; removed: string[] }; return { code: p.code, doc: p.doc, at: p.at, reason: v.reason, added: v.added, removed: v.removed }; });
+    .map((p) => { const v = JSON.parse(decrypt(p.payload)) as { reason: string; added: string[]; removed: string[]; backtest?: BacktestSummary }; return { code: p.code, doc: p.doc, at: p.at, reason: v.reason, added: v.added, removed: v.removed, ...(v.backtest ? { backtest: v.backtest } : {}) }; });
   return {
     on: twinOn(user.id), granted: granted(user.id), connectUrl: twinConnectUrl(), setUp: !!t?.base,
     links: t?.base ? { memory: t.base_url, profile: t.profile_doc && larkLink('docx', t.profile_doc), style: t.style_doc && larkLink('docx', t.style_doc) } : null,
@@ -870,51 +868,258 @@ function section(md: string, title: string): string | null {
 }
 
 /**
- * Whether a change to one of the twin's documents may apply without the person's yes. The hub checks it by rule (it
- * runs no model, and an agent talked into a change by someone's message would also pass its own review): the
- * document was approved by the person before; the change is small; it rests on enough evidence from several people
- * (reviewed predictions, or high-confidence memories for the profile), so one message cannot cause it; it adds no
- * links, contacts or amounts; it leaves the "lines never to cross" alone; and only so many changes apply a day and a
- * week. Anything else waits for the person.
+ * Whether a change that passed its backtest may apply without the person's yes, by rule (the hub runs no model, and an
+ * agent talked into a change by someone's message would also pass its own review): the change is small; it adds no
+ * links, contacts or amounts; it leaves the "lines never to cross" alone; and only so many apply a day and a week.
  */
-async function reviewChange(user: User, t: TwinRow & { base: string; tables: string }, doc: DocKey, before: string, after: string, evidence: string[]) {
-  if (!t[stampColumn(doc)]) return { ok: false, why: 'first version: the user approves it' };
+function changeRules(user: User, doc: DocKey, before: string, after: string) {
   const { added, removed } = lineDiff(before, after);
   const size = [...added, ...removed].reduce((n, l) => n + l.length, 0);
-  if (!size) return { ok: false, why: 'nothing changes' };
-  if (size > AUTO_CHANGE_MAX) return { ok: false, why: `the change is ${size} characters (more than ${AUTO_CHANGE_MAX} need the user)` };
-  if (added.some((l) => OUTSIDE.test(l))) return { ok: false, why: 'it adds a link, contact or amount' };
+  const no = (why: string) => ({ ok: false as const, why, added, removed });
+  if (!size) return no('nothing changes');
+  if (size > AUTO_CHANGE_MAX) return no(`the change is ${size} characters (more than ${AUTO_CHANGE_MAX} need the user)`);
+  if (added.some((l) => OUTSIDE.test(l))) return no('it adds a link, contact or amount');
   // the section may carry its title in any of the hub's languages (the document may predate a change of language)
   for (const lines of new Set(LOCALES.map((l) => tr(l.code, 'twin.doc.linesHeading')))) {
-    if ((section(before, lines) ?? '') !== (section(after, lines) ?? '')) return { ok: false, why: `it changes "${lines}"` };
+    if ((section(before, lines) ?? '') !== (section(after, lines) ?? '')) return no(`it changes "${lines}"`);
   }
   const recent = (ms: number) => get<{ n: number }>("SELECT COUNT(*) AS n FROM twin_proposals WHERE user_id = ? AND doc = ? AND state IN ('auto', 'reverted') AND at > ?", user.id, doc, now() - ms)!.n;
-  if (recent(DAY) >= AUTO_PER_DAY || recent(7 * DAY) >= AUTO_PER_WEEK) return { ok: false, why: `already ${AUTO_PER_DAY} automatic change today or ${AUTO_PER_WEEK} this week` };
-  const ids = [...new Set(evidence)].slice(0, 20);
-  const causes = doc === 'style' ? ['tone'] : ['missingFact', 'stance'];
-  const preds = ids.length
-    ? all<{ record_id: string; sender: string | null; chat_id: string; cause: string | null; reviewed: number }>(
-      `SELECT record_id, sender, chat_id, cause, reviewed FROM twin_predictions WHERE user_id = ? AND record_id IN (${ids.map(() => '?').join(',')})`, user.id, ...ids)
-    : [];
-  const sources = preds.filter((p) => p.reviewed && causes.includes(p.cause ?? '')).map((p) => p.sender ?? p.chat_id);
-  if (doc === 'profile') {
-    const tbl = tablesOf(t).memories;
-    for (const id of ids.filter((i) => !preds.some((p) => p.record_id === i)).slice(0, 10)) {
-      const r = await getRecord(user, t.base, tbl.id, id).catch(() => null);
-      const m = r && fromFields(tbl, r.fields);
-      if (m?.status === 'active' && m.confidence === 'high') sources.push(String(m.aboutId || m.chat || m.source || id));
+  if (recent(DAY) >= AUTO_PER_DAY || recent(7 * DAY) >= AUTO_PER_WEEK) return no(`already ${AUTO_PER_DAY} automatic change today or ${AUTO_PER_WEEK} this week`);
+  return { ok: true as const, added, removed };
+}
+
+// ---------------------------------------------------------------- backtests: a change earns the person's attention
+/**
+ * A proposed change to an approved document is backtested before anyone is asked, like a strategy against past data:
+ * the hub draws past messages whose outcome it knows (spread over people, leaving out the agent's own evidence), gives
+ * each one as it stood then (the message, what came before, the memories that held), never what the person did. It is
+ * answered blind, by a session that did not write the change: both versions of the documents come as A and B in a
+ * random order, the cases shuffled; the hub alone knows which is the candidate, and scores both by rule. Only a
+ * candidate that does better by more than noise, and worse nowhere that matters, goes on.
+ */
+const BACKTEST_SIZE = 40;
+const BACKTEST_DAYS = 30;
+const BACKTEST_MS = 6 * 3600_000;
+const BACKTESTS_PER_DAY = 2;
+const BACKTEST_SCENARIO_MIN = 5;
+const BACKTEST_SCENARIO_DROP = 0.1;
+const backtestMin = () => Math.max(1, Number(process.env.TWIN_BACKTEST_MIN ?? 30) || 30);
+// better by more than noise: at least this many more right calls (and this share of the cases), or replies this much closer
+const BACKTEST_MORE_RIGHT = 2;
+const BACKTEST_MORE_RIGHT_SHARE = 0.05;
+const BACKTEST_CLOSER = 0.03;
+
+interface Case { case: string; record: string; message: string; chat: string; received: number; sender: string | null; scenario: string }
+interface Answer { should_reply: boolean; form?: 'text' | 'reaction'; reply?: string }
+interface Score { decisions: number; right: number; accuracy: number | null; forms: number; formRight: number; similarity: number | null; scored: number }
+
+/** Past messages to test against: settled, recent, not the agent's evidence, one each, spread over the people who wrote. */
+function drawCases(userId: string, evidence: string[]): Case[] {
+  const rows = all<{ record_id: string; message_id: string; chat_id: string; received: number; sender: string | null; scenario: string }>(
+    'SELECT record_id, message_id, chat_id, received, sender, scenario FROM twin_predictions WHERE user_id = ? AND outcome IS NOT NULL AND received > ? ORDER BY received DESC',
+    userId, now() - BACKTEST_DAYS * DAY);
+  const skip = new Set(evidence);
+  const seen = new Set<string>();
+  const bySender = new Map<string, typeof rows>();
+  for (const r of rows) {
+    if (skip.has(r.record_id) || seen.has(r.message_id)) continue;
+    seen.add(r.message_id);
+    const k = r.sender ?? r.chat_id;
+    bySender.set(k, [...(bySender.get(k) ?? []), r]);
+  }
+  const picked: typeof rows = [];
+  for (let round = 0; picked.length < BACKTEST_SIZE; round++) {
+    const next = [...bySender.values()].map((xs) => xs[round]).filter(Boolean);
+    if (!next.length) break;
+    picked.push(...next.slice(0, BACKTEST_SIZE - picked.length));
+  }
+  // shuffled, so the order says nothing about who wrote or when
+  for (let i = picked.length - 1; i > 0; i--) { const j = randomBytes(4).readUInt32BE() % (i + 1); [picked[i], picked[j]] = [picked[j], picked[i]]; }
+  return picked.map((r, i) => ({ case: `c${i + 1}`, record: r.record_id, message: r.message_id, chat: r.chat_id, received: r.received, sender: r.sender, scenario: r.scenario }));
+}
+
+/** A case as the agent sees it: the message and what came before it, and the memories that held then; no outcome. */
+async function caseView(user: User, c: Case, memories: ({ id: string } & Record<string, unknown>)[]) {
+  const m = await getMessage(user, c.message).catch(() => null);
+  const before = await call<{ data: { items?: Msg[] } }>(user,
+    `/im/v1/messages?container_id_type=chat&container_id=${encodeURIComponent(c.chat)}&sort_type=ByCreateTimeDesc&page_size=4&end_time=${sec(c.received - 1000)}`)
+    .then((r) => (r.data.items ?? []).filter((x) => !x.deleted && !isHubBot(x) && Number(x.create_time) < c.received).reverse().map((x) => shown({ ...x, chat_id: c.chat }, user.id, CONTEXT_TEXT_MAX)))
+    .catch(() => []);
+  const chat = await chatInfo(user, c.chat);
+  const held = memories.filter((r) => (typeof r.validFrom !== 'number' || r.validFrom <= c.received) && (typeof r.validUntil !== 'number' || r.validUntil >= c.received)
+    && (!r.aboutId && !r.chat || r.aboutId === c.sender || r.chat === c.chat)).slice(0, 12)
+    .map((r) => ({ type: r.type, summary: r.summary, ...(r.about ? { about: r.about } : {}) }));
+  return {
+    case: c.case, time: localTime(c.received), kind: chat.direct ? 'direct' : 'group', ...(chat.direct ? {} : { chat: chat.name }),
+    message: m ? shown(m, user.id) : { from: nameOf(c.sender ?? undefined), text: '(no longer readable)' },
+    before, memories: held, ...(c.scenario ? { scenario: c.scenario } : {}),
+  };
+}
+
+/** How alike two replies are: shared character pairs (Dice), ignoring spaces and punctuation; 0 to 1. */
+function similarity(a: string, b: string) {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s\p{P}\p{S}]/gu, '');
+  const grams = (s: string) => { const out = new Map<string, number>(); const n = s.length < 2 ? 1 : 2; for (let i = 0; i + n <= s.length; i++) out.set(s.slice(i, i + n), (out.get(s.slice(i, i + n)) ?? 0) + 1); return out; };
+  const x = grams(norm(a)), y = grams(norm(b));
+  const total = [...x.values(), ...y.values()].reduce((s, v) => s + v, 0);
+  if (!total) return 0;
+  let both = 0;
+  for (const [g, v] of x) both += Math.min(v, y.get(g) ?? 0);
+  return (2 * both) / total;
+}
+
+async function startBacktest(user: User, doc: DocKey, markdown: string, reason: string, evidence: string[], before: string) {
+  const done = get<{ n: number }>("SELECT COUNT(*) AS n FROM twin_backtests WHERE user_id = ? AND doc = ? AND at > ?", user.id, doc, now() - DAY)!.n;
+  if (done >= BACKTESTS_PER_DAY) throw new UserError('err.twin.backtestDaily', { n: BACKTESTS_PER_DAY });
+  const cases = drawCases(user.id, evidence);
+  if (cases.length < backtestMin()) return null;
+  const id = `bt_${randomBytes(5).toString('hex')}`;
+  const candidate = randomBytes(1)[0] % 2 ? 'A' : 'B';
+  run('INSERT INTO twin_backtests (id, user_id, doc, payload, cases, state, at, expires) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    id, user.id, doc, encrypt(JSON.stringify({ markdown, reason, before, candidate })), JSON.stringify(cases), 'running', now(), now() + BACKTEST_MS);
+  return {
+    backtest: id, changed: false,
+    note: `NOT CHANGED: it is backtested first, blind. Do not answer it in this session (you know which version you wrote): leave it to a fresh session, which calls get_backtest and then submit_backtest within 6 hours. The user hears about it only if the change does better.`,
+  };
+}
+
+/** A running backtest to answer, blind: the documents as A and B, the cases as they stood then. Without id, the oldest. */
+export async function getBacktest(user: User, a: { backtest?: string }) {
+  const t = setUp(user);
+  const bt = a.backtest
+    ? get<{ id: string; doc: DocKey; payload: string; cases: string; expires: number }>("SELECT * FROM twin_backtests WHERE id = ? AND user_id = ? AND state = 'running'", a.backtest, user.id)
+    : get<{ id: string; doc: DocKey; payload: string; cases: string; expires: number }>("SELECT * FROM twin_backtests WHERE user_id = ? AND state = 'running' AND expires > ? ORDER BY at LIMIT 1", user.id, now());
+  if (!bt) return a.backtest ? (() => { throw new UserError('err.twin.backtestGone'); })() : { backtest: null, note: 'No backtest waiting.' };
+  if (bt.expires < now()) {
+    run("UPDATE twin_backtests SET state = 'expired', payload = '' WHERE id = ?", bt.id);
+    throw new UserError('err.twin.backtestGone');
+  }
+  const { markdown, candidate } = JSON.parse(decrypt(bt.payload)) as { markdown: string; candidate: 'A' | 'B' };
+  const current = { profile: await docMarkdown(user, docOf(t, 'profile')), style: await docMarkdown(user, docOf(t, 'style')) };
+  const changed = { ...current, [bt.doc]: markdown };
+  const memories = await memoryRows(user, t).catch(() => []);
+  const cases = JSON.parse(bt.cases) as Case[];
+  return {
+    backtest: bt.id, documents: candidate === 'A' ? { A: changed, B: current } : { A: current, B: changed },
+    cases: await inBatches(cases, (c) => caseView(user, c, memories), 4),
+    note: 'For every case predict, twice, what the user would do: once acting with documents.A, once with documents.B. Use only what each case gives you; do not look up the conversation or what the user did, and do not try to tell which version is new. Then submit_backtest {backtest, answers: [{case, A: {should_reply, form, reply}, B: {…}}]}.',
+  };
+}
+
+function score(cases: Case[], answers: Map<string, Answer>, actual: Map<string, { outcome: string; form: string | null; reply: string }>) {
+  const s: Score = { decisions: 0, right: 0, accuracy: null, forms: 0, formRight: 0, similarity: null, scored: 0 };
+  let simSum = 0;
+  for (const c of cases) {
+    const a = answers.get(c.case);
+    const real = actual.get(c.record);
+    if (!a || !real) continue;
+    const replied = real.outcome !== 'none';
+    s.decisions++;
+    if (a.should_reply === replied) s.right++;
+    if (replied && a.should_reply && real.form) {
+      s.forms++;
+      if ((a.form ?? 'text') === real.form) s.formRight++;
+    }
+    if (replied && a.should_reply && (a.form ?? 'text') === 'text' && (real.form ?? 'text') === 'text' && real.reply && a.reply) {
+      s.scored++;
+      simSum += similarity(a.reply, real.reply);
     }
   }
-  if (sources.length < AUTO_EVIDENCE || new Set(sources).size < AUTO_SOURCES) {
-    return { ok: false, why: `evidence: ${sources.length} usable items from ${new Set(sources).size} sources (needs ${AUTO_EVIDENCE} from ${AUTO_SOURCES})` };
+  s.accuracy = s.decisions ? s.right / s.decisions : null;
+  s.similarity = s.scored ? simSum / s.scored : null;
+  return s;
+}
+
+/**
+ * The answers to a backtest, scored by rule against what the person actually did. A candidate passes when it is
+ * better by more than noise (at least two more right calls on whether to reply, and 5% of the cases, or replies 0.03
+ * closer to the person's), makes at most one more wrong call and that only with clearly closer replies, comes no
+ * further from the person's words, guesses the form no worse, and loses no more than ten points in any scenario with
+ * enough cases. A pass then goes through the rules for applying by itself; a fail asks nobody.
+ */
+export async function submitBacktest(user: User, a: { backtest: string; answers: { case: string; A: Answer; B: Answer }[] }) {
+  const t = setUp(user);
+  const bt = get<{ id: string; doc: DocKey; payload: string; cases: string; state: string; expires: number }>('SELECT * FROM twin_backtests WHERE id = ? AND user_id = ?', a.backtest, user.id);
+  if (!bt || bt.state !== 'running') throw new UserError('err.twin.backtestGone');
+  if (bt.expires < now()) {
+    run("UPDATE twin_backtests SET state = 'expired', payload = '' WHERE id = ?", bt.id);
+    throw new UserError('err.twin.backtestGone');
   }
-  return { ok: true, added, removed, evidence: sources.length };
+  const cases = JSON.parse(bt.cases) as Case[];
+  const missing = cases.filter((c) => !a.answers.some((x) => x.case === c.case)).map((c) => c.case);
+  if (missing.length) throw new UserError('err.twin.backtestMissing', { cases: missing.join(', ') });
+  // what the person did: the hub's outcome and form, and their words from their own Base, read only to score
+  const tbl = tablesOf(t).predictions;
+  const actual = new Map<string, { outcome: string; form: string | null; reply: string }>();
+  const rows = await inBatches(cases, (c) => getRecord(user, t.base, tbl.id, c.record).catch(() => null), 6);
+  cases.forEach((c, i) => {
+    const p = get<{ outcome: string | null; actual_form: string | null }>('SELECT outcome, actual_form FROM twin_predictions WHERE record_id = ?', c.record);
+    if (!p?.outcome) return;
+    const fields = rows[i] ? fromFields(tbl, rows[i]!.fields) : {};
+    actual.set(c.record, { outcome: p.outcome, form: p.actual_form, reply: String(fields.actualReply ?? '') });
+  });
+  const { markdown, reason, before, candidate } = JSON.parse(decrypt(bt.payload)) as { markdown: string; reason: string; before: string; candidate: 'A' | 'B' };
+  // only the hub knows which label was the candidate
+  const pick = (v: 'current' | 'candidate') => new Map(a.answers.map((x) => [x.case, x[(v === 'candidate') === (candidate === 'A') ? 'A' : 'B']]));
+  const cur = score(cases, pick('current'), actual);
+  const cand = score(cases, pick('candidate'), actual);
+  const byScenario = [...new Set(cases.map((c) => c.scenario).filter(Boolean))].map((name) => {
+    const xs = cases.filter((c) => c.scenario === name);
+    return { name, n: xs.length, current: score(xs, pick('current'), actual).accuracy, candidate: score(xs, pick('candidate'), actual).accuracy };
+  });
+  const n = (x: number | null) => x ?? 0;
+  const worse = byScenario.filter((x) => x.n >= BACKTEST_SCENARIO_MIN && n(x.candidate) < n(x.current) - BACKTEST_SCENARIO_DROP);
+  const formOf = (s: Score) => (s.forms ? s.formRight / s.forms : 0);
+  // a case or two either way is noise: the agent answering twice is not the same twice
+  const moreRight = cand.right - cur.right;
+  const enoughMore = Math.max(BACKTEST_MORE_RIGHT, Math.ceil(cases.length * BACKTEST_MORE_RIGHT_SHARE));
+  const closer = n(cand.similarity) - n(cur.similarity) >= BACKTEST_CLOSER;
+  const why = moreRight < -1 || (moreRight === -1 && !closer) ? 'it decides worse whether to reply'
+    : n(cand.similarity) < n(cur.similarity) - 0.01 ? 'its replies are further from the user\'s'
+    : formOf(cand) < formOf(cur) - 0.05 ? 'it guesses worse whether the user writes or reacts'
+    : worse.length ? `it does worse on ${worse.map((x) => x.name).join(', ')}`
+    : moreRight < enoughMore && !closer ? `no clear difference: ${moreRight >= 0 ? '+' : ''}${moreRight} right calls (needs +${enoughMore}) and replies ${(n(cand.similarity) - n(cur.similarity)).toFixed(2)} closer (needs +${BACKTEST_CLOSER})` : '';
+  const result = { cases: cases.length, current: cur, candidate: cand, scenarios: byScenario, passed: !why, ...(why ? { why } : {}) };
+  run("UPDATE twin_backtests SET state = ?, result = ?, payload = '' WHERE id = ?", why ? 'failed' : 'passed', JSON.stringify(result), bt.id);
+  if (why) return { backtest: bt.id, passed: false, why, result, note: 'Nothing changes and the user is not asked. Learn from the result; propose again only with a different idea.' };
+  return { backtest: bt.id, passed: true, result, ...(await afterBacktest(user, t, bt.doc, markdown, reason, before, result)) };
+}
+
+type BacktestResult = { cases: number; current: Score; candidate: Score };
+/** What the person sees of a backtest: numbers only, put into words in their language where it is shown. */
+export interface BacktestSummary { n: number; from: number | null; to: number | null; simFrom: number | null; simTo: number | null }
+const summaryOf = (r: BacktestResult): BacktestSummary => ({ n: r.cases, from: r.current.accuracy, to: r.candidate.accuracy, simFrom: r.current.similarity, simTo: r.candidate.similarity });
+const backtestLine = (locale: string, b: BacktestSummary) => tr(locale, 'twin.card.backtest', {
+  n: b.n, from: b.from == null ? '—' : `${Math.round(b.from * 100)}%`, to: b.to == null ? '—' : `${Math.round(b.to * 100)}%`,
+  simFrom: b.simFrom == null ? '—' : b.simFrom.toFixed(2), simTo: b.simTo == null ? '—' : b.simTo.toFixed(2),
+});
+
+/** A change that passed its backtest: applies by itself when it is small, otherwise waits for the person with the result. */
+async function afterBacktest(user: User, t: TwinRow & { base: string; tables: string }, doc: DocKey, markdown: string, reason: string, before: string, result: BacktestResult) {
+  const rules = changeRules(user, doc, before, markdown);
+  const code = randomBytes(5).toString('hex');
+  const summary = summaryOf(result);
+  const line = backtestLine(localeOf(user.id), summary);
+  run("UPDATE twin_proposals SET state = 'replaced', payload = '' WHERE user_id = ? AND doc = ? AND state = 'waiting'", user.id, doc);
+  if (rules.ok) {
+    await replaceDocBody(user, docOf(t, doc), markdown);
+    run("INSERT INTO twin_proposals (code, user_id, doc, payload, state, at, expires) VALUES (?, ?, ?, ?, 'auto', ?, ?)",
+      code, user.id, doc, encrypt(JSON.stringify({ markdown, reason, before, added: rules.added, removed: rules.removed, backtest: summary })), now(), now() + REVERT_MS);
+    const card = await toPerson(user, changeCard(user, code, doc, reason, rules.added, rules.removed, undefined, line));
+    if (card) run('UPDATE twin_proposals SET card = ? WHERE code = ?', card, code);
+    return { proposal: code, changed: true, automatic: true, note: `Passed the backtest and applied by itself. The user ${card ? 'got a card' : 'sees it on their Me page'} with the result and can undo it.` };
+  }
+  run('INSERT INTO twin_proposals (code, user_id, doc, payload, at, expires) VALUES (?, ?, ?, ?, ?, ?)',
+    code, user.id, doc, encrypt(JSON.stringify({ markdown, reason, backtest: summary })), now(), now() + PROPOSAL_MS);
+  const card = await toPerson(user, proposalCard(user, code, doc, markdown, reason, undefined, line));
+  if (card) run('UPDATE twin_proposals SET card = ? WHERE code = ?', card, code);
+  return { proposal: code, changed: false, needs_user: rules.why, note: `Passed the backtest; it waits for the user (${rules.why}), with the result, ${card ? 'on a card in Lark and ' : ''}on their Me page.` };
 }
 
 /**
  * The agent proposes a new version of one of the twin's documents (at most 2000 characters, people and chats by name,
- * never by id). A small change backed by enough evidence applies at once and the person is told, with a way to undo
- * it; anything else waits for their yes, on a card from the hub's bot (when cards are set up) or on their Me page.
+ * never by id). The first version of each waits for the person. After that a change is backtested first
+ * (submit_backtest), and only one that does better reaches the person, applying by itself when it is small.
  */
 export async function suggestDocChange(user: User, a: { doc: DocKey; markdown: string; reason: string; evidence?: string[] }) {
   const t = setUp(user);
@@ -924,28 +1129,21 @@ export async function suggestDocChange(user: User, a: { doc: DocKey; markdown: s
   if (markdown.length > DOC_MAX) throw new UserError('err.twin.docTooLong', { max: DOC_MAX, n: markdown.length });
   if (RAW_ID.test(markdown)) throw new UserError('err.twin.docIds');
   const before = await docMarkdown(user, docOf(t, a.doc));
-  const review = await reviewChange(user, t, a.doc, before, markdown, a.evidence ?? []);
-  const code = randomBytes(5).toString('hex');
-  if (review.ok) {
-    await replaceDocBody(user, docOf(t, a.doc), markdown);
-    run("UPDATE twin_proposals SET state = 'replaced', payload = '' WHERE user_id = ? AND doc = ? AND state = 'waiting'", user.id, a.doc);
-    run("INSERT INTO twin_proposals (code, user_id, doc, payload, state, at, expires) VALUES (?, ?, ?, ?, 'auto', ?, ?)",
-      code, user.id, a.doc, encrypt(JSON.stringify({ markdown, reason, before, added: review.added, removed: review.removed })), now(), now() + REVERT_MS);
-    const card = await toPerson(user, changeCard(user, code, a.doc, reason, review.added!, review.removed!));
-    if (card) run('UPDATE twin_proposals SET card = ? WHERE code = ?', card, code);
-    return {
-      proposal: code, changed: true, automatic: true,
-      note: `Applied by itself after the hub's review (${review.evidence} pieces of evidence). The user ${card ? 'got a card' : 'sees it on their Me page'} with what changed and can undo it.`,
-    };
+  let why = 'first version: the user approves it';
+  if (t[stampColumn(a.doc)]) {
+    const bt = await startBacktest(user, a.doc, markdown, reason, a.evidence ?? [], before);
+    if (bt) return bt;
+    why = `too few past messages with a known outcome to backtest (needs ${backtestMin()})`;
   }
+  const code = randomBytes(5).toString('hex');
   run("UPDATE twin_proposals SET state = 'replaced', payload = '' WHERE user_id = ? AND doc = ? AND state = 'waiting'", user.id, a.doc);
   run('INSERT INTO twin_proposals (code, user_id, doc, payload, at, expires) VALUES (?, ?, ?, ?, ?, ?)',
     code, user.id, a.doc, encrypt(JSON.stringify({ markdown, reason })), now(), now() + PROPOSAL_MS);
   const card = await toPerson(user, proposalCard(user, code, a.doc, markdown, reason));
   if (card) run('UPDATE twin_proposals SET card = ? WHERE code = ?', card, code);
   return {
-    proposal: code, changed: false, needs_user: review.why,
-    note: `NOT CHANGED YET (${review.why}). The user decides ${card ? 'on the card the hub sent them in Lark, or ' : ''}on their Me page (${config.hubUrl}/me). Tell them briefly what you propose and why.`,
+    proposal: code, changed: false, needs_user: why,
+    note: `NOT CHANGED YET (${why}). The user decides ${card ? 'on the card the hub sent them in Lark, or ' : ''}on their Me page (${config.hubUrl}/me). Tell them briefly what you propose and why.`,
   };
 }
 
@@ -971,7 +1169,7 @@ async function updateCardOf(messageId: string | null, card: object) {
 const plainText = (content: string) => ({ tag: 'plain_text', content });
 const docName = (locale: string, doc: DocKey) => tr(locale, `twin.doc.${doc}.short` as MessageKey);
 
-function proposalCard(user: User, code: string, doc: DocKey, markdown: string, reason: string, end?: string) {
+function proposalCard(user: User, code: string, doc: DocKey, markdown: string, reason: string, end?: string, backtest?: string) {
   const locale = localeOf(user.id);
   const button = (choice: 'apply' | 'decline') => ({
     tag: 'button', type: choice === 'apply' ? 'primary' : 'default', text: plainText(tr(locale, `twin.card.${choice}`)), value: { hub: 'twin_doc', code, choice },
@@ -981,6 +1179,7 @@ function proposalCard(user: User, code: string, doc: DocKey, markdown: string, r
     header: { template: end ? 'grey' : 'blue', title: plainText(tr(locale, 'twin.card.title', { doc: docName(locale, doc) })) },
     elements: [
       { tag: 'div', text: plainText(tr(locale, 'twin.card.reason', { reason })) },
+      ...(backtest ? [{ tag: 'div', text: plainText(backtest) }] : []),
       { tag: 'hr' },
       { tag: 'markdown', content: markdown },
       ...(end ? [{ tag: 'note', elements: [plainText(end)] }] : [{ tag: 'action', actions: [button('apply'), button('decline')] }]),
@@ -989,7 +1188,7 @@ function proposalCard(user: User, code: string, doc: DocKey, markdown: string, r
 }
 
 /** What a change that applied by itself did: the lines taken out and put in, and a button to undo it. */
-function changeCard(user: User, code: string, doc: DocKey, reason: string, added: string[], removed: string[], end?: string) {
+function changeCard(user: User, code: string, doc: DocKey, reason: string, added: string[], removed: string[], end?: string, backtest?: string) {
   const locale = localeOf(user.id);
   const list = (lines: string[]) => lines.map((l) => `- ${l.replace(/^[-*]\s+/, '')}`).join('\n');
   return {
@@ -997,6 +1196,7 @@ function changeCard(user: User, code: string, doc: DocKey, reason: string, added
     header: { template: end ? 'grey' : 'turquoise', title: plainText(tr(locale, 'twin.card.autoTitle', { doc: docName(locale, doc) })) },
     elements: [
       { tag: 'div', text: plainText(tr(locale, 'twin.card.reason', { reason })) },
+      ...(backtest ? [{ tag: 'div', text: plainText(backtest) }] : []),
       { tag: 'hr' },
       ...(removed.length ? [{ tag: 'markdown', content: `**${tr(locale, 'twin.card.removed')}**\n${list(removed)}` }] : []),
       ...(added.length ? [{ tag: 'markdown', content: `**${tr(locale, 'twin.card.added')}**\n${list(added)}` }] : []),
@@ -1013,14 +1213,14 @@ export async function answerProposal(user: User, code: string, apply: boolean) {
     'SELECT doc, payload, card, state, expires FROM twin_proposals WHERE code = ? AND user_id = ?', code, user.id);
   if (!p || p.state !== 'waiting' || p.expires < now()) throw new UserError('err.twin.proposalGone');
   const t = twinOf(user.id)!;
-  const { markdown, reason } = JSON.parse(decrypt(p.payload)) as { markdown: string; reason: string };
+  const { markdown, reason, backtest } = JSON.parse(decrypt(p.payload)) as { markdown: string; reason: string; backtest?: BacktestSummary };
   if (apply) {
     await replaceDocBody(user, docOf(t, p.doc), markdown);
     run(`UPDATE twin SET ${stampColumn(p.doc)} = COALESCE(${stampColumn(p.doc)}, ?) WHERE user_id = ?`, now(), user.id);
   }
   run("UPDATE twin_proposals SET state = ?, payload = '' WHERE code = ?", apply ? 'applied' : 'declined', code);
   const end = tr(localeOf(user.id), apply ? 'twin.card.applied' : 'twin.card.declined');
-  const card = proposalCard(user, code, p.doc, markdown, reason, end);
+  const card = proposalCard(user, code, p.doc, markdown, reason, end, backtest && backtestLine(localeOf(user.id), backtest));
   void updateCardOf(p.card, card);
   return { applied: apply, end, card };
 }
@@ -1032,11 +1232,11 @@ export async function revertChange(user: User, code: string) {
   if (!p || p.state !== 'auto' || now() - p.at > REVERT_MS) throw new UserError('err.twin.proposalGone');
   const later = get("SELECT 1 FROM twin_proposals WHERE user_id = ? AND doc = ? AND state IN ('auto', 'applied') AND at > ?", user.id, p.doc, p.at);
   if (later) throw new UserError('err.twin.revertLater');
-  const { before, reason, added, removed } = JSON.parse(decrypt(p.payload)) as { before: string; reason: string; added: string[]; removed: string[] };
+  const { before, reason, added, removed, backtest } = JSON.parse(decrypt(p.payload)) as { before: string; reason: string; added: string[]; removed: string[]; backtest?: BacktestSummary };
   await replaceDocBody(user, docOf(twinOf(user.id)!, p.doc), before);
   run("UPDATE twin_proposals SET state = 'reverted', payload = '' WHERE code = ?", code);
   const end = tr(localeOf(user.id), 'twin.card.reverted');
-  const card = changeCard(user, code, p.doc, reason, added, removed, end);
+  const card = changeCard(user, code, p.doc, reason, added, removed, end, backtest && backtestLine(localeOf(user.id), backtest));
   void updateCardOf(p.card, card);
   return { reverted: true, end, card };
 }

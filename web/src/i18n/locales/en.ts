@@ -983,6 +983,7 @@ const en: Record<MessageKey, string> = {
   'me.twin.apply': 'Apply',
   'me.twin.decline': 'Don\'t apply',
   'me.twin.applied': 'Applied; the document was updated',
+  'me.twin.backtest': 'Backtest ({n} past messages): right on whether to reply {from} → {to}, reply similarity {simFrom} → {simTo}',
   'me.twin.declined': 'Not applied',
   'me.twin.dashboard': 'Dashboard',
   'twin.dash.title': 'AI twin dashboard',

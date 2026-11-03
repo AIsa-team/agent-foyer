@@ -312,14 +312,29 @@ export function larkTwinTools({ server, user, guard, resolveColleagues }: ToolKi
   }, guard((a: { id: string; cause?: string; closeness?: number; distilled?: boolean; replied_elsewhere?: boolean }) => twin.reviewPrediction(user, a)));
 
   server.registerTool('suggest_twin_doc_change', {
-    description: 'Proposes a new version of one of the twin\'s documents ("profile": who the user is; "style": how they reply), as the whole new text in Markdown (at most 2000 characters; people and chats by name, never ids), with the reason. A small change backed by evidence applies by itself after the hub\'s review and the user can undo it; anything else waits for the user (Lark card or Me page). You cannot edit these documents directly.',
+    description: 'Proposes a new version of one of the twin\'s documents ("profile": who the user is; "style": how they reply), as the whole new text in Markdown (at most 2000 characters; people and chats by name, never ids), with the reason. The first version waits for the user. After that it starts a blind backtest, answered by a fresh session (get_backtest, submit_backtest), never the one that wrote the change; only a candidate that does better goes on, a small one applying by itself (the user can undo it), a bigger one waiting for the user with the result. At most two backtests per document a day. You cannot edit these documents directly.',
     inputSchema: {
       doc: z.enum(['profile', 'style']),
       markdown: z.string(),
       reason: z.string().describe('one or two sentences: what changes and why'),
-      evidence: z.array(z.string()).max(20).optional().describe('ids of reviewed predictions showing the pattern (cause "tone" for style; "missingFact"/"stance" for profile), or of high-confidence memories for profile; 3+ from 2+ people let a small change apply by itself'),
+      evidence: z.array(z.string()).max(20).optional().describe('ids of the predictions that led you to it; they are left out of the backtest'),
     },
   }, guard((a: { doc: 'profile' | 'style'; markdown: string; reason: string; evidence?: string[] }) => twin.suggestDocChange(user, a)));
+
+  server.registerTool('get_backtest', {
+    description: 'A backtest waiting to be answered (the oldest, or the one named), blind: two versions of the twin\'s documents as A and B, and past messages as they stood then, without what the user did. Answer it in a session that did not write the change, then submit_backtest.',
+    inputSchema: { backtest: z.string().optional() },
+  }, guard((a: { backtest?: string }) => twin.getBacktest(user, a)));
+
+  const answer = z.object({ should_reply: z.boolean(), form: z.enum(['text', 'reaction']).optional(), reply: z.string().optional() });
+  type Answer = { should_reply: boolean; form?: 'text' | 'reaction'; reply?: string };
+  server.registerTool('submit_backtest', {
+    description: 'Your answers to a backtest from get_backtest: for every case, what you predict the user would do acting with documents A and with documents B. The hub, which alone knows which is the change, scores both against what the user actually did; the change goes on (applying by itself when small, else to the user with the result) only if it does better by more than noise.',
+    inputSchema: {
+      backtest: z.string(),
+      answers: z.array(z.object({ case: z.string(), A: answer, B: answer })).max(100),
+    },
+  }, guard((a: { backtest: string; answers: { case: string; A: Answer; B: Answer }[] }) => twin.submitBacktest(user, a)));
 
   server.registerTool('twin_settings', {
     description: 'Which group chats the twin looks at, when the user asks to change it: group_mode "mentions" (only messages that @mention them, plus watched groups; the default) or "all"; watch / unwatch group chat_ids (find_lark_chat finds them). Direct chats are always included.',

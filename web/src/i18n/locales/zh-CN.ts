@@ -984,6 +984,7 @@ const zhCN = {
   'me.twin.apply': '采用',
   'me.twin.decline': '不采用',
   'me.twin.applied': '已采用，文档已更新',
+  'me.twin.backtest': '回测（{n} 条过去的消息）：判断准确率 {from} → {to}，回复相似度 {simFrom} → {simTo}',
   'me.twin.declined': '没有采用',
   'me.twin.dashboard': '看板',
   'twin.dash.title': 'AI 分身看板',

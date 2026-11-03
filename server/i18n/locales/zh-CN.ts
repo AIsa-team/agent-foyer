@@ -546,6 +546,10 @@ const zhCN = {
   'twin.opt.form.reaction': '表情回复',
   'twin.opt.actualForm.text': '文字',
   'twin.opt.actualForm.reaction': '表情回复',
+  'err.twin.backtestDaily': '这份文档今天已经回测过 {n} 次，明天再试。',
+  'err.twin.backtestGone': '这次回测已经结束或过期了，需要的话重新提交修改。',
+  'err.twin.backtestMissing': '还有用例没有作答：{cases}',
+  'twin.card.backtest': '回测（{n} 条过去的消息）：判断准确率 {from} → {to}，回复相似度 {simFrom} → {simTo}',
 };
 
 export default zhCN;

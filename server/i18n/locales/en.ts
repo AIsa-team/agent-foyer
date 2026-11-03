@@ -548,6 +548,10 @@ const en: Record<MessageKey, string> = {
   'twin.opt.form.reaction': 'Reaction',
   'twin.opt.actualForm.text': 'Text',
   'twin.opt.actualForm.reaction': 'Reaction',
+  'err.twin.backtestDaily': 'This document was backtested {n} times today; try again tomorrow.',
+  'err.twin.backtestGone': 'This backtest has ended or expired; propose the change again if needed.',
+  'err.twin.backtestMissing': 'Some cases have no answer yet: {cases}',
+  'twin.card.backtest': 'Backtest ({n} past messages): right on whether to reply {from} → {to}, reply similarity {simFrom} → {simTo}',
 };
 
 export default en;
