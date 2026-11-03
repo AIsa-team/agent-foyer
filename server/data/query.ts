@@ -219,7 +219,7 @@ const round = (n: number) => Math.round(n * 1e4) / 1e4;
 /** compact charts (aisa-charts) and report-series forms (aisa-report) that a data source can feed */
 export const CHART_KINDS = [
   'bar', 'line', 'area', 'donut', 'rank', 'funnel', 'waffle', 'segment', 'calendar',
-  'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'bridge',
+  'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'bridge', 'rungs',
 ] as const;
 export type DataChartKind = (typeof CHART_KINDS)[number];
 
@@ -244,6 +244,8 @@ export function toChart(kind: DataChartKind, r: Result, seriesName: string, othe
     case 'line':
     case 'area':
       return { labels: keys.map(bucketLabel), series };
+    case 'rungs':  // the first measure is the faint comparison, the second the ink one
+      return { labels: keys, tickLabels: keys.map(bucketLabel), series: series.slice(0, 2) };
     case 'donut':
     case 'segment':
       return { items };

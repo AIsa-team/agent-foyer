@@ -19,7 +19,7 @@ const MESSAGES = {
     better: '↑ better', cells: '{n} cells', part: ' + {part}', ofAll: '{pct} of all', ofGroup: '{pct} of {name}', stay: '{pct} stay',
     dropped: 'about {n} dropped here', change: 'Change', rankFromTo: 'No. {from} → No. {to}', bestRank: 'best No. {n}', share: '{pct}',
     requests: '{n} samples', over2: '{n} over {limit}', links: '{n} links', drag: 'drag a node', of: '{a} of {b}', more: '+{n} more',
-    perUnit: 'one cell = {unit}', running: 'Running total',
+    perUnit: 'one cell = {unit}', running: 'Running total', perRung: 'one rung = {unit}',
   },
   'zh-CN': {
     replay: '重播', rank: '排名', map: '关系', source: '来源：{source}', crossed: '{label} · 越过 {goal}', goal: '目标 {value}',
@@ -27,7 +27,7 @@ const MESSAGES = {
     better: '↑ 越往上越好', cells: '{n} 格', part: ' + {part}', ofAll: '占全部 {pct}', ofGroup: '占{name} {pct}', stay: '{pct} 留下',
     dropped: '这一步掉队约 {n}', change: '变化', rankFromTo: '第 {from} → 第 {to} 名', bestRank: '最好到过第 {n}', share: '{pct}',
     requests: '{n} 个样本', over2: '超过 {limit} 的 {n} 个', links: '{n} 条连线', drag: '可拖动', of: '{a} / {b}', more: '另 {n} 个',
-    perUnit: '一格 = {unit}', running: '累计',
+    perUnit: '一格 = {unit}', running: '累计', perRung: '一格横档 = {unit}',
   },
 };
 export function setMessages(locale, messages) {
@@ -2372,6 +2372,82 @@ export function tickRows(host, cfg) {
   }, 'tickrows');
 }
 
+// ================================================================ PAIRED RUNGS: two ladders per period, one rung = one unit
+/**
+ * pairedRungs(el, { labels: [...], tickLabels?: [...] ('' to skip), series: [{ name, values }, { name, values }],
+ *   unit (value per rung), highlight: 'last' | 'max' | index, format, height: 240 })
+ * Two measures per period, side by side: the first (the comparison: last year, the cost, day 1) as a faint ladder, the
+ * second (the one the page is about) in ink. Each rung is one unit, so both can be counted; every fifth is drawn darker.
+ * The highlighted period's ink ladder turns orange.
+ */
+export function pairedRungs(host, cfg) {
+  return mount(host, cfg, (plot, c, ctx) => {
+    const P = palette(ctx.fig);
+    const W = widthOf(plot, c), H = c.height ?? 240;
+    const fmt = formatter(c.format);
+    const labels = (c.labels ?? c.categories ?? []).map(String);
+    const n = labels.length;
+    const pair = (c.series ?? []).slice(0, 2).map((s) => ({ name: String(s.name), v: labels.map((_, i) => Math.max(0, Number(s.values?.[i]) || 0)) }));
+    if (pair.length === 1) pair.unshift({ name: '', v: labels.map(() => 0) });
+    const [base, main] = pair;
+    const m = { t: 30, b: 30 };
+    const plotH = H - m.t - m.b, floor = H - m.b;
+    const max = Math.max(1, ...base.v, ...main.v);
+    // a rung needs at least 3px of its own, so the unit grows until the tallest ladder fits
+    const unit = c.unit ?? niceUnit(max / Math.max(8, Math.floor(plotH / 3.2)));
+    const gap = Math.min(6, plotH / Math.max(1, Math.ceil(max / unit)));
+    const colW = W / Math.max(1, n);
+    const lw = Math.max(3, Math.min(16, colW * 0.3)), between = Math.max(1.5, Math.min(4, colW * 0.06));
+    const peak = main.v.reduce((b, v, i) => (v > main.v[b] ? i : b), 0);
+    const hero = c.highlight === 'last' ? n - 1 : c.highlight === 'max' ? peak : typeof c.highlight === 'number' ? c.highlight : -1;
+    const legend = el('div', 'ar-legend', ctx.controls);
+    for (const [s, fill] of [[base, P.ramp[2]], [main, P.strong]]) if (s.name) { const it = el('span', '', legend); el('i', '', it).style.background = fill; it.append(s.name); }
+    const svg = canvas(plot, W, H);
+    S('line', { x1: 0, x2: W, y1: floor + 0.5, y2: floor + 0.5, stroke: P.soft }, svg);
+    const tag = tagFor(plot);
+    const all = [];
+    // names on the floor never touch: on a narrow chart some are left out
+    let freeFrom = -Infinity;
+    const cols = labels.map((label, i) => {
+      const g = S('g', { class: 'ar-dimmable' }, svg);
+      const cx = colW * i + colW / 2;
+      const ladders = [[base, cx - between / 2 - lw, P.ramp[2], P.ramp[3]], [main, cx + between / 2, i === hero ? P.accent : P.strong, i === hero ? P.accent : P.text]];
+      ladders.forEach(([s, x0, fill, fifth], li) => {
+        const count = Math.round(s.v[i] / unit);
+        for (let r = 0; r < count; r++) {
+          const y = floor - 2 - r * gap;
+          all.push({ el: S('line', { x1: x0, x2: x0 + lw, y1: y, y2: y, stroke: (r + 1) % 5 === 0 ? fifth : fill, 'stroke-width': Math.min(1.6, gap * 0.55), opacity: 0 }, g), t: i * 45 + li * 120 + r * 10 });
+        }
+      });
+      const top = floor - 2 - Math.round(main.v[i] / unit) * gap;
+      const labelled = i === hero || i === peak || colW >= 44;
+      if (labelled) all.push({ el: T(g, cx + between / 2 + lw / 2, top - 7, fmt(main.v[i]), { 'font-size': i === hero ? 12 : 10.5, 'text-anchor': 'middle', fill: i === hero ? P.accent : P.text, opacity: 0 }, 'num'), t: i * 45 + 260 });
+      const tl = c.tickLabels ? c.tickLabels[i] : label;
+      const tw = String(tl ?? '').length * 6.4;
+      if (tl && cx - tw / 2 >= freeFrom) { T(svg, cx, H - 10, tl, { 'font-size': 10.5, 'text-anchor': 'middle', fill: P.muted }, 'mono'); freeFrom = cx + tw / 2 + 10; }
+      const hit = S('rect', { x: colW * i, y: 0, width: colW, height: H, fill: 'transparent' }, svg);
+      hit.addEventListener('pointerenter', () => {
+        if (!ctx.played) return;
+        spotlight(cols, i);
+        const d = main.v[i] - base.v[i];
+        tag.show(cx + lw + 10, top, label, [
+          ...(base.name ? [[base.name, fmt(base.v[i])]] : []),
+          [main.name, fmt(main.v[i])],
+          ...(base.name ? [['', '', `${msg('change')} ${signed(fmt, d)}`]] : []),
+        ]);
+      });
+      hit.addEventListener('pointerleave', () => { spotlight(cols, null); tag.hide(); });
+      return g;
+    });
+    if (!c.note) {
+      const foot = ctx.fig.querySelector('.ar-fig__foot');
+      if (foot) { const sp = el('span', '', foot, msg('perRung', { unit: fmt(unit) })); foot.prepend(sp); foot.hidden = false; }
+    }
+    const last = Math.max(0, ...all.map((o) => o.t));
+    return { dur: last + 300, frame(e) { all.forEach((o) => o.el.setAttribute('opacity', seg(e, o.t, 120))); } };
+  }, 'rungs');
+}
+
 // ---------------------------------------------------------------- declarative mounting
 const KINDS = {
   stroke: strokeChart, days: dayStrip, hive: hiveColumns, dial: tickDial, pour: pourFunnel, tape: tapeDumbbell, heat: dotHeat,
@@ -2379,6 +2455,7 @@ const KINDS = {
   tree: treemapChart, network: networkChart, hundred: hundredChart, bridge: bridgeChart,
   fan: launchFan, cascade: dotCascade, almanac: almanacChart, clock: dayClock, hourglass: hourglassChart, dayline: dayLine, ring: tickRing,
   converge: convergeChart, colonnade: colonnadeChart, ballot: ballotChart, rain: rainChart, 'tree-lr': treeChart, ticks: tickRows,
+  rungs: pairedRungs,
 };
 /** <div data-aisa-report="hive" data-config='{"items":[…]}'></div> → AisaReport.mountAll(root) (runs on load) */
 export function mountAll(root = document) {
@@ -2394,7 +2471,7 @@ export function mountAll(root = document) {
 const AisaReport = {
   strokeChart, dayStrip, hiveColumns, tickDial, pourFunnel, tapeDumbbell, dotHeat, rankMap, bumpChart, streamChart, parallelChart,
   stripChart, flowChart, treemapChart, networkChart, hundredChart, bridgeChart, launchFan, dotCascade, almanacChart, dayClock,
-  hourglassChart, dayLine, tickRing, convergeChart, colonnadeChart, ballotChart, rainChart, treeChart, tickRows, mountAll, setMessages,
+  hourglassChart, dayLine, tickRing, convergeChart, colonnadeChart, ballotChart, rainChart, treeChart, tickRows, pairedRungs, mountAll, setMessages,
 };
 if (typeof window !== 'undefined') {
   window.AisaReport = AisaReport;

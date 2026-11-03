@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, ApiError, type Agent, type AppInfo, type LarkLink, type SkillInfo } from '../api';
 import { barChart, calendarHeatmap, divergingBar, donutChart, funnelChart, ganttChart, lineChart, progressList, rankList, ringGauge, segmentBar, slopeChart, statTile, waffleChart } from '../brand/aisa-charts.js';
-import { ballotChart, bridgeChart, bumpChart, dayClock, dayLine, dayStrip, dotCascade, hiveColumns, hourglassChart, hundredChart, launchFan, pourFunnel, rankMap, strokeChart, streamChart, tapeDumbbell, tickDial, tickRing, tickRows, treemapChart } from '../brand/aisa-report.js';
+import { ballotChart, bridgeChart, bumpChart, dayClock, dayLine, dayStrip, dotCascade, hiveColumns, hourglassChart, hundredChart, launchFan, pairedRungs, pourFunnel, rankMap, strokeChart, streamChart, tapeDumbbell, tickDial, tickRing, tickRows, treemapChart } from '../brand/aisa-report.js';
 import { useI18n, type MessageKey } from '../i18n';
 import { AgentStep, CopyBox, Dialog, Empty, Icon, Loading, Step, useAction, useApi, useMe } from '../ui';
 import { AppCard, LarkTile } from './Apps';
@@ -26,10 +26,10 @@ const CHARTS = {
   // the report series: counted marks, the finding in orange, drawn in reading order when first seen
   hourglass: hourglassChart, pour: pourFunnel, days: dayStrip, dayline: dayLine, stroke: strokeChart, hundred: hundredChart, ticks: tickRows,
   cascade: dotCascade, stream: streamChart, hive: hiveColumns, dial: tickDial, bridge: bridgeChart, tape: tapeDumbbell, bump: bumpChart,
-  treemap: treemapChart, fan: launchFan, clock: dayClock, ballot: ballotChart, tickring: tickRing, rankmap: rankMap,
+  treemap: treemapChart, fan: launchFan, clock: dayClock, ballot: ballotChart, tickring: tickRing, rankmap: rankMap, rungs: pairedRungs,
 };
 /** kinds drawn by aisa-report: they take `read` (how to read the marks) where compact charts take `subtitle` */
-const REPORT_KINDS = new Set<string>(['hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'dial', 'bridge', 'tape', 'bump', 'treemap', 'fan', 'clock', 'ballot', 'tickring', 'rankmap']);
+const REPORT_KINDS = new Set<string>(['hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'dial', 'bridge', 'tape', 'bump', 'treemap', 'fan', 'clock', 'ballot', 'tickring', 'rankmap', 'rungs']);
 type ChartKind = keyof typeof CHARTS;
 type Base = { id?: string; own?: boolean };
 export type Module = Base & (

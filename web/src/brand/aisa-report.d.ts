@@ -31,5 +31,6 @@ export const ballotChart: Mount;
 export const rainChart: Mount;
 export const treeChart: Mount;
 export const tickRows: Mount;
+export const pairedRungs: Mount;
 export function setMessages(locale: string, messages: Record<string, string>): void;
 export function mountAll(root?: ParentNode): void;
