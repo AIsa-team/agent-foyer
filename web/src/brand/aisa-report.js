@@ -1938,6 +1938,11 @@ export function dayLine(host, cfg) {
       else S('circle', { cx: x(i), cy: y(days[i].v), r: 4.2, fill: P.text }, marks);
       T(marks, x(i), y(days[i].v) - 14, fmt(days[i].v), { 'font-size': 12, 'text-anchor': i === n - 1 ? 'end' : 'middle', fill: isHero ? P.accent : P.text }, 'num');
     });
+    // there is no axis, so the lowest day is named too: with the peak it gives the range
+    const low = days.reduce((b, d, i) => (d.v < days[b].v ? i : b), 0);
+    if (n > 2 && low !== peak && low !== hero && days[low].v !== days[peak].v) {
+      T(marks, x(low), y(days[low].v) + 19, fmt(days[low].v), { 'font-size': 11, 'text-anchor': low === n - 1 ? 'end' : low === 0 ? 'start' : 'middle', fill: P.sec }, 'num');
+    }
     const tag = tagFor(plot);
     const cross = S('line', { y1: m.t - 10, y2: floor, stroke: P.text, opacity: 0 }, svg);
     svg.addEventListener('pointermove', (ev) => {

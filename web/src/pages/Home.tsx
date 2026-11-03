@@ -176,6 +176,29 @@ function StatTileView({ item }: { item: Extract<Module, { type: 'stats' }>['item
     : <div className="card pad">{body}</div>;
 }
 
+/**
+ * A bridge from a data source: the measures of one period (the last, the one before, or a named category) become
+ * start → steps → end. `negate` subtracts measures stored as positive amounts (costs); `skip` leaves out a measure
+ * the bridge computes itself (a stored "revenue = GMV − cost").
+ */
+function bridgeFrom(d: Record<string, unknown>) {
+  const cats = (d.categories as string[] | undefined) ?? [];
+  const series = (d.series as { name: string; values: number[] }[] | undefined) ?? [];
+  if (!series.length || !cats.length) return d;
+  const at = d.at === 'previous' ? cats.length - 2 : typeof d.at === 'string' && d.at !== 'last' ? cats.indexOf(d.at) : cats.length - 1;
+  const i = Math.max(0, Math.min(cats.length - 1, at < 0 ? cats.length - 1 : at));
+  const negate = new Set((d.negate as string[] | undefined) ?? []);
+  const skip = new Set((d.skip as string[] | undefined) ?? []);
+  const [first, ...rest] = series.filter((s) => !skip.has(s.name));
+  const { categories: _c, series: _s, at: _a, negate: _n, skip: _k, ...options } = d;
+  return {
+    ...options,
+    kicker: options.kicker ?? cats[i],
+    start: { label: first.name, value: first.values[i] ?? 0 },
+    steps: rest.map((s) => ({ name: s.name, value: (negate.has(s.name) ? -1 : 1) * (s.values[i] ?? 0) })),
+  };
+}
+
 function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
   const text = useText();
   const { t } = useI18n();
@@ -188,8 +211,10 @@ function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
   useEffect(() => {
     if (!ref.current || !data) return;
     const report = REPORT_KINDS.has(m.kind);
-    // with a source, `data` holds the options the numbers don't carry (a goal, the unit of one mark, the highlight)
-    const base = m.source ? { ...(m.data ?? {}), ...data } : data;
+    // with a source, `data` holds the options the numbers don't carry (a goal, the unit of one mark, the highlight),
+    // and they win over the defaults the data shape brings (a stroke's cumulative, a rank's highlight)
+    let base = m.source ? { ...data, ...(m.data ?? {}) } : data;
+    if (m.kind === 'bridge' && m.source) base = bridgeFrom(base);
     const cfg = {
       ...base, title: text(m.title) || undefined, [report ? 'read' : 'subtitle']: text(m.subtitle) || undefined,
       format: m.format ?? base.format, height: m.height, ...(m.stacked ? { stacked: true } : {}),

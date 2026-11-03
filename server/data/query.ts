@@ -218,7 +218,7 @@ const round = (n: number) => Math.round(n * 1e4) / 1e4;
 /** compact charts (aisa-charts) and report-series forms (aisa-report) that a data source can feed */
 export const CHART_KINDS = [
   'bar', 'line', 'area', 'donut', 'rank', 'funnel', 'waffle', 'segment', 'calendar',
-  'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive',
+  'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'bridge',
 ] as const;
 export type DataChartKind = (typeof CHART_KINDS)[number];
 
@@ -238,6 +238,7 @@ export function toChart(kind: DataChartKind, r: Result, seriesName: string, othe
   const series = names.map((s) => ({ name: s ?? seriesName, values: keys.map((k) => valueAt(k, s)) }));
   switch (kind) {
     case 'bar':
+    case 'bridge':  // the page picks one period and turns the measures into steps (see Home.tsx)
       return { categories: keys.map(bucketLabel), series };
     case 'line':
     case 'area':
