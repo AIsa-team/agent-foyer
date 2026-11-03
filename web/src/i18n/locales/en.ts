@@ -1104,6 +1104,7 @@ const en: Record<MessageKey, string> = {
   'admin.memberCount': '{n} people',
   'admin.sync': 'Sync Lark directory',
   'admin.syncedToast': 'Synced {n} people from the Lark directory',
+  'admin.syncedWithheld': 'Synced {n} people, but Lark left out the name, parent and leaders of {d} departments; what the hub had is kept. Grant the Lark app: {scopes}',
   'admin.col.member': 'Member',
   'admin.col.email': 'Email',
   'admin.col.lastSeen': 'Last seen',

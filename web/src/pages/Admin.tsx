@@ -191,8 +191,9 @@ export function AdminPage() {
   if (me.user.role !== 'admin') return <div className="empty"><b>{t('admin.onlyAdmins')}</b></div>;
   if (!data) return <Loading error={error} />;
   const sync = () => run(async () => {
-    const r = await api.post<{ synced: number }>('/admin/sync-directory');
-    toast(t('admin.syncedToast', { n: r.synced }));
+    const r = await api.post<{ synced: number; withheld: { departments: number; permissions: string[] } | null }>('/admin/sync-directory');
+    if (r.withheld) toast(t('admin.syncedWithheld', { n: r.synced, d: r.withheld.departments, scopes: r.withheld.permissions.join(', ') }), 'error');
+    else toast(t('admin.syncedToast', { n: r.synced }));
   }).then(reload);
   return (
     <>

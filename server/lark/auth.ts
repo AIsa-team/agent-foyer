@@ -62,7 +62,7 @@ type LarkDept = {
 type LarkContact = { open_id: string; name?: string; en_name?: string; email?: string; enterprise_email?: string; avatar?: { avatar_240?: string } };
 /** People are keyed by their Lark open_id; the company email wins over a personal one. */
 const identityOf = (u: LarkContact): Identity => ({
-  id: u.open_id, name: u.name || u.en_name || u.enterprise_email || u.email || u.open_id, enName: u.en_name, email: u.enterprise_email || u.email, avatar: u.avatar?.avatar_240,
+  id: u.open_id, name: u.name ?? '', enName: u.en_name, email: u.enterprise_email || u.email, avatar: u.avatar?.avatar_240,
 });
 type Page<K extends string, T> = { data: { [k in K]?: T[] } & { page_token?: string; has_more: boolean } };
 
@@ -80,8 +80,10 @@ async function allPages<K extends string, T>(path: string, key: K, token: string
 /**
  * The company directory as Lark has it, for the hub to keep people and departments in step (see ../directory.ts).
  * Reads only what the app's contact range covers (Lark returns it via /contact/v3/scopes), so it works whether the
- * range is the whole company or a few departments. Needs contact:contact.base:readonly (and contact:department.base:readonly / contact:department.organize:readonly for department names, parents and leaders).
+ * range is the whole company or a few departments. Needs contact:contact.base:readonly, and DEPARTMENT_SCOPES for departments' names, parents and leaders: without
+ * them Lark still lists departments, only bare, and the snapshot says so (`withheld`).
  */
+const DEPARTMENT_SCOPES = ['contact:department.base:readonly', 'contact:department.organize:readonly'];
 export async function readDirectory(): Promise<DirectorySnapshot> {
   const out: DirectorySnapshot = { departments: [], people: [], members: [] };
   if (config.devLogin) return out;
@@ -99,11 +101,18 @@ export async function readDirectory(): Promise<DirectorySnapshot> {
   } while (pageToken);
 
   const departments = new Set(scope.departments);
+  const bare = new Set<string>();
   const addDept = (d: LarkDept) => {
     const i18n: Record<string, string> = {};
     if (d.i18n_name?.zh_cn) i18n['zh-CN'] = d.i18n_name.zh_cn;
     if (d.i18n_name?.en_us) i18n.en = d.i18n_name.en_us;
-    const name = d.name || d.i18n_name?.zh_cn || d.i18n_name?.en_us || d.open_department_id;
+    const name = d.name || d.i18n_name?.zh_cn || d.i18n_name?.en_us;
+    // no name: Lark withheld the department's details (and with them its parent and leaders), not emptied them
+    if (!name) {
+      bare.add(d.open_department_id);
+      out.departments.push({ id: d.open_department_id, parentId: d.parent_department_id ?? null, leaderIds: [] });
+      return;
+    }
     const leaders = [d.leader_user_id, ...(d.leaders ?? []).map((l) => l.leaderID)].filter((x): x is string => !!x);
     out.departments.push({ id: d.open_department_id, name, i18n, parentId: d.parent_department_id ?? null, leaderIds: [...new Set(leaders)] });
   };
@@ -148,5 +157,6 @@ export async function readDirectory(): Promise<DirectorySnapshot> {
       console.warn('[lark] skip user', id, (e as Error).message);
     }
   }
+  if (bare.size) out.withheld = { departments: bare.size, permissions: DEPARTMENT_SCOPES };
   return out;
 }

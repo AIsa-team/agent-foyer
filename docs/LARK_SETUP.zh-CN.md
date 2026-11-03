@@ -43,7 +43,7 @@
 | `contact:user.base:readonly`（获取用户基本信息） | 登录后拿到姓名、头像 |
 | `contact:user.email:readonly`（获取用户邮箱信息） | 拿到邮箱，用于管理员配置和按邮箱指定同事 |
 | `contact:contact.base:readonly`（获取通讯录基本信息） | 管理页「同步 Lark 通讯录」：遍历部门和成员。没有它会报 99991672 |
-| `contact:department.base:readonly`（获取部门基础信息）、`contact:department.organize:readonly`（获取部门组织架构信息） | 同步通讯录时拿到部门名称、上下级和负责人 |
+| `contact:department.base:readonly`（获取部门基础信息）、`contact:department.organize:readonly`（获取部门组织架构信息） | 同步通讯录时拿到部门名称、上下级和负责人；没开时同步会保留中台已有的信息，管理页会提示要开哪个 |
 
 开通时 Lark 会问这个权限能访问的数据范围，选**与应用的可用范围一致**即可：可用范围外的人本来就登录不了中台。同步通讯录时，中台只读取这个范围内的部门和成员，这样还没登录过的同事也能被选进「指定同事」名单。
 
