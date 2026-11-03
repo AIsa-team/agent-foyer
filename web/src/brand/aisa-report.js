@@ -982,14 +982,16 @@ export function bumpChart(host, cfg) {
 }
 
 // ================================================================ STREAM: composition over time, stacked from zero
-/** streamChart(el, { labels: [...], tickLabels: [...] ('' to skip), series: [{ name, values }], highlight: i (drawn at the bottom), format, axisLabel, ticks: 6, height: 320 }) */
+/** streamChart(el, { labels: [...], tickLabels: [...] ('' to skip), series: [{ name, values }], highlight: i | name (drawn at the bottom), format, axisLabel, ticks: 6, height: 320 }) */
 export function streamChart(host, cfg) {
   return mount(host, cfg, (plot, c, ctx) => {
     const P = palette(ctx.fig);
     const W = widthOf(plot, c), H = c.height ?? 320;
     const fmt = formatter(c.format);
     let series = (c.series ?? []).map((s, i) => ({ name: String(s.name), v: s.values.map(Number), i }));
-    const hero = c.highlight;
+    // highlight: an index, or a layer's name (a live data source does not promise an order)
+    const at = typeof c.highlight === 'string' ? series.findIndex((s) => s.name === c.highlight) : c.highlight;
+    const hero = at !== undefined && at !== null && series[at] ? at : undefined;
     if (hero !== undefined) series = [series[hero], ...series.filter((s) => s.i !== hero)];
     const labels = (c.labels ?? []).map(String);
     const n = labels.length;

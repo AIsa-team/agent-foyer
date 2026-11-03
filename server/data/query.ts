@@ -270,9 +270,13 @@ export function toChart(kind: DataChartKind, r: Result, seriesName: string, othe
         ? { items: keys.map((k) => ({ name: bucketLabel(k), parts: series.map((s) => ({ name: s.name, value: s.values[keys.indexOf(k)] ?? 0 })) })) }
         : { items: items.map((x) => ({ name: bucketLabel(x.name), value: x.value })) };
     case 'stream': {
-      const byTotal = [...series].sort((a, b) => b.values.reduce((x, y) => x + y, 0) - a.values.reduce((x, y) => x + y, 0));
-      const kept = byTotal.length > STREAM_LAYERS ? byTotal.slice(0, STREAM_LAYERS - 1) : byTotal;
-      const rest = byTotal.slice(kept.length);
+      // a series the data already calls "Other" joins the folded layer rather than becoming a second one
+      const sum = (s: { values: number[] }) => s.values.reduce((x, y) => x + y, 0);
+      const own = series.filter((s) => s.name !== otherLabel).sort((a, b) => sum(b) - sum(a));
+      const already = series.filter((s) => s.name === otherLabel);
+      const fold = own.length + (already.length ? 1 : 0) > STREAM_LAYERS;
+      const kept = fold ? own.slice(0, STREAM_LAYERS - 1) : own;
+      const rest = [...own.slice(kept.length), ...already];
       const layers = rest.length ? [...kept, { name: otherLabel, values: keys.map((_, i) => rest.reduce((a, s) => a + (s.values[i] ?? 0), 0)) }] : kept;
       return { labels: keys, tickLabels: keys.map(bucketLabel), series: layers };
     }
