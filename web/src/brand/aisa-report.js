@@ -518,8 +518,18 @@ export function hiveColumns(host, cfg) {
     const fmt = formatter(c.format);
     const max = Math.max(...items.map((i) => i.v), 1);
     const unit = c.unit ?? niceUnit(max / 20);
-    const per = c.perRow ?? 3;
     const colW = (W - 10) / Math.max(1, items.length);
+    // narrow columns stack two (or one) cells a row, so the cells stay big enough to see and count
+    const per = c.perRow ?? (colW < 30 ? 1 : colW < 58 ? 2 : 3);
+    // month buckets (2026-03) read as month names in the page language when they share a year
+    const monthKeys = items.length && items.every((i) => /^\d{4}-\d{2}$/.test(i.name));
+    const oneYear = monthKeys && items.every((i) => i.name.slice(0, 4) === items[0].name.slice(0, 4));
+    const monthF = new Intl.DateTimeFormat(lang(), { month: 'short', timeZone: 'UTC' });
+    const nameOf = (n) => (oneYear ? monthF.format(Date.UTC(+n.slice(0, 4), +n.slice(5, 7) - 1, 1)) : n);
+    // a column's number goes on top when it fits its column; on a narrow chart only the largest, the last and the
+    // highlighted keep theirs (smaller), the others are in the tooltip
+    const fitsAll = items.every((it) => textWidth(fmt(it.v), 16) <= colW - 6);
+    const peakCol = items.reduce((bi, it, i) => (it.v > items[bi].v ? i : bi), 0);
     const r = Math.min(9, (colW * 0.8) / per / Math.sqrt(3) - 0.4);
     const hw = Math.sqrt(3) * r, rowH = 1.5 * r + 1.4;
     const maxRows = Math.ceil(Math.ceil(max / unit) / per);
@@ -529,6 +539,8 @@ export function hiveColumns(host, cfg) {
     S('line', { x1: 0, x2: W, y1: floor + 6, y2: floor + 6, stroke: P.soft }, svg);
     const cells = [], cols = [];
     const tag = tagFor(plot);
+    // names never touch: when they would, every second (third …) one is shown, counting back from the latest
+    const nameEvery = Math.max(1, Math.ceil((Math.max(...items.map((i) => textWidth(nameOf(i.name), 10.5))) + 8) / colW));
     items.forEach((it, ci) => {
       const g = S('g', { class: 'ar-dimmable' }, svg);
       const cx = colW * ci + colW / 2;
@@ -547,14 +559,19 @@ export function hiveColumns(host, cfg) {
       }
       const rows = Math.ceil(count / per);
       const lab = S('g', {}, g);
-      T(lab, cx, floor - r - Math.max(0, rows - 1) * rowH - r - 12, fmt(it.v), { 'font-size': 16, 'text-anchor': 'middle', fill: P.text }, 'num');
-      T(lab, cx, floor + 24, it.name, { 'font-size': 10.5, 'text-anchor': 'middle', fill: hero ? P.text : P.muted }, 'mono');
+      const valueText = fmt(it.v), size = fitsAll ? 16 : 12;
+      if (fitsAll || ci === peakCol || ci === items.length - 1 || hero) {
+        const half = textWidth(valueText, size) / 2;
+        T(lab, clamp(cx, half, W - half), floor - r - Math.max(0, rows - 1) * rowH - r - 12, valueText, { 'font-size': size, 'text-anchor': 'middle', fill: P.text }, 'num');
+      }
+      const nameText = nameOf(it.name), nw = textWidth(nameText, 10.5) / 2 + 2;
+      if ((items.length - 1 - ci) % nameEvery === 0) T(lab, clamp(cx, nw, W - nw), floor + 24, nameText, { 'font-size': 10.5, 'text-anchor': 'middle', fill: hero ? P.text : P.muted }, 'mono');
       cols.push({ g, lab });
       const hit = S('rect', { x: colW * ci, y: 0, width: colW, height: H, fill: 'transparent' }, svg);
       hit.addEventListener('pointerenter', () => {
         if (!ctx.played) return;
         spotlight(cols.map((o) => o.g), ci);
-        tag.show(cx + 18, floor - (rows * rowH) / 2, it.name, [['', fmt(it.v)], ...it.parts.map((p) => [p.name, fmt(p.v)]), ['', '', `${msg('cells', { n: full })}${part > 0.05 ? msg('part', { part: part.toFixed(1) }) : ''} · ${msg('ofAll', { pct: pct(it.v / (total || 1)) })}`]]);
+        tag.show(cx + 18, floor - (rows * rowH) / 2, nameOf(it.name), [['', fmt(it.v)], ...it.parts.map((p) => [p.name, fmt(p.v)]), ['', '', `${msg('cells', { n: full })}${part > 0.05 ? msg('part', { part: part.toFixed(1) }) : ''} · ${msg('ofAll', { pct: pct(it.v / (total || 1)) })}`]]);
       });
       hit.addEventListener('pointerleave', () => { spotlight(cols.map((o) => o.g), null); tag.hide(); });
     });
@@ -1925,7 +1942,10 @@ export function dayLine(host, cfg) {
     const labelEvery = Math.max(1, Math.round(n / (W < 560 ? 3 : 5)));
     days.forEach((d, i) => {
       S('line', { x1: x(i), x2: x(i), y1: floor, y2: floor + (i % 7 === 0 ? 7 : 4), stroke: d.weekend ? P.soft : P.mid }, svg);
-      if (i % labelEvery === 0 || i === n - 1) T(svg, x(i), floor + 20, dayF.format(new Date(d.t)), { 'font-size': 10.5, 'text-anchor': i === n - 1 ? 'end' : i === 0 ? 'start' : 'middle', fill: P.muted }, 'mono');
+      // the last day is always named; a regular label too close to it gives way
+      const lastW = textWidth(dayF.format(new Date(days[n - 1].t)), 10.5), ownW = textWidth(dayF.format(new Date(d.t)), 10.5);
+      const clear = i === n - 1 || x(n - 1) - lastW - (i === 0 ? x(i) + ownW : x(i) + ownW / 2) >= 10;
+      if ((i % labelEvery === 0 && clear) || i === n - 1) T(svg, x(i), floor + 20, dayF.format(new Date(d.t)), { 'font-size': 10.5, 'text-anchor': i === n - 1 ? 'end' : i === 0 ? 'start' : 'middle', fill: P.muted }, 'mono');
     });
     const line = S('path', { fill: 'none', stroke: P.text, 'stroke-width': 1.6, 'stroke-linejoin': 'round' }, svg);
     const dots = days.map((d, i) => S('circle', { cx: x(i), cy: y(d.v), r: 3, fill: d.weekend ? P.paper : P.text, stroke: P.text, 'stroke-width': 1.2, opacity: 0 }, svg));
@@ -1936,7 +1956,10 @@ export function dayLine(host, cfg) {
       const isHero = i === hero;
       if (isHero) { hexRing(marks, x(i), y(days[i].v), 6, P.accent); S('circle', { cx: x(i), cy: y(days[i].v), r: 4, fill: P.accent }, marks); }
       else S('circle', { cx: x(i), cy: y(days[i].v), r: 4.2, fill: P.text }, marks);
-      T(marks, x(i), y(days[i].v) - 14, fmt(days[i].v), { 'font-size': 12, 'text-anchor': i === n - 1 ? 'end' : 'middle', fill: isHero ? P.accent : P.text }, 'num');
+      // the number goes on the side the line does not come from: below when a neighbour sits higher
+      const nb = [days[i - 1], days[i + 1]].filter(Boolean).map((d) => d.v);
+      const below = i !== peak && nb.length && nb.some((v) => v > days[i].v);
+      T(marks, x(i), y(days[i].v) + (below ? 22 : -14), fmt(days[i].v), { 'font-size': 12, 'text-anchor': i === n - 1 ? 'end' : i === 0 ? 'start' : 'middle', fill: isHero ? P.accent : P.text }, 'num');
     });
     // there is no axis, so the lowest day is named too: with the peak it gives the range
     const low = days.reduce((b, d, i) => (d.v < days[b].v ? i : b), 0);
@@ -2424,7 +2447,9 @@ export function pairedRungs(host, cfg) {
       });
       const top = floor - 2 - Math.round(main.v[i] / unit) * gap;
       const labelled = i === hero || i === peak || colW >= 44;
-      if (labelled) all.push({ el: T(g, cx + between / 2 + lw / 2, top - 7, fmt(main.v[i]), { 'font-size': i === hero ? 12 : 10.5, 'text-anchor': 'middle', fill: i === hero ? P.accent : P.text, opacity: 0 }, 'num'), t: i * 45 + 260 });
+      const vt = fmt(main.v[i]), vh = textWidth(vt, i === hero ? 12 : 10.5) / 2;
+      // a halo in the paper colour keeps the number readable where it has to sit over a neighbour's ladder
+      if (labelled) all.push({ el: T(g, clamp(cx + between / 2 + lw / 2, vh, W - vh), top - 7, vt, { 'font-size': i === hero ? 12 : 10.5, 'text-anchor': 'middle', fill: i === hero ? P.accent : P.text, 'paint-order': 'stroke', stroke: P.paper, 'stroke-width': 4, opacity: 0 }, 'num'), t: i * 45 + 260 });
       const tl = c.tickLabels ? c.tickLabels[i] : label;
       const tw = String(tl ?? '').length * 6.4;
       if (tl && cx - tw / 2 >= freeFrom) { T(svg, cx, H - 10, tl, { 'font-size': 10.5, 'text-anchor': 'middle', fill: P.muted }, 'mono'); freeFrom = cx + tw / 2 + 10; }
