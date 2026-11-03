@@ -136,6 +136,7 @@ function el(name, cls, parent, text) {
   return n;
 }
 let measureCtx;
+const MONO = '"JetBrains Mono", ui-monospace, monospace';
 function textWidth(text, size = 12, family = 'Inter, system-ui, sans-serif') {
   measureCtx ??= document.createElement('canvas').getContext('2d');
   measureCtx.font = `${size}px ${family}`;
@@ -397,12 +398,12 @@ function axes(svg, host, g, { w, h, scale, fmtTick, categories, orientation, cat
   for (const t of scale.ticks) {
     if (orientation === 'horizontal') {
       const x = ((t - scale.min) / (scale.max - scale.min)) * w;
-      svgEl('line', { x1: x, x2: x, y1: 0, y2: h, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges' }, g);
-      svgEl('text', { x, y: h + 16, 'text-anchor': 'middle', fill: axis, class: 'aisa-chart__tick' }, g).textContent = fmtTick(t);
+      svgEl('line', { x1: x, x2: x, y1: 0, y2: h, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges', class: 'aisa-chart__grid' }, g);
+      svgEl('text', { x, y: h + 18, 'text-anchor': 'middle', fill: axis, class: 'aisa-chart__tick aisa-chart__tick--num' }, g).textContent = fmtTick(t);
     } else {
       const y = h - ((t - scale.min) / (scale.max - scale.min)) * h;
-      svgEl('line', { x1: 0, x2: w, y1: y, y2: y, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges' }, g);
-      svgEl('text', { x: -8, y: y + 3.5, 'text-anchor': 'end', fill: axis, class: 'aisa-chart__tick' }, g).textContent = fmtTick(t);
+      svgEl('line', { x1: 0, x2: w, y1: y, y2: y, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges', class: 'aisa-chart__grid' }, g);
+      svgEl('text', { x: -10, y: y + 3.5, 'text-anchor': 'end', fill: axis, class: 'aisa-chart__tick aisa-chart__tick--num' }, g).textContent = fmtTick(t);
     }
   }
   // category labels: thin out when crowded
@@ -414,7 +415,7 @@ function axes(svg, host, g, { w, h, scale, fmtTick, categories, orientation, cat
     if (orientation === 'horizontal') {
       svgEl('text', { x: -8, y: p + 4, 'text-anchor': 'end', fill: axis, class: 'aisa-chart__tick' }, g).textContent = String(c);
     } else {
-      svgEl('text', { x: p, y: h + 16, 'text-anchor': 'middle', fill: axis, class: 'aisa-chart__tick' }, g).textContent = String(c);
+      svgEl('text', { x: p, y: h + 18, 'text-anchor': 'middle', fill: axis, class: 'aisa-chart__tick' }, g).textContent = String(c);
     }
   });
 }
@@ -436,11 +437,11 @@ function referenceLine(g, host, { value, label, w, h, toPos, horizontal }) {
 }
 const targetOf = (c) => (c.target === undefined || c.target === null ? null : typeof c.target === 'number' ? { value: c.target } : c.target);
 
-function plotBox(host, cfg, leftLabels, defaultH = 220) {
+function plotBox(host, cfg, leftLabels, defaultH = 220, numeric = false) {
   const width = cfg.width ?? Math.max(220, host.clientWidth || 600);
   const height = cfg.height ?? defaultH;
-  const left = Math.ceil(Math.max(...leftLabels.map((t) => textWidth(t, 10.5)), 0)) + 12;
-  const m = { top: 12, right: cfg.endLabels ? Math.min(96, Math.max(44, cfg.endLabelWidth ?? 72)) : 12, bottom: 24, left };
+  const left = Math.ceil(Math.max(...leftLabels.map((t) => (numeric ? textWidth(t, 10, MONO) : textWidth(t, 10.5))), 0)) + 14;
+  const m = { top: 16, right: cfg.endLabels ? Math.min(96, Math.max(44, cfg.endLabelWidth ?? 72)) : 12, bottom: 28, left };
   return { width, height, m, w: width - m.left - m.right, h: height - m.top - m.bottom };
 }
 
@@ -454,7 +455,7 @@ function plotBox(host, cfg, leftLabels, defaultH = 220) {
  *   plan: [...] (one series: plan-vs-actual — plan drawn as an outlined bar next to the solid actual),
  *   target: number | { value, label } (thin solid reference rule),
  *   format: { style: 'decimal'|'percent'|'currency', currency, unit, decimals, notation: 'compact'? }, title, subtitle, height,
- *   valueLabels: true | 'all' | false, interactive: true, animate: false, table: true })
+ *   valueLabels: true | 'all' | false, interactive: true, animate (see mount: grows in on first sight; false: still), table: true })
  * One series draws in the theme's ink (or orange with data-aisa-chart-theme="brand"); several series use the categorical slots.
  */
 export function barChart(host, cfg) {
@@ -500,7 +501,7 @@ export function barChart(host, cfg) {
     });
 
     const leftLabels = horiz ? cats.map(String) : scale.ticks.map(fmtTick);
-    const box = plotBox(host, { ...c, endLabels: false }, leftLabels, horiz ? Math.max(110, cats.length * 30 + 34) : 220);
+    const box = plotBox(host, { ...c, endLabels: false }, leftLabels, horiz ? Math.max(110, cats.length * 32 + 40) : 230, !horiz);
     if (horiz) box.m.right = Math.max(box.m.right, 44);
     box.w = box.width - box.m.left - box.m.right;
     const svg = svgEl('svg', { width: box.width, height: box.height, viewBox: `0 0 ${box.width} ${box.height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
@@ -509,7 +510,7 @@ export function barChart(host, cfg) {
     const len = horiz ? box.w : box.h;
     const band = (horiz ? box.h : box.w) / Math.max(1, cats.length);
     const groups = c.stacked ? 1 : Math.max(1, visible.length) + (plan ? 1 : 0);
-    const thick = Math.max(2, Math.min(24, (band * 0.62 - (groups - 1) * 2) / groups));
+    const thick = Math.max(2, Math.min(24, (band * 0.56 - (groups - 1) * 2) / groups));
     const groupW = thick * groups + (groups - 1) * 2;
     const toLen = (v) => (v - scale.min) / (scale.max - scale.min) * len;
     const zero = toLen(0);
@@ -557,9 +558,9 @@ export function barChart(host, cfg) {
         const tipPos = toLen(Math.max(total, plan ? plan[ci] || 0 : total));
         const xCenter = plan ? start + thick + 2 + thick / 2 : catPos(ci);
         const t = horiz
-          ? svgEl('text', { x: tipPos + 6, y: (plan ? start + thick + 2 + thick / 2 : catPos(ci)) + 3.5, fill: textC, class: 'aisa-chart__value', 'data-k': ci }, g)
-          : svgEl('text', { x: xCenter, y: box.h - tipPos - 5, 'text-anchor': 'middle', fill: ci === accent || ci === c.highlight ? token(host, '--aisa-text') : textC, class: 'aisa-chart__value', 'data-k': ci }, g);
-        if (!horiz && textWidth(label, 10.5) > band - 2) t.remove();
+          ? svgEl('text', { x: tipPos + 7, y: (plan ? start + thick + 2 + thick / 2 : catPos(ci)) + 3.5, fill: textC, class: 'aisa-chart__value', 'data-k': ci, style: `--i:${ci}` }, g)
+          : svgEl('text', { x: xCenter, y: box.h - tipPos - 7, 'text-anchor': 'middle', fill: ci === accent || ci === c.highlight ? token(host, '--aisa-text') : textC, class: 'aisa-chart__value', 'data-k': ci, style: `--i:${ci}` }, g);
+        if (!horiz && textWidth(label, 11.5) > band - 2) t.remove();
         else t.textContent = label;
       }
       // hit target: the whole band slot, bigger than the mark
@@ -655,8 +656,8 @@ export function lineChart(host, cfg) {
       },
     });
     const wantEnd = c.endLabels !== false && visible.length <= 4 && visible.length > 0;
-    const endW = Math.max(...visible.map((si) => textWidth(`${fmt(Number(series[si].values.at(-1)))}${visible.length > 1 ? ' ' + series[si].name : ''}`, 10.5)), 0) + 12;
-    const box = plotBox(host, { ...c, endLabels: wantEnd, endLabelWidth: endW }, scale.ticks.map(fmtTick), 220);
+    const endW = Math.max(...visible.map((si) => textWidth(`${fmt(Number(series[si].values.at(-1)))}${visible.length > 1 ? ' ' + series[si].name : ''}`, 11.5)), 0) + 14;
+    const box = plotBox(host, { ...c, endLabels: wantEnd, endLabelWidth: endW }, scale.ticks.map(fmtTick), 230, true);
     const svg = svgEl('svg', { width: box.width, height: box.height, viewBox: `0 0 ${box.width} ${box.height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
     svg.setAttribute('aria-label', [c.title, c.subtitle].filter(Boolean).join(' — ') || 'Line chart');
     const g = svgEl('g', { transform: `translate(${box.m.left},${box.m.top})` }, svg);
@@ -689,7 +690,7 @@ export function lineChart(host, cfg) {
     const collide = ends.some((e, i) => i > 0 && e.y - ends[i - 1].y < 14);
     if (wantEnd && !collide) {
       for (const e of ends) {
-        const t = svgEl('text', { x: box.w + 8, y: e.y + 4, fill: textC, class: 'aisa-chart__value', 'data-s': e.si }, g);
+        const t = svgEl('text', { x: box.w + 8, y: e.y + 4, fill: textC, class: 'aisa-chart__value aisa-chart__end', 'data-s': e.si }, g);
         t.textContent = visible.length > 1 ? `${fmt(Number(e.value))} ${series[e.si].name}` : fmt(Number(e.value));
       }
     }
@@ -945,8 +946,11 @@ export function ringGauge(host, cfg) {
       }, svg);
       void arc;
       if (!c.inline) {
-        const t = svgEl('text', { x: size / 2, y: size / 2 + size * 0.07, 'text-anchor': 'middle', class: 'aisa-ring__value', fill: token(host, '--aisa-text'), style: `font-size:${Math.round(size * 0.2)}px` }, svg);
-        t.textContent = it.centerValue ?? pct(frac);
+        const label = String(it.centerValue ?? pct(frac));
+        // longer numbers (99.94%) step down so they stay inside the ring
+        const fs = Math.min(size * 0.2, ((size - sw * 2) * 0.78) / Math.max(1, textWidth(label, 10, 'Plus Jakarta Sans, sans-serif') / 10));
+        const t = svgEl('text', { x: size / 2, y: size / 2 + fs * 0.35, 'text-anchor': 'middle', class: 'aisa-ring__value', fill: token(host, '--aisa-text'), style: `font-size:${fs.toFixed(1)}px` }, svg);
+        t.textContent = label;
         if (it.centerValue === undefined) counters.push([t, frac]);
       }
       const text = el('div', 'aisa-ring__text', cell);
