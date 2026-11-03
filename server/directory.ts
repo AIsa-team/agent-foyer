@@ -20,9 +20,12 @@ interface DeptRow { id: string; name: string; name_i18n: string | null; parent_i
 // ---------------------------------------------------------------- the directory, from a channel
 /** People and departments as the company's platform has them; `members` lists each department's people in full. */
 export interface DirectorySnapshot {
-  departments: { id: string; name: string; i18n?: Record<string, string>; parentId?: string | null; leaderIds: string[] }[];
+  /** `name` is missing when the provider withheld a department's details: the hub keeps what it had. */
+  departments: { id: string; name?: string; i18n?: Record<string, string>; parentId?: string | null; leaderIds: string[] }[];
   people: Identity[];
   members: { departmentId: string; userIds: string[] }[];
+  /** How many departments came without details because the provider's app lacks permissions, and which to grant. */
+  withheld?: { departments: number; permissions: string[] };
 }
 /** Where the directory comes from (a channel, e.g. Lark's contacts). */
 export interface DirectoryProvider { name: string; read(): Promise<DirectorySnapshot> }
@@ -32,14 +35,21 @@ export const directoryProvider = (): DirectoryProvider | null => channels.find((
 /**
  * Brings people and departments in step with the provider, so colleagues can be picked (as app members, recipients…)
  * before they ever sign in. Membership is replaced per department the provider listed, so moves are picked up.
- * Returns how many people it saw (0 without a provider).
+ * A department that comes without its details keeps its name, parent and leaders from before (a new one is listed under
+ * its id), so a permission missing on the provider's side never wipes the organisation or leaders' rights.
+ * Returns how many people it saw (0 without a provider) and what the provider withheld.
  */
-export async function syncDirectory(): Promise<number> {
+export async function syncDirectory(): Promise<{ people: number; withheld?: DirectorySnapshot['withheld'] }> {
   const provider = directoryProvider();
-  if (!provider) return 0;
+  if (!provider) return { people: 0 };
   const d = await provider.read();
   // one write at a time (upsertUser runs its own transaction)
   for (const dep of d.departments) {
+    if (!dep.name) {
+      run(`INSERT INTO departments (id, name, parent_id, leader_ids, updated_at) VALUES (?, ?, ?, '[]', ?)
+           ON CONFLICT(id) DO UPDATE SET updated_at = excluded.updated_at`, dep.id, dep.id, dep.parentId ?? null, now());
+      continue;
+    }
     run(`INSERT INTO departments (id, name, name_i18n, parent_id, leader_ids, updated_at) VALUES (?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET name = excluded.name, name_i18n = excluded.name_i18n, parent_id = excluded.parent_id,
            leader_ids = excluded.leader_ids, updated_at = excluded.updated_at`,
@@ -50,7 +60,7 @@ export async function syncDirectory(): Promise<number> {
     run('DELETE FROM user_departments WHERE department_id = ?', m.departmentId);
     for (const id of m.userIds) run('INSERT OR IGNORE INTO user_departments (user_id, department_id) VALUES (?, ?)', id, m.departmentId);
   }
-  return d.people.length;
+  return { people: d.people.length, withheld: d.withheld };
 }
 
 // ---------------------------------------------------------------- the organisation page

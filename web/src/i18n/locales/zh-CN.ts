@@ -1106,6 +1106,7 @@ const zhCN = {
   'admin.memberCount': '{n} 人',
   'admin.sync': '同步 Lark 通讯录',
   'admin.syncedToast': '已从 Lark 通讯录同步 {n} 人',
+  'admin.syncedWithheld': '已同步 {n} 人，但有 {d} 个部门 Lark 没给名称、上下级和负责人，已保留之前的信息。请给 Lark 应用开通权限：{scopes}',
   'admin.col.member': '成员',
   'admin.col.email': '邮箱',
   'admin.col.lastSeen': '最近访问',

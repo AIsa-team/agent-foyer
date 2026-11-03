@@ -86,6 +86,8 @@ const lark = {
   calendarTokens: new Set<string>(),
   /** the fake company directory: where "Bea" works (moves between syncs) */
   beaIn: 'od-east',
+  /** Lark leaving out names, parents and leaders, as it does when the app lacks the department/user scopes */
+  withholdNames: false,
   searchTokens: new Set<string>(),
   searches: [] as Record<string, unknown>[],
   calendarQueries: [] as { start: number; end: number }[],
@@ -708,9 +710,9 @@ const MB_CARDS: Record<string, { name: string; display: string; meta: { name: st
   }
   // the company directory (contact range: one department tree plus one person granted on their own)
   if (p.startsWith('/contact/v3/') && bearer === 't-app') {
-    const person = (id: string, name: string) => ({ open_id: id, name, enterprise_email: `${id}@acme.example` });
+    const person = (id: string, name: string) => ({ open_id: id, ...(lark.withholdNames ? {} : { name }), enterprise_email: `${id}@acme.example` });
     if (p === '/contact/v3/scopes') return send({ code: 0, data: { department_ids: ['od-sales'], user_ids: ['ou_solo'], has_more: false } });
-    if (p === '/contact/v3/departments/od-sales') return send({ code: 0, data: { department: { open_department_id: 'od-sales', name: '销售', i18n_name: { en_us: 'Sales' }, leader_user_id: 'ou_lead' } } });
+    if (p === '/contact/v3/departments/od-sales') return send({ code: 0, data: { department: lark.withholdNames ? { open_department_id: 'od-sales', leaders: [{ leaderType: 1 }] } : { open_department_id: 'od-sales', name: '销售', i18n_name: { en_us: 'Sales' }, leader_user_id: 'ou_lead' } } });
     if (p === '/contact/v3/departments/od-sales/children') return send({ code: 0, data: { items: [{ open_department_id: 'od-east', name: '华东', parent_department_id: 'od-sales' }], has_more: false } });
     if (p === '/contact/v3/users/find_by_department') {
       const dep = url.searchParams.get('department_id');
@@ -3196,14 +3198,14 @@ try {
     // a hub that signs in with Lark for real (not the dev login used above), on its own database
     const dirData = mkdtempSync(path.join(tmpdir(), 'hub-dir-'));
     const { execFile } = await import('node:child_process');
-    const run = () => new Promise<string>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
+    const run = (dataDir = dirData) => new Promise<string>((ok, fail) => execFile(process.execPath, ['--input-type=module', '-e', `
       const { syncDirectory } = await import(${JSON.stringify(path.resolve('server/directory.ts'))});
       const { all } = await import(${JSON.stringify(path.resolve('server/db.ts'))});
-      const n = await syncDirectory();
-      console.log(JSON.stringify({ n, users: all('SELECT id, name, email FROM users ORDER BY id'), deps: all('SELECT id, name, name_i18n, parent_id, leader_ids FROM departments ORDER BY id'), mem: all('SELECT department_id, user_id FROM user_departments ORDER BY department_id, user_id') }));
-    `], { env: { ...process.env, DEV_LOGIN: '', AUTH_PROVIDER: 'lark', DATA_DIR: dirData, HUB_SECRET: 'smoke', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis` } },
+      const r = await syncDirectory();
+      console.log(JSON.stringify({ n: r.people, withheld: r.withheld, users: all('SELECT id, name, email FROM users ORDER BY id'), deps: all('SELECT id, name, name_i18n, parent_id, leader_ids FROM departments ORDER BY id'), mem: all('SELECT department_id, user_id FROM user_departments ORDER BY department_id, user_id') }));
+    `], { env: { ...process.env, DEV_LOGIN: '', AUTH_PROVIDER: 'lark', DATA_DIR: dataDir, HUB_SECRET: 'smoke', HUB_URL: HUB, LARK_APP_ID: 'cli_smoke', LARK_APP_SECRET: 'secret', LARK_API_BASE: `http://localhost:${LARK_PORT}/open-apis`, LARK_ACCOUNTS_BASE: `http://localhost:${LARK_PORT}/open-apis` } },
       (e, out, err) => (e ? fail(new Error(String(err).split('\n').filter((l) => !/Warning|--trace/.test(l)).slice(0, 6).join(' | '))) : ok(out))));
-    type Dir = { n: number; users: { id: string; email: string }[]; deps: { id: string; name_i18n: string; parent_id: string | null; leader_ids: string }[]; mem: { department_id: string; user_id: string }[] };
+    type Dir = { n: number; withheld?: { departments: number; permissions: string[] }; users: { id: string; name: string; email: string }[]; deps: { id: string; name: string; name_i18n: string; parent_id: string | null; leader_ids: string }[]; mem: { department_id: string; user_id: string }[] };
     const first = JSON.parse((await run()).trim().split('\n').at(-1)!) as Dir;
     check(first.n === 3 && first.users.map((u) => u.id).join() === 'ou_bea,ou_lead,ou_solo' && first.users[0].email === 'ou_bea@acme.example', 'a sync brings in everyone in the contact range, with their company email');
     check(first.deps.map((d) => `${d.id}<${d.parent_id ?? ''}`).join() === 'od-east<od-sales,od-sales<' && JSON.parse(first.deps[1].leader_ids)[0] === 'ou_lead' && JSON.parse(first.deps[1].name_i18n).en === 'Sales',
@@ -3212,6 +3214,22 @@ try {
     lark.beaIn = 'od-sales';
     const second = JSON.parse((await run()).trim().split('\n').at(-1)!) as Dir;
     check(second.users.length === 3 && second.mem.map((m) => `${m.department_id}:${m.user_id}`).join() === 'od-sales:ou_bea,od-sales:ou_lead', 'syncing again picks up someone moving department, without duplicates');
+    check(!second.withheld, 'a full directory reports nothing withheld');
+    lark.withholdNames = true;
+    const third = JSON.parse((await run()).trim().split('\n').at(-1)!) as Dir;
+    const sales = third.deps.find((d) => d.id === 'od-sales');
+    check(third.n === 3 && sales?.name === '销售' && JSON.parse(sales.name_i18n).en === 'Sales' && JSON.parse(sales.leader_ids)[0] === 'ou_lead',
+      'when Lark withholds a department\'s details (a scope not granted) the sync still runs and keeps its name, names per language and leader');
+    check(third.deps.find((d) => d.id === 'od-east')?.parent_id === 'od-sales', 'and keeps where departments sit');
+    check(third.users.map((u) => u.name).join() === second.users.map((u) => u.name).join() && third.users.every((u) => u.name && !u.name.startsWith('ou_')),
+      'people whose names Lark withholds keep theirs');
+    check(third.withheld?.departments === 1 && third.withheld.permissions.includes('contact:department.base:readonly'), 'and the sync says how many departments came bare and which permissions to grant');
+    const fresh = mkdtempSync(path.join(tmpdir(), 'hub-dir-'));
+    const firstBare = JSON.parse((await run(fresh)).trim().split('\n').at(-1)!) as Dir;
+    check(firstBare.deps.find((d) => d.id === 'od-sales')?.name === 'od-sales' && firstBare.users.find((u) => u.id === 'ou_bea')?.name === 'ou_bea@acme.example',
+      'a hub syncing for the first time without those scopes lists the department under its id and people under their email');
+    rmSync(fresh, { recursive: true, force: true });
+    lark.withholdNames = false;
     rmSync(dirData, { recursive: true, force: true });
   }
 

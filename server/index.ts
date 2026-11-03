@@ -188,7 +188,9 @@ for (const i of enabledIntegrations()) i.start?.();
 startBoardSync();
 if (directoryProvider()) {
   // keep departments and colleagues in step with the company's platform (the admin page can still sync on demand)
-  const sync = () => syncDirectory().catch((e) => console.warn('[directory] sync failed', (e as Error).message));
+  const sync = () => syncDirectory().then(
+    (r) => r.withheld && console.warn(`[directory] ${r.withheld.departments} departments came without details (kept what the hub had); grant ${r.withheld.permissions.join(', ')}`),
+    (e) => console.warn('[directory] sync failed', (e as Error).message));
   setTimeout(sync, 60_000).unref();
   setInterval(sync, 6 * 3600_000).unref();
 }

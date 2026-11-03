@@ -212,7 +212,8 @@ api.get('/boards', async (c) => {
 api.post('/admin/sync-directory', async (c) => {
   requireAdmin(c.get('user'));
   if (!directoryProvider()) throw new UserError('err.directory.none');
-  return c.json({ synced: await syncDirectory() });
+  const r = await syncDirectory();
+  return c.json({ synced: r.people, withheld: r.withheld ?? null });
 });
 api.get('/org/departments/:id', (c) => c.json(departmentPage(c.get('user'), c.req.param('id'), localeOf(c))));
 api.get('/org', (c) => c.json(organisation(localeOf(c))));

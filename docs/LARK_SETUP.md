@@ -46,6 +46,7 @@ Under **Permissions & Scopes**, add the following (searching for the code name i
 | `contact:user.base:readonly` | name and avatar at sign-in |
 | `contact:user.email:readonly` | email, used for admin settings and choosing colleagues by email |
 | `contact:contact.base:readonly` | syncing the directory (departments and members); without it Lark returns 99991672 |
+| `contact:department.base:readonly`, `contact:department.organize:readonly` | department names, hierarchy and leaders when syncing the directory; without them the sync keeps what the hub had and the Admin page says which to grant |
 
 When Lark asks which data a scope covers, choose **the same as the app's availability**: people outside it cannot
 sign in anyway. The directory sync only reads departments and members in that range, so colleagues who have never
