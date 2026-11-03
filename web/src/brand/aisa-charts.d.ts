@@ -18,4 +18,7 @@ export const calendarHeatmap: Mount;
 export const ganttChart: Mount;
 export const progressList: Mount;
 export const histogram: Mount;
+export const dumbbellChart: Mount;
+export const waterfallChart: Mount;
+export const scatterChart: Mount;
 export function setMessages(locale: string, messages: Record<string, string>): void;

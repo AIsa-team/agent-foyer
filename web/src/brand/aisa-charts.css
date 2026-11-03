@@ -9,6 +9,9 @@
 }
 .aisa-chart__toggle:hover { color: var(--aisa-text); border-color: var(--aisa-line-strong); }
 .aisa-chart__toggle:focus-visible, .aisa-chart__key:focus-visible, .aisa-chart__svg:focus-visible { outline: none; box-shadow: var(--aisa-focus-ring); border-radius: var(--aisa-radius-sm); }
+.aisa-chart__svg:focus:not(:focus-visible) { outline: none; }
+/* labels never steal the pointer from the hit targets under them */
+.aisa-chart__svg text { pointer-events: none; }
 
 .aisa-chart__legend { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-bottom: var(--aisa-space-2); }
 .aisa-chart__legend[hidden] { display: none; }
@@ -21,6 +24,7 @@
 .aisa-chart__swatch { display: inline-block; flex: none; }
 .aisa-chart__swatch--rect { width: 8px; height: 8px; border-radius: 2px; }
 .aisa-chart__swatch--line { width: 12px; height: 2px; border-radius: 1px; }
+.aisa-chart__swatch--dot { width: 8px; height: 8px; border-radius: 50%; }
 
 .aisa-chart__plot { position: relative; }
 .aisa-chart__svg { display: block; max-width: 100%; overflow: visible; }
@@ -55,20 +59,50 @@
 .aisa-chart__table table { border-collapse: collapse; width: 100%; font-size: var(--aisa-text-xs); font-variant-numeric: tabular-nums; }
 .aisa-chart__table th, .aisa-chart__table td { padding: 6px 10px; border-bottom: 1px solid var(--aisa-line); text-align: right; white-space: nowrap; }
 .aisa-chart__table th:first-child { text-align: left; font-weight: 500; }
+.aisa-chart__foot { display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: var(--aisa-space-2); font-size: 11px; line-height: 1.5; color: var(--aisa-text-muted); }
+.aisa-chart__note { color: var(--aisa-text-secondary); }
 .aisa-chart__table thead th { color: var(--aisa-text-muted); font-weight: 500; }
 
-/* entrance animation (opt-in with animate: true; used by slides) */
-.aisa-chart--animate .aisa-chart__bar { transform-box: fill-box; animation: aisa-grow var(--aisa-duration-slow) var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
-.aisa-chart--horizontal .aisa-chart__bar { transform-origin: left center; }
-.aisa-chart--animate .aisa-chart__line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: aisa-draw 900ms var(--aisa-ease-out) forwards; }
-.aisa-chart--animate .aisa-chart__area, .aisa-chart--animate .aisa-chart__seg, .aisa-chart--animate .aisa-chart__cell { animation: aisa-fade 600ms var(--aisa-ease-out) both; }
-.aisa-chart--bar.aisa-chart--animate .aisa-chart__bar { transform-origin: center bottom; }
+/* entrance: once when the chart first scrolls into view (aisa-reveal--play on the host, set by the module),
+   or on every render with animate: true (slides). Marks grow from their baseline, lines draw, dots and rows fade up. */
+.aisa-reveal--waiting .aisa-chart__plot { opacity: 0; }
+.aisa-reveal--play .aisa-chart__plot { animation: aisa-fade 240ms var(--aisa-ease-out) both; }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__bar { transform-box: fill-box; animation: aisa-grow var(--aisa-duration-slow) var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 40ms); }
+.aisa-chart--bar .aisa-chart__bar, .aisa-chart--waterfall .aisa-chart__bar { transform-origin: center bottom; }
+.aisa-chart--horizontal .aisa-chart__bar { transform-origin: left center; animation-name: aisa-grow-x; }
+.aisa-chart--funnel .aisa-chart__bar { transform-origin: center; animation-name: aisa-grow-x; }
+.aisa-chart--diverging .aisa-chart__bar { animation-name: aisa-grow-x; }
+.aisa-chart--gantt .aisa-chart__bar { transform-origin: left center; animation-name: aisa-grow-x; animation-delay: calc(var(--i, 0) * 70ms + 150ms); }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: aisa-draw 900ms var(--aisa-ease-out) forwards; }
+:is(.aisa-chart--animate, .aisa-reveal--play) :is(.aisa-chart__area, .aisa-chart__seg, .aisa-chart__forecast) { animation: aisa-fade 600ms var(--aisa-ease-out) both; }
+/* grids (heatmap, calendar, waffle) fill in cell by cell; the donut sweeps round; a 100% bar unrolls from the left */
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__cell { transform-box: fill-box; transform-origin: center; animation: aisa-pop 360ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 9ms); }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart--donut .aisa-chart__seg { transform-box: view-box; animation: aisa-sweep 640ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 90ms); }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart--segment .aisa-chart__seg { transform-box: view-box; transform-origin: left center; animation: aisa-grow-x 700ms var(--aisa-ease-out) both; }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-ring__arc { animation: aisa-arc 900ms var(--aisa-ease-out) both; }
+:is(.aisa-chart--animate, .aisa-reveal--play) :is(.aisa-rank__fill, .aisa-progress-list__fill) { transform-origin: left center; animation: aisa-grow-x 700ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 60ms); }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__dot { transform-box: fill-box; transform-origin: center; animation: aisa-pop 420ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 18ms + 120ms); }
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__row { animation: aisa-rise 420ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 50ms); }
 @keyframes aisa-grow { from { transform: scaleY(0); } }
+@keyframes aisa-grow-x { from { transform: scaleX(0); } }
 @keyframes aisa-draw { to { stroke-dashoffset: 0; } }
 @keyframes aisa-fade { from { opacity: 0; } }
+@keyframes aisa-pop { from { opacity: 0; transform: scale(0.4); } }
+@keyframes aisa-rise { from { opacity: 0; transform: translateY(4px); } }
+@keyframes aisa-sweep { from { opacity: 0; transform: rotate(-24deg) scale(0.94); } }
+@keyframes aisa-arc { from { stroke-dasharray: 0 var(--circ, 400px); } }
 @media (prefers-reduced-motion: reduce) {
-  .aisa-chart--animate * { animation: none !important; }
-  .aisa-chart--animate .aisa-chart__line { stroke-dasharray: none; stroke-dashoffset: 0; }
+  :is(.aisa-chart--animate, .aisa-reveal--play) * { animation: none !important; }
+  :is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__line { stroke-dasharray: none; stroke-dashoffset: 0; }
+}
+@media print { .aisa-reveal--waiting .aisa-chart__plot { opacity: 1; } }
+
+/* spotlight: pointing at a mark (or a legend key) dims the others of its kind; a pinned tooltip stays until released */
+.aisa-chart [data-k], .aisa-chart [data-s], .aisa-chart [data-r] { transition: opacity var(--aisa-duration-fast) var(--aisa-ease-out); }
+.aisa-chart .is-dim { opacity: 0.22; }
+.aisa-chart__tooltip.is-pinned { border-color: var(--aisa-line-strong); }
+.aisa-chart__tooltip.is-pinned::after {
+  content: ""; position: absolute; top: 6px; right: 6px; width: 5px; height: 5px; border-radius: 50%; background: var(--aisa-chart-emph);
 }
 
 /* stat tile: label · value · delta (· sparkline) */
@@ -77,7 +111,7 @@
 .aisa-stat__row { display: flex; align-items: flex-end; justify-content: space-between; gap: 4px var(--aisa-space-3); margin-top: 4px; }
 /* the sparkline gives way to a long value instead of dropping to its own line */
 .aisa-stat__row .aisa-spark { flex: 0 1 96px; min-width: 40px; height: auto; }
-.aisa-stat__value { white-space: nowrap; font-size: var(--aisa-text-3xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: var(--aisa-text); }
+.aisa-stat__value { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: var(--aisa-text-3xl); font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; color: var(--aisa-text); }
 .aisa-stat__delta { display: inline-flex; gap: 4px; align-items: baseline; margin-top: 6px; font-size: var(--aisa-text-xs); color: var(--aisa-text-secondary); font-variant-numeric: tabular-nums; }
 .aisa-stat__delta.is-good > span:nth-child(-n + 2) { color: var(--aisa-success-text); font-weight: 600; }
 .aisa-stat__delta.is-bad > span:nth-child(-n + 2) { color: var(--aisa-danger-text); font-weight: 600; }
@@ -109,7 +143,6 @@
 .aisa-rings-row--inline { justify-content: flex-start; }
 .aisa-rings-row--inline .aisa-ring-gauge { grid-template-columns: auto 1fr; justify-items: start; text-align: left; align-items: center; gap: 10px; }
 .aisa-ring__pct { font-size: var(--aisa-text-sm); font-weight: 600; color: var(--aisa-text); font-variant-numeric: tabular-nums; }
-.aisa-chart--animate .aisa-ring__arc { animation: aisa-fade 600ms var(--aisa-ease-out) both; }
 
 /* waffle */
 .aisa-waffle { display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--aisa-space-4); }

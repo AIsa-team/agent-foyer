@@ -17,11 +17,13 @@ const MESSAGES = {
     showTable: 'Table', showChart: 'Chart', total: 'Total', other: 'Other', vs: 'vs {period}', noData: 'No data yet',
     plan: 'Plan', actual: 'Actual', ofPlan: '{pct} of plan', target: 'Target', forecast: 'Forecast', today: 'Today',
     less: 'Less', more: 'More', conversion: '{pct} converted', progress: 'Progress', start: 'Start', end: 'End', count: 'Count',
+    source: 'Source: {source}', change: 'Change', runningTotal: 'Running total',
   },
   'zh-CN': {
     showTable: '表格', showChart: '图表', total: '合计', other: '其他', vs: '较{period}', noData: '暂无数据',
     plan: '计划', actual: '实际', ofPlan: '完成计划 {pct}', target: '目标', forecast: '预测', today: '今天',
     less: '少', more: '多', conversion: '转化 {pct}', progress: '进度', start: '开始', end: '结束', count: '数量',
+    source: '来源：{source}', change: '变化', runningTotal: '累计',
   },
 };
 export function setMessages(locale, messages) {
@@ -93,8 +95,8 @@ function formatter(fmt = {}, compact = false) {
   return (v) => (v === null || v === undefined || Number.isNaN(v) ? '–' : nf.format(v) + (fmt.unit ? `${fmt.unitSpace === false ? '' : ' '}${fmt.unit}` : ''));
 }
 
-/** "Nice" axis: 0-based (bars) or padded (lines), 3–6 ticks at 1/2/2.5/5 × 10^k. */
-function niceScale(min, max, { zero = true, ticks = 5 } = {}) {
+/** "Nice" axis: 0-based (bars) or padded (lines), 3–6 ticks at 1/2/2.5/5 × 10^k; whole steps when the data are counts. */
+function niceScale(min, max, { zero = true, ticks = 5, integer = false } = {}) {
   if (zero) {
     min = Math.min(0, min);
     max = Math.max(0, max);
@@ -107,7 +109,10 @@ function niceScale(min, max, { zero = true, ticks = 5 } = {}) {
   }
   const raw = (max - min) / ticks;
   const mag = 10 ** Math.floor(Math.log10(raw));
-  const step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+  let step = [1, 2, 2.5, 5, 10].map((m) => m * mag).find((s) => s >= raw) ?? 10 * mag;
+  // counts (all whole numbers) never get ticks between whole numbers, which would read 0, 0, 1, 1 once rounded
+  if (integer && step < 1) step = 1;
+  else if (integer && !Number.isInteger(step)) step = Math.ceil(step);
   const lo = Math.floor(min / step) * step;
   const hi = Math.ceil(max / step) * step;
   const out = [];
@@ -182,6 +187,12 @@ function frame(host, cfg, kind) {
   const tip = el('div', 'aisa-chart__tooltip', plot);
   tip.setAttribute('role', 'status');
   const tableWrap = el('div', 'aisa-chart__table', fig);
+  // where the numbers come from and how to read them: a note (rounding, what one dot is) and the source with its date
+  if (cfg.note || cfg.source) {
+    const foot = el('div', 'aisa-chart__foot', fig);
+    if (cfg.note) el('span', 'aisa-chart__note', foot, cfg.note);
+    if (cfg.source) el('span', 'aisa-chart__source', foot, msg('source', { source: cfg.source }));
+  }
   return { fig, legend, plot, tip, tableWrap };
 }
 
@@ -198,7 +209,7 @@ function renderTable(wrap, header, rows) {
   }
 }
 
-function renderLegend(legend, items, { shape = 'rect', hidden, onToggle } = {}) {
+function renderLegend(legend, items, { shape = 'rect', hidden, onToggle, onHover } = {}) {
   legend.innerHTML = '';
   if (items.length < 2) {
     legend.hidden = true;
@@ -215,7 +226,12 @@ function renderLegend(legend, items, { shape = 'rect', hidden, onToggle } = {}) 
     if (hidden?.has(i)) b.classList.add('is-off');
     b.setAttribute('aria-pressed', String(!hidden?.has(i)));
     if (onToggle) b.addEventListener('click', () => onToggle(i));
-    else b.disabled = true;
+    else if (!onHover) b.disabled = true;
+    // pointing at a key spotlights that series in the plot
+    if (onHover && !hidden?.has(i)) {
+      for (const ev of ['pointerenter', 'focus']) b.addEventListener(ev, () => onHover(i));
+      for (const ev of ['pointerleave', 'blur']) b.addEventListener(ev, () => onHover(null));
+    }
   });
 }
 
@@ -240,6 +256,84 @@ function showTip(tip, plot, x, y, title, rows) {
 }
 const hideTip = (tip) => tip.classList.remove('is-on');
 
+// ---------------------------------------------------------------- interaction: spotlight, pin, reveal
+/**
+ * Spotlight: marks carry data-k (their category / item) or data-s (their series); hovering one dims the others of the same
+ * kind, so the eye stays on what the tooltip describes. value null lifts it.
+ */
+function spotlight(root, attr, value) {
+  if (!root) return;
+  const on = value !== null && value !== undefined;
+  root.querySelectorAll(`[${attr}]`).forEach((n) => n.classList.toggle('is-dim', on && n.getAttribute(attr) !== String(value)));
+}
+const pinnedTips = new Set();
+/** Hides the tooltip, unpins it and lifts the spotlight (and whatever the chart drew for the hover, via tip.__onRelease). */
+function release(tip) {
+  tip.__pin = null;
+  tip.classList.remove('is-pinned');
+  pinnedTips.delete(tip);
+  hideTip(tip);
+  const fig = tip.closest('.aisa-chart');
+  fig?.querySelectorAll('.is-dim, .is-hot').forEach((n) => n.classList.remove('is-dim', 'is-hot'));
+  tip.__onRelease?.();
+}
+let pinWatch = false;
+/**
+ * Wires a hit target: hover (or keyboard focus) shows hit.__show's tooltip and spotlights `spot` ([attr, value]);
+ * a click or tap pins it, so it can be read or compared on touch screens, until another click, a click elsewhere or Escape.
+ */
+function interact(hit, tip, c, spot) {
+  const show = hit.__show;
+  hit.__show = (e) => {
+    show(e);
+    if (typeof spot === 'function') spot(tip.closest('.aisa-chart'));
+    else if (spot) spotlight(tip.closest('.aisa-chart'), spot[0], spot[1]);
+  };
+  if (c.interactive === false) return;
+  hit.style.cursor = 'pointer';
+  hit.addEventListener('pointermove', (e) => { if (!tip.__pin) hit.__show(e); });
+  hit.addEventListener('pointerleave', () => { if (!tip.__pin) release(tip); });
+  hit.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const again = tip.__pin === hit;
+    pinnedTips.forEach((t) => release(t));
+    if (again) return;
+    hit.__show(e);
+    tip.__pin = hit;
+    tip.classList.add('is-pinned');
+    pinnedTips.add(tip);
+  });
+  if (!pinWatch) {
+    pinWatch = true;
+    document.addEventListener('click', () => pinnedTips.forEach((t) => release(t)));
+  }
+}
+
+/** Counts a number up into el (eased, 700ms); fmt formats each step. */
+function countUp(el, to, fmt) {
+  const t0 = performance.now();
+  const step = (now) => {
+    if (!el.isConnected) return;
+    const k = Math.min(1, (now - t0) / 700);
+    el.textContent = fmt(k === 1 ? to : to * (1 - (1 - k) ** 3));
+    if (k < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+const reducedMotion = () => !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+/** Runs fn once, when host is at least a fifth on screen (at once without IntersectionObserver). */
+function whenVisible(host, fn) {
+  if (typeof IntersectionObserver === 'undefined') return fn(), () => {};
+  const io = new IntersectionObserver((entries) => {
+    if (entries.some((e) => e.isIntersecting)) {
+      io.disconnect();
+      fn();
+    }
+  }, { threshold: 0.2 });
+  io.observe(host);
+  return () => io.disconnect();
+}
+
 // ---------------------------------------------------------------- lifecycle: re-render on resize and theme change
 const live = new Set();
 let themeWatch = false;
@@ -253,6 +347,17 @@ function watchTheme() {
 function mount(host, cfg, draw) {
   const state = { cfg, hidden: new Set() };
   const rerender = () => draw(host, state, rerender);
+  // first sight: marks wait until the chart scrolls into view, then grow in once (animate: false turns it off,
+  // animate: true plays on every render as before; reduced motion skips it)
+  let stopReveal = () => {};
+  if (cfg.animate === undefined && cfg.interactive !== false && typeof IntersectionObserver !== 'undefined' && !reducedMotion()) {
+    host.classList.add('aisa-reveal--waiting');
+    stopReveal = whenVisible(host, () => {
+      host.classList.replace('aisa-reveal--waiting', 'aisa-reveal--play');
+      state.onReveal?.();
+      setTimeout(() => host.classList.remove('aisa-reveal--play'), 1600);
+    });
+  }
   const chart = {
     render: rerender,
     update(next) {
@@ -261,6 +366,8 @@ function mount(host, cfg, draw) {
     },
     destroy() {
       ro?.disconnect();
+      stopReveal();
+      host.classList.remove('aisa-reveal--waiting', 'aisa-reveal--play');
       live.delete(chart);
       host.innerHTML = '';
     },
@@ -367,7 +474,7 @@ export function barChart(host, cfg) {
     const totals = cats.map((_, ci) => visible.reduce((a, si) => a + (Number(series[si].values[ci]) || 0), 0));
     const flat = [...visible.flatMap((si) => series[si].values.map(Number)), ...(plan ?? []), ...(target ? [target.value] : [])];
     const ext = c.stacked ? [...totals, ...(target ? [target.value] : [])] : flat;
-    const scale = niceScale(Math.min(0, ...ext), Math.max(0, ...ext));
+    const scale = niceScale(Math.min(0, ...ext), Math.max(0, ...ext), { integer: ext.every(Number.isInteger) && c.format?.style !== 'percent' });
     const ink = singleColor(host);
     const emph = emphColor(host);
     const muted = mutedColor(host);
@@ -384,6 +491,7 @@ export function barChart(host, cfg) {
     if (plan) legendItems.push({ name: c.planLabel ?? msg('plan'), color: 'transparent', outline: ink });
     renderLegend(legend, legendItems, {
       hidden: state.hidden,
+      onHover: plan ? undefined : (i) => spotlight(fig, 'data-s', i),
       onToggle: plan ? undefined : (i) => {
         if (state.hidden.has(i)) state.hidden.delete(i);
         else if (visible.length > 1) state.hidden.add(i);
@@ -439,7 +547,7 @@ export function barChart(host, cfg) {
         const off = c.stacked ? start : start + slot * (thick + 2);
         const dir = !isTop ? null : horiz ? (v >= 0 ? 'right' : 'left') : (v >= 0 ? 'up' : 'down');
         const d = horiz ? barPath(lo, off, size, thick, dir) : barPath(off, box.h - lo - size, thick, size, dir);
-        if (d) svgEl('path', { d, fill: color, class: 'aisa-chart__bar', style: `--i:${ci}` }, marks);
+        if (d) svgEl('path', { d, fill: color, class: 'aisa-chart__bar', style: `--i:${ci}`, 'data-k': ci, 'data-s': si }, marks);
       });
       // label selectively: every bar when there are few, otherwise only the peak, the latest and the accented one
       const labelThis = c.valueLabels === 'all' || cats.length <= 8 || ci === peak || ci === cats.length - 1 || ci === accent || ci === c.highlight;
@@ -449,8 +557,8 @@ export function barChart(host, cfg) {
         const tipPos = toLen(Math.max(total, plan ? plan[ci] || 0 : total));
         const xCenter = plan ? start + thick + 2 + thick / 2 : catPos(ci);
         const t = horiz
-          ? svgEl('text', { x: tipPos + 6, y: (plan ? start + thick + 2 + thick / 2 : catPos(ci)) + 3.5, fill: textC, class: 'aisa-chart__value' }, g)
-          : svgEl('text', { x: xCenter, y: box.h - tipPos - 5, 'text-anchor': 'middle', fill: ci === accent || ci === c.highlight ? token(host, '--aisa-text') : textC, class: 'aisa-chart__value' }, g);
+          ? svgEl('text', { x: tipPos + 6, y: (plan ? start + thick + 2 + thick / 2 : catPos(ci)) + 3.5, fill: textC, class: 'aisa-chart__value', 'data-k': ci }, g)
+          : svgEl('text', { x: xCenter, y: box.h - tipPos - 5, 'text-anchor': 'middle', fill: ci === accent || ci === c.highlight ? token(host, '--aisa-text') : textC, class: 'aisa-chart__value', 'data-k': ci }, g);
         if (!horiz && textWidth(label, 10.5) > band - 2) t.remove();
         else t.textContent = label;
       }
@@ -471,17 +579,23 @@ export function barChart(host, cfg) {
         const py = horiz || !evt ? box.m.top + (horiz ? catPos(ci) : box.h / 2) : evt.clientY - plot.getBoundingClientRect().top;
         showTip(tip, plot, px, py, String(cat), rows);
       };
-      if (c.interactive !== false) {
-        hit.addEventListener('pointermove', show);
-        hit.addEventListener('pointerleave', () => hideTip(tip));
-      }
       hit.__show = show;
+      interact(hit, tip, c, ['data-k', ci]);
     });
     if (target) referenceLine(g, host, { value: target.value, label: target.label ?? `${msg('target')} ${fmt(target.value)}`, w: box.w, h: box.h, horizontal: horiz, toPos: horiz ? toLen : (v) => box.h - toLen(v) });
     keyboardNav(svg, hits, tip);
     const header = ['', ...series.map((s) => s.name), ...(plan ? [c.planLabel ?? msg('plan')] : [])];
     renderTable(tableWrap, header, cats.map((cat, ci) => [String(cat), ...series.map((s) => fmt(Number(s.values[ci]))), ...(plan ? [fmt(plan[ci])] : [])]));
   });
+}
+
+/** A list row (rank, key results): pointing at it dims the other rows; its own numbers are already on screen. */
+function rowSpotlight(li, fig, i, c) {
+  li.setAttribute('data-k', i);
+  li.style.setProperty('--i', i);
+  if (c.interactive === false) return;
+  li.addEventListener('pointerenter', () => spotlight(fig, 'data-k', i));
+  li.addEventListener('pointerleave', () => spotlight(fig, 'data-k', null));
 }
 
 function keyboardNav(svg, hits, tip) {
@@ -491,14 +605,14 @@ function keyboardNav(svg, hits, tip) {
     if (!['ArrowRight', 'ArrowLeft', 'ArrowUp', 'ArrowDown', 'Escape'].includes(e.key)) return;
     e.preventDefault();
     if (e.key === 'Escape') {
-      hideTip(tip);
+      release(tip);
       return;
     }
     const n = items().length;
     idx = (idx + (e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : -1) + n) % n;
     items()[idx]?.__show?.();
   });
-  svg.addEventListener('blur', () => hideTip(tip));
+  svg.addEventListener('blur', () => { if (!tip.__pin) release(tip); });
 }
 
 // ================================================================ LINE / AREA
@@ -513,7 +627,7 @@ function keyboardNav(svg, hits, tip) {
 export function lineChart(host, cfg) {
   return mount(host, cfg, (host, state, rerender) => {
     const c = state.cfg;
-    const { legend, plot, tip, tableWrap } = frame(host, c, 'line');
+    const { fig, legend, plot, tip, tableWrap } = frame(host, c, 'line');
     const series = c.series ?? [];
     const labels = c.labels ?? [];
     const visible = series.map((_, i) => i).filter((i) => !state.hidden.has(i));
@@ -521,7 +635,7 @@ export function lineChart(host, cfg) {
     const fmtTick = formatter(c.format, true);
     const target = targetOf(c);
     const vals = [...visible.flatMap((si) => series[si].values.map(Number).filter((v) => !Number.isNaN(v))), ...(target ? [target.value] : [])];
-    const scale = niceScale(Math.min(...vals), Math.max(...vals), { zero: c.zero ?? !!c.area, ticks: 4 });
+    const scale = niceScale(Math.min(...vals), Math.max(...vals), { zero: c.zero ?? !!c.area, ticks: 4, integer: vals.every(Number.isInteger) && c.format?.style !== 'percent' });
     const single = series.length === 1;
     const colors = series.map((_, i) => {
       if (c.highlight !== undefined) return i === c.highlight ? emphColor(host) : mutedColor(host);
@@ -533,6 +647,7 @@ export function lineChart(host, cfg) {
     renderLegend(legend, series.map((s, i) => ({ name: s.name, color: colors[i] })), {
       shape: 'line',
       hidden: state.hidden,
+      onHover: series.length > 1 ? (i) => spotlight(fig, 'data-s', i) : undefined,
       onToggle: (i) => {
         if (state.hidden.has(i)) state.hidden.delete(i);
         else if (visible.length > 1) state.hidden.add(i);
@@ -561,11 +676,11 @@ export function lineChart(host, cfg) {
       const actual = ff === undefined ? pts : pts.filter((p) => p[2] <= ff);
       const proj = ff === undefined ? [] : pts.filter((p) => p[2] >= ff);
       const path = (ps) => 'M' + ps.map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`).join('L');
-      if (c.area && actual.length) svgEl('path', { d: `${path(actual)}L${actual.at(-1)[0]},${box.h}L${actual[0][0]},${box.h}Z`, fill: colors[si], 'fill-opacity': 0.08, class: 'aisa-chart__area' }, marks);
-      if (actual.length > 1) svgEl('path', { d: path(actual), fill: 'none', stroke: colors[si], 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', class: 'aisa-chart__line', pathLength: 1 }, marks);
-      if (proj.length > 1) svgEl('path', { d: path(proj), fill: 'none', stroke: colors[si], 'stroke-width': 2, 'stroke-dasharray': '4 4', 'stroke-opacity': 0.6, 'stroke-linecap': 'round', class: 'aisa-chart__forecast' }, marks);
+      if (c.area && actual.length) svgEl('path', { d: `${path(actual)}L${actual.at(-1)[0]},${box.h}L${actual[0][0]},${box.h}Z`, fill: colors[si], 'fill-opacity': 0.08, class: 'aisa-chart__area', 'data-s': si }, marks);
+      if (actual.length > 1) svgEl('path', { d: path(actual), fill: 'none', stroke: colors[si], 'stroke-width': 2, 'stroke-linejoin': 'round', 'stroke-linecap': 'round', class: 'aisa-chart__line', pathLength: 1, 'data-s': si }, marks);
+      if (proj.length > 1) svgEl('path', { d: path(proj), fill: 'none', stroke: colors[si], 'stroke-width': 2, 'stroke-dasharray': '4 4', 'stroke-opacity': 0.6, 'stroke-linecap': 'round', class: 'aisa-chart__forecast', 'data-s': si }, marks);
       const [ex, ey] = pts.at(-1);
-      svgEl('circle', { cx: ex, cy: ey, r: 4, fill: endDot(si), stroke: surface, 'stroke-width': 2 }, marks);
+      svgEl('circle', { cx: ex, cy: ey, r: 4, fill: endDot(si), stroke: surface, 'stroke-width': 2, class: 'aisa-chart__dot', style: '--i:42', 'data-s': si }, marks);
       ends.push({ si, y: ey, value: series[si].values.at(-1) });
     }
     if (target) referenceLine(g, host, { value: target.value, label: target.label ?? `${msg('target')} ${fmt(target.value)}`, w: box.w, h: box.h, toPos: yAt });
@@ -574,7 +689,7 @@ export function lineChart(host, cfg) {
     const collide = ends.some((e, i) => i > 0 && e.y - ends[i - 1].y < 14);
     if (wantEnd && !collide) {
       for (const e of ends) {
-        const t = svgEl('text', { x: box.w + 8, y: e.y + 4, fill: textC, class: 'aisa-chart__value' }, g);
+        const t = svgEl('text', { x: box.w + 8, y: e.y + 4, fill: textC, class: 'aisa-chart__value', 'data-s': e.si }, g);
         t.textContent = visible.length > 1 ? `${fmt(Number(e.value))} ${series[e.si].name}` : fmt(Number(e.value));
       }
     }
@@ -603,15 +718,12 @@ export function lineChart(host, cfg) {
         showTip(tip, plot, box.m.left + xAt(i), box.m.top + (rows[0]?.y ?? box.h / 2), String(lab), rows);
       };
       hit.__show = show;
-      if (c.interactive !== false) {
-        hit.addEventListener('pointermove', show);
-        hit.addEventListener('pointerleave', () => {
-          hideTip(tip);
-          cross.classList.remove('is-on');
-          dots.innerHTML = '';
-        });
-      }
+      interact(hit, tip, c);
     });
+    tip.__onRelease = () => {
+      cross.classList.remove('is-on');
+      dots.innerHTML = '';
+    };
     keyboardNav(svg, hits, tip);
     renderTable(tableWrap, ['', ...series.map((s) => s.name)], labels.map((lab, i) => [String(lab), ...series.map((s) => fmt(Number(s.values[i])))]));
   });
@@ -622,7 +734,7 @@ export function lineChart(host, cfg) {
 export function donutChart(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
-    const { legend, plot, tip, tableWrap } = frame(host, c, 'donut');
+    const { fig, legend, plot, tip, tableWrap } = frame(host, c, 'donut');
     const fmt = formatter(c.format);
     let items = [...(c.items ?? [])].sort((a, b) => b.value - a.value);
     if (items.length > 6) {
@@ -631,7 +743,7 @@ export function donutChart(host, cfg) {
     }
     const total = items.reduce((a, b) => a + Number(b.value), 0);
     const colors = items.map((it, i) => (it.other ? token(host, '--aisa-chart-muted') : seriesColor(host, i)));
-    renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${total ? Math.round((it.value / total) * 100) : 0}%`, color: colors[i] })));
+    renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${total ? Math.round((it.value / total) * 100) : 0}%`, color: colors[i] })), { onHover: (i) => spotlight(fig, 'data-k', i) });
     const size = c.size ?? 180;
     const r = size / 2;
     const inner = r * 0.68;
@@ -648,13 +760,10 @@ export function donutChart(host, cfg) {
       const d = frac >= 0.9999
         ? `M${r},0A${r},${r} 0 1 1 ${r},${size}A${r},${r} 0 1 1 ${r},0ZM${r},${r - inner}A${inner},${inner} 0 1 0 ${r},${r + inner}A${inner},${inner} 0 1 0 ${r},${r - inner}Z`
         : `M${p(a, r)}A${r},${r} 0 ${large} 1 ${p(a2, r)}L${p(a2, inner)}A${inner},${inner} 0 ${large} 0 ${p(a, inner)}Z`;
-      const seg = svgEl('path', { d, 'fill-rule': 'evenodd', fill: colors[i], stroke: surface, 'stroke-width': 2, 'stroke-linejoin': 'round', class: 'aisa-chart__seg' }, hits);
+      const seg = svgEl('path', { d, 'fill-rule': 'evenodd', fill: colors[i], stroke: surface, 'stroke-width': 2, 'stroke-linejoin': 'round', class: 'aisa-chart__seg', 'data-k': i, style: `--i:${i};transform-origin:${r}px ${r}px` }, hits);
       const mid = (a + a2) / 2;
       seg.__show = () => showTip(tip, plot, r + Math.cos(mid) * r * 0.85, r + Math.sin(mid) * r * 0.85, it.name, [{ name: `${total ? ((it.value / total) * 100).toFixed(1) : 0}%`, value: fmt(it.value), color: colors[i], shape: 'rect' }]);
-      if (c.interactive !== false) {
-        seg.addEventListener('pointermove', seg.__show);
-        seg.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(seg, tip, c, ['data-k', i]);
       a = a2;
     });
     const center = svgEl('text', { x: r, y: r - 2, 'text-anchor': 'middle', class: 'aisa-chart__center', fill: token(host, '--aisa-text') }, svg);
@@ -698,12 +807,10 @@ export function heatmap(host, cfg) {
         const rect = svgEl('rect', {
           x: left + ci * cw + 1, y: ri * cell + 1, width: cw - 2, height: cell - 2, rx: 3,
           fill: Number.isNaN(v) ? token(host, '--aisa-chart-grid') : rampColor(host, 'seq', bucket(v)), class: 'aisa-chart__cell',
+          'data-r': ri, 'data-c': ci, style: `--i:${ci + ri}`,
         }, hits);
         rect.__show = () => showTip(tip, plot, left + ci * cw + cw, ri * cell + cell / 2, `${r} · ${col}`, [{ name: '', value: fmt(v), color: rect.getAttribute('fill'), shape: 'rect' }]);
-        if (c.interactive !== false) {
-          rect.addEventListener('pointermove', rect.__show);
-          rect.addEventListener('pointerleave', () => hideTip(tip));
-        }
+        interact(rect, tip, c, (root) => root.querySelectorAll('.aisa-chart__cell').forEach((n) => n.classList.toggle('is-dim', n.dataset.r !== String(ri) && n.dataset.c !== String(ci))));
       });
     });
     const every = Math.max(1, Math.ceil(28 / cw));
@@ -746,7 +853,14 @@ export function statTile(host, cfg) {
     const tile = el('div', 'aisa-stat', host);
     el('div', 'aisa-stat__label', tile, c.label);
     const row = el('div', 'aisa-stat__row', tile);
-    el('div', 'aisa-stat__value', row, typeof c.value === 'number' ? formatter({ ...c.format, decimals: c.format?.decimals ?? 1 }, c.compact !== false)(c.value) : String(c.value));
+    const valueFmt = formatter({ ...c.format, decimals: c.format?.decimals ?? 1 }, c.compact !== false);
+    const valueEl = el('div', 'aisa-stat__value', row, typeof c.value === 'number' ? valueFmt(c.value) : String(c.value));
+    // the number counts up once, the first time the tile is seen (animate: false or reduced motion: shown as is)
+    if (typeof c.value === 'number' && c.value !== 0 && c.animate !== false && !state.counted && !reducedMotion()) {
+      state.counted = true;
+      const to = c.value;
+      whenVisible(host, () => countUp(valueEl, to, valueFmt));
+    }
     if (c.trend?.length) row.appendChild(sparkline(c.trend, { host }));
     if (c.delta !== undefined && c.delta !== null) {
       const up = c.delta > 0;
@@ -785,6 +899,11 @@ export function meter(host, cfg) {
     if (c.label) track.setAttribute('aria-label', c.label);
     const fill = el('div', 'aisa-meter__fill', track);
     fill.style.width = `${frac * 100}%`;
+    if (c.animate !== false && !state.seen && !reducedMotion()) {
+      state.seen = true;
+      fill.style.width = '0%';
+      whenVisible(host, () => requestAnimationFrame(() => { fill.style.width = `${frac * 100}%`; }));
+    }
   });
 }
 
@@ -799,12 +918,14 @@ export function ringGauge(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
     const { legend, plot, tip, tableWrap } = frame(host, { ...c, table: c.table ?? (c.items ? true : false) }, 'ring');
+    const counters = [];
+    const waiting = host.classList.contains('aisa-reveal--waiting');
     legend.hidden = true;
     const items = c.items ?? [c];
     const fmt = formatter(c.format);
     const row = el('div', `aisa-rings-row${c.inline ? ' aisa-rings-row--inline' : ''}`, plot);
     const hits = svgEl('g', {});
-    items.forEach((it) => {
+    items.forEach((it, k) => {
       const max = it.max ?? it.target ?? c.max ?? 1;
       const frac = max ? (Number(it.value) || 0) / max : 0;
       const size = it.size ?? c.size ?? (c.inline ? 36 : 112);
@@ -820,25 +941,34 @@ export function ringGauge(host, cfg) {
       const arc = svgEl('circle', {
         cx: size / 2, cy: size / 2, r, fill: 'none', stroke: color, 'stroke-width': sw, 'stroke-linecap': 'round',
         'stroke-dasharray': `${Math.max(0, Math.min(1, frac)) * circ} ${circ}`, transform: `rotate(-90 ${size / 2} ${size / 2})`, class: 'aisa-ring__arc',
+        style: `--circ:${circ.toFixed(2)}px`,
       }, svg);
       void arc;
       if (!c.inline) {
         const t = svgEl('text', { x: size / 2, y: size / 2 + size * 0.07, 'text-anchor': 'middle', class: 'aisa-ring__value', fill: token(host, '--aisa-text'), style: `font-size:${Math.round(size * 0.2)}px` }, svg);
         t.textContent = it.centerValue ?? pct(frac);
+        if (it.centerValue === undefined) counters.push([t, frac]);
       }
       const text = el('div', 'aisa-ring__text', cell);
-      if (c.inline) el('div', 'aisa-ring__pct', text, it.centerValue ?? pct(frac));
+      if (c.inline) {
+        const p = el('div', 'aisa-ring__pct', text, it.centerValue ?? pct(frac));
+        if (it.centerValue === undefined) counters.push([p, frac]);
+      }
       if (it.label) el('div', 'aisa-ring__label', text, it.label);
       if (it.sub) el('div', 'aisa-ring__sub', text, it.sub);
       cell.tabIndex = c.interactive === false ? -1 : 0;
-      const show = () => showTip(tip, plot, cell.offsetLeft + cell.offsetWidth / 2, cell.offsetTop + size / 2, it.label ?? '', [{ name: '', value: `${fmt(it.value)} / ${fmt(max)} · ${pct(frac, 1)}`, color, shape: 'rect' }]);
+      cell.setAttribute('data-k', k);
+      cell.__show = () => showTip(tip, plot, cell.offsetLeft + cell.offsetWidth / 2, cell.offsetTop + size / 2, it.label ?? '', [{ name: '', value: `${fmt(it.value)} / ${fmt(max)} · ${pct(frac, 1)}`, color, shape: 'rect' }]);
+      interact(cell, tip, c, items.length > 1 ? ['data-k', k] : undefined);
       if (c.interactive !== false) {
-        cell.addEventListener('pointerenter', show);
-        cell.addEventListener('focus', show);
-        cell.addEventListener('pointerleave', () => hideTip(tip));
-        cell.addEventListener('blur', () => hideTip(tip));
+        cell.addEventListener('focus', () => cell.__show());
+        cell.addEventListener('blur', () => { if (!tip.__pin) release(tip); });
       }
     });
+    if (waiting) {
+      for (const [n, f] of counters) n.textContent = pct(0);
+      state.onReveal = () => counters.forEach(([n, f]) => countUp(n, f, (v) => pct(v)));
+    }
     void hits;
     renderTable(tableWrap, ['', msg('actual'), msg('target'), '%'], items.map((it) => {
       const max = it.max ?? it.target ?? c.max ?? 1;
@@ -890,13 +1020,10 @@ export function waffleChart(host, cfg) {
       const col = idx % 10;
       const rowI = Math.floor(idx / 10);
       const it = owner[idx];
-      const rect = svgEl('rect', { x: col * cell, y: rowI * cell, width: cell - 2, height: cell - 2, rx: Math.min(3, cell / 5), fill: it === undefined ? trackColor(host) : colors[it], class: 'aisa-chart__cell' }, hits);
+      const rect = svgEl('rect', { x: col * cell, y: rowI * cell, width: cell - 2, height: cell - 2, rx: Math.min(3, cell / 5), fill: it === undefined ? trackColor(host) : colors[it], class: 'aisa-chart__cell', 'data-k': it, style: `--i:${Math.floor(idx / 2)}` }, hits);
       if (it !== undefined) {
         rect.__show = () => showTip(tip, plot, col * cell + cell, rowI * cell, items[it].name, [{ name: pct(items[it].value / (total || 1), 1), value: fmt(items[it].value), color: colors[it], shape: 'rect' }]);
-        if (c.interactive !== false) {
-          rect.addEventListener('pointermove', rect.__show);
-          rect.addEventListener('pointerleave', () => hideTip(tip));
-        }
+        interact(rect, tip, c, ['data-k', it]);
       }
     }
     if (c.showValue !== false && items.length) {
@@ -940,8 +1067,8 @@ export function funnelChart(host, cfg) {
       const w = Math.max(4, ((Number(st.value) || 0) / max) * barW);
       const x = labelW + (barW - w) / 2;
       svgEl('text', { x: labelW - 10, y: y + rowH / 2 + 4, 'text-anchor': 'end', fill: text, class: 'aisa-chart__tick' }, svg).textContent = String(st.name);
-      const rect = svgEl('rect', { x, y: y + 3, width: w, height: rowH - 6, rx: 4, fill, class: 'aisa-chart__bar' }, hits);
-      svgEl('text', { x: width - valueW + 8, y: y + rowH / 2 + 4, fill: text, class: 'aisa-chart__value' }, svg).textContent = fmt(st.value);
+      const rect = svgEl('rect', { x, y: y + 3, width: w, height: rowH - 6, rx: 4, fill, class: 'aisa-chart__bar', style: `--i:${i}`, 'data-k': i }, hits);
+      svgEl('text', { x: width - valueW + 8, y: y + rowH / 2 + 4, fill: text, class: 'aisa-chart__value', 'data-k': i }, svg).textContent = fmt(st.value);
       if (i > 0 && c.showConversion !== false && stages[i - 1].value) {
         svgEl('text', { x: labelW + barW / 2, y: y - gapH / 2 + 4, 'text-anchor': 'middle', fill: muted, class: 'aisa-chart__ref-label' }, svg).textContent = msg('conversion', { pct: pct(st.value / stages[i - 1].value) });
       }
@@ -949,10 +1076,7 @@ export function funnelChart(host, cfg) {
         { name: '', value: fmt(st.value), color: fill, shape: 'rect' },
         ...(i > 0 && stages[0].value ? [{ name: stages[0].name, value: pct(st.value / stages[0].value, 1), color: 'transparent' }] : []),
       ]);
-      if (c.interactive !== false) {
-        rect.addEventListener('pointermove', rect.__show);
-        rect.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(rect, tip, c, ['data-k', i]);
     });
     keyboardNav(svg, hits, tip);
     renderTable(tableWrap, ['', '', '%'], stages.map((st, i) => [String(st.name), fmt(st.value), i === 0 || !stages[i - 1].value ? '–' : pct(st.value / stages[i - 1].value, 1)]));
@@ -967,7 +1091,7 @@ export function funnelChart(host, cfg) {
 export function rankList(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
-    const { legend, plot, tableWrap } = frame(host, c, 'rank');
+    const { fig, legend, plot, tableWrap } = frame(host, c, 'rank');
     legend.hidden = true;
     const fmt = formatter(c.format);
     let items = [...(c.items ?? [])];
@@ -978,6 +1102,7 @@ export function rankList(host, cfg) {
     const list = el('ol', 'aisa-rank', plot);
     items.forEach((it, i) => {
       const li = el('li', `aisa-rank__row${i === hi ? ' is-emph' : ''}`, list);
+      rowSpotlight(li, fig, i, c);
       el('span', 'aisa-rank__no', li, String(i + 1).padStart(2, '0'));
       if (c.avatars || it.avatar || it.initial) {
         if (it.avatar) {
@@ -1048,20 +1173,17 @@ export function slopeChart(host, cfg) {
     const order = series.map((_, i) => i).sort((a, b) => (a === c.highlight) - (b === c.highlight));
     for (const i of order) {
       const s = series[i];
-      const g = svgEl('g', {}, hits);
-      svgEl('line', { x1: x0, y1: y(Number(s.start)), x2: x1, y2: y(Number(s.end)), stroke: color(i), 'stroke-width': 2, 'stroke-linecap': 'round' }, g);
-      for (const [x, v] of [[x0, s.start], [x1, s.end]]) svgEl('circle', { cx: x, cy: y(Number(v)), r: 4, fill: color(i), stroke: surface, 'stroke-width': 2 }, g);
+      const g = svgEl('g', { 'data-k': i }, hits);
+      svgEl('line', { x1: x0, y1: y(Number(s.start)), x2: x1, y2: y(Number(s.end)), stroke: color(i), 'stroke-width': 2, 'stroke-linecap': 'round', class: 'aisa-chart__line', pathLength: 1 }, g);
+      for (const [x, v] of [[x0, s.start], [x1, s.end]]) svgEl('circle', { cx: x, cy: y(Number(v)), r: 4, fill: color(i), stroke: surface, 'stroke-width': 2, class: 'aisa-chart__dot', style: `--i:${x === x0 ? 0 : 42}` }, g);
       const em = i === c.highlight;
-      svgEl('text', { x: x0 - 8, y: ly[i] + 3.5, 'text-anchor': 'end', fill: em ? token(host, '--aisa-text') : text, class: 'aisa-chart__value' }, svg).textContent = lab(s, 'l');
-      svgEl('text', { x: x1 + 8, y: ry[i] + 3.5, fill: em ? token(host, '--aisa-text') : text, class: 'aisa-chart__value' }, svg).textContent = lab(s, 'r');
+      svgEl('text', { x: x0 - 8, y: ly[i] + 3.5, 'text-anchor': 'end', fill: em ? token(host, '--aisa-text') : text, class: 'aisa-chart__value', 'data-k': i }, svg).textContent = lab(s, 'l');
+      svgEl('text', { x: x1 + 8, y: ry[i] + 3.5, fill: em ? token(host, '--aisa-text') : text, class: 'aisa-chart__value', 'data-k': i }, svg).textContent = lab(s, 'r');
       g.__show = () => showTip(tip, plot, x1, y(Number(s.end)), s.name, [
         { name: c.startLabel ?? msg('start'), value: fmt(s.start), color: color(i) },
         { name: c.endLabel ?? msg('end'), value: fmt(s.end), color: color(i) },
       ]);
-      if (c.interactive !== false) {
-        g.addEventListener('pointermove', g.__show);
-        g.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(g, tip, c, ['data-k', i]);
     }
     keyboardNav(svg, hits, tip);
     renderTable(tableWrap, ['', c.startLabel ?? msg('start'), c.endLabel ?? msg('end')], series.map((s) => [s.name, fmt(s.start), fmt(s.end)]));
@@ -1073,7 +1195,7 @@ export function slopeChart(host, cfg) {
 export function segmentBar(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
-    const { legend, plot, tip, tableWrap } = frame(host, c, 'segment');
+    const { fig, legend, plot, tip, tableWrap } = frame(host, c, 'segment');
     const fmt = formatter(c.format);
     let items = [...(c.items ?? [])];
     if (items.length > 6) {
@@ -1082,7 +1204,7 @@ export function segmentBar(host, cfg) {
     }
     const total = items.reduce((a, b) => a + (Number(b.value) || 0), 0) || 1;
     const colors = items.map((it, i) => (it.other ? mutedColor(host) : seriesColor(host, i)));
-    renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${pct(it.value / total)}`, color: colors[i] })));
+    renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${pct(it.value / total)}`, color: colors[i] })), { onHover: (i) => spotlight(fig, 'data-k', i) });
     const width = c.width ?? Math.max(200, host.clientWidth || 400);
     const h = c.height ?? 12;
     const svg = svgEl('svg', { width, height: h, viewBox: `0 0 ${width} ${h}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
@@ -1101,13 +1223,10 @@ export function segmentBar(host, cfg) {
       else if (first) d = `M${x0 + r},0H${x0 + ww}V${h}H${x0 + r}Q${x0},${h} ${x0},${h - r}V${r}Q${x0},0 ${x0 + r},0Z`;
       else if (last) d = `M${x0},0H${x0 + ww - r}Q${x0 + ww},0 ${x0 + ww},${r}V${h - r}Q${x0 + ww},${h} ${x0 + ww - r},${h}H${x0}Z`;
       else d = `M${x0},0h${ww}v${h}h${-ww}Z`;
-      const seg = svgEl('path', { d, fill: colors[i], class: 'aisa-chart__seg' }, hits);
+      const seg = svgEl('path', { d, fill: colors[i], class: 'aisa-chart__seg', 'data-k': i }, hits);
       const mid = x + w / 2;
       seg.__show = () => showTip(tip, plot, mid, h / 2, it.name, [{ name: pct(it.value / total, 1), value: fmt(it.value), color: colors[i], shape: 'rect' }]);
-      if (c.interactive !== false) {
-        seg.addEventListener('pointermove', seg.__show);
-        seg.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(seg, tip, c, ['data-k', i]);
       x += w;
     });
     keyboardNav(svg, hits, tip);
@@ -1149,13 +1268,10 @@ export function divergingBar(host, cfg) {
       const yy = y + (rowH - th) / 2;
       svgEl('text', { x: labelW - 10, y: y + rowH / 2 + 3.5, 'text-anchor': 'end', fill: text, class: 'aisa-chart__tick' }, svg).textContent = String(cat);
       const d = v >= 0 ? barPath(mid + 1, yy, len, th, 'right') : barPath(mid - 1 - len, yy, len, th, 'left');
-      const bar = d ? svgEl('path', { d, fill: v >= 0 ? pos : neg, class: 'aisa-chart__bar' }, hits) : svgEl('rect', { x: mid, y: yy, width: 0, height: th }, hits);
-      svgEl('text', { x: v >= 0 ? mid + len + 6 : mid - len - 6, y: y + rowH / 2 + 3.5, 'text-anchor': v >= 0 ? 'start' : 'end', fill: text, class: 'aisa-chart__value' }, svg).textContent = `${v > 0 ? '+' : ''}${fmt(v)}`;
+      const bar = d ? svgEl('path', { d, fill: v >= 0 ? pos : neg, class: 'aisa-chart__bar', style: `--i:${i};transform-origin:${v >= 0 ? 'left' : 'right'} center`, 'data-k': i }, hits) : svgEl('rect', { x: mid, y: yy, width: 0, height: th, 'data-k': i }, hits);
+      svgEl('text', { x: v >= 0 ? mid + len + 6 : mid - len - 6, y: y + rowH / 2 + 3.5, 'text-anchor': v >= 0 ? 'start' : 'end', fill: text, class: 'aisa-chart__value', 'data-k': i }, svg).textContent = `${v > 0 ? '+' : ''}${fmt(v)}`;
       bar.__show = () => showTip(tip, plot, v >= 0 ? mid + len : mid - len, y + rowH / 2, String(cat), [{ name: '', value: `${v > 0 ? '+' : ''}${fmt(v)}`, color: v >= 0 ? pos : neg, shape: 'rect' }]);
-      if (c.interactive !== false) {
-        bar.addEventListener('pointermove', bar.__show);
-        bar.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(bar, tip, c, ['data-k', i]);
     });
     keyboardNav(svg, hits, tip);
     renderTable(tableWrap, ['', ''], cats.map((cat, i) => [String(cat), fmt(vals[i])]));
@@ -1220,12 +1336,9 @@ export function calendarHeatmap(host, cfg) {
         const v = map.get(key) ?? 0;
         const mk = key.slice(0, 7);
         monthTotals.set(mk, (monthTotals.get(mk) ?? 0) + v);
-        const rect = svgEl('rect', { x: labelW + w * cell, y: top + d * cell, width: cell - 2, height: cell - 2, rx: Math.min(2.5, cell / 5), fill: rampColor(host, 'seq', level(v)), class: 'aisa-chart__cell' }, hits);
+        const rect = svgEl('rect', { x: labelW + w * cell, y: top + d * cell, width: cell - 2, height: cell - 2, rx: Math.min(2.5, cell / 5), fill: rampColor(host, 'seq', level(v)), class: 'aisa-chart__cell', style: `--i:${w}` }, hits);
         rect.__show = () => showTip(tip, plot, labelW + w * cell + cell, top + d * cell, fmtDay(t, { year: 'numeric', month: 'short', day: 'numeric', weekday: 'short' }), [{ name: '', value: fmt(v), color: rect.getAttribute('fill'), shape: 'rect' }]);
-        if (c.interactive !== false) {
-          rect.addEventListener('pointermove', rect.__show);
-          rect.addEventListener('pointerleave', () => hideTip(tip));
-        }
+        interact(rect, tip, c);
       }
       const firstOfWeek = start + w * 7 * DAY;
       const month = new Date(firstOfWeek).getUTCMonth();
@@ -1314,7 +1427,7 @@ export function ganttChart(host, cfg) {
       const nm = svgEl('text', { x: 0, y: y + (tk.owner ? 13 : 19), fill: text, class: 'aisa-gantt__name' }, svg);
       nm.textContent = fitText(tk.name, labelW - 10, 12.5);
       if (tk.owner) svgEl('text', { x: 0, y: y + 27, fill: muted, class: 'aisa-chart__tick' }, svg).textContent = fitText(tk.owner, labelW - 10, 11);
-      const g = svgEl('g', { class: 'aisa-gantt__task' }, hits);
+      const g = svgEl('g', { class: 'aisa-gantt__task', 'data-k': i, style: `--i:${i}` }, hits);
       const cy = y + rowH / 2 - 2;
       if (tk.milestone) {
         const r = 6;
@@ -1335,10 +1448,7 @@ export function ganttChart(host, cfg) {
         { name: tk.milestone ? '' : `→ ${fmtDay(e - DAY)}`, value: fmtDay(s), color: 'transparent' },
         ...(tk.milestone ? [] : [{ name: msg('progress'), value: pct(Number(tk.progress) || 0), color: ink, shape: 'rect' }]),
       ]);
-      if (c.interactive !== false) {
-        g.addEventListener('pointermove', g.__show);
-        g.addEventListener('pointerleave', () => hideTip(tip));
-      }
+      interact(g, tip, c, ['data-k', i]);
     });
     if (c.today !== false) {
       const t = c.today ? parseDay(c.today) : parseDay(new Date());
@@ -1363,7 +1473,8 @@ export function ganttChart(host, cfg) {
 export function progressList(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
-    const { legend, plot, tableWrap } = frame(host, c, 'progress');
+    const { fig, legend, plot, tableWrap } = frame(host, c, 'progress');
+    let k = 0;
     legend.hidden = true;
     const fmt = formatter(c.format);
     const list = el('ul', 'aisa-progress-list', plot);
@@ -1371,6 +1482,7 @@ export function progressList(host, cfg) {
     for (const it of c.items ?? []) {
       const frac = it.target ? (Number(it.value) || 0) / it.target : Number(it.value) || 0;
       const li = el('li', `aisa-progress-list__row aisa-progress-list__row--${it.tone ?? 'ink'}`, list);
+      rowSpotlight(li, fig, k++, c);
       const head = el('div', 'aisa-progress-list__head', li);
       const name = el('div', 'aisa-progress-list__label', head);
       el('span', '', name, it.label);
@@ -1408,11 +1520,290 @@ export function histogram(host, cfg) {
   return barChart(host, { ...cfg, categories, series: [{ name: cfg.name ?? msg('count'), values: counts }], format: { decimals: 0 }, valueLabels: cfg.valueLabels ?? false });
 }
 
+// ================================================================ DUMBBELL (two moments per category)
+/**
+ * dumbbellChart(host, { categories, from: { label, values }, to: { label, values }, highlight: categoryIndex,
+ *   sort: false | 'change' | 'to', change: 'diff' | 'ratio' | false, zero: false, format, title, subtitle, note, source })
+ * Each row joins the earlier value (hollow dot) to the later one (solid dot) with a thin rule, and labels the change at
+ * the later end. Hollow vs solid tells the two moments apart without relying on colour.
+ */
+export function dumbbellChart(host, cfg) {
+  return mount(host, cfg, (host, state) => {
+    const c = state.cfg;
+    const { legend, plot, tip, tableWrap } = frame(host, c, 'dumbbell');
+    const fmt = formatter(c.format);
+    const fmtTick = formatter(c.format, true);
+    const fromL = c.from?.label ?? msg('start');
+    const toL = c.to?.label ?? msg('end');
+    const rows = (c.categories ?? []).map((name, i) => ({ name: String(name), i, a: Number(c.from?.values?.[i]), b: Number(c.to?.values?.[i]) }))
+      .filter((r) => Number.isFinite(r.a) && Number.isFinite(r.b));
+    if (c.sort === 'change') rows.sort((p, q) => (q.b - q.a) - (p.b - p.a));
+    else if (c.sort === 'to') rows.sort((p, q) => q.b - p.b);
+    const changeOf = (r) => {
+      if (c.change === false) return '';
+      if (c.change === 'ratio') return r.a ? `${r.b >= r.a ? '+' : ''}${pct((r.b - r.a) / Math.abs(r.a), 1)}` : '';
+      const d = r.b - r.a;
+      return `${d > 0 ? '+' : d < 0 ? '−' : ''}${fmt(Math.abs(d))}`;
+    };
+    const ink = singleColor(host);
+    const emph = emphColor(host);
+    const muted = mutedColor(host);
+    const surface = token(host, '--aisa-surface');
+    const text = token(host, '--aisa-text-secondary');
+    const strong = token(host, '--aisa-text');
+    // the highlighted row in orange; the others stay ink (only their rule is quiet), so every value still reads
+    const dot = (r) => (r.i === c.highlight ? emph : ink);
+    renderLegend(legend, [{ name: fromL, color: 'transparent', outline: ink, shape: 'dot' }, { name: toL, color: ink, shape: 'dot' }]);
+    const vals = rows.flatMap((r) => [r.a, r.b]);
+    const scale = niceScale(Math.min(...vals, c.zero ? 0 : Infinity), Math.max(...vals), { zero: !!c.zero, ticks: 4 });
+    const width = c.width ?? Math.max(260, host.clientWidth || 520);
+    const labelW = Math.min(width * 0.3, Math.ceil(Math.max(...rows.map((r) => textWidth(r.name, 10.5)), 0)) + 12);
+    const changeW = Math.ceil(Math.max(...rows.map((r) => textWidth(changeOf(r), 10.5)), 0)) + 14;
+    const rowH = 26;
+    const top = 4;
+    const height = rows.length * rowH + top + 24;
+    const x0 = labelW + 6;
+    const plotW = Math.max(60, width - x0 - changeW);
+    const x = (v) => x0 + ((v - scale.min) / (scale.max - scale.min)) * plotW;
+    const svg = svgEl('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
+    svg.setAttribute('aria-label', [c.title, c.subtitle].filter(Boolean).join(' — ') || 'Dumbbell chart');
+    const grid = token(host, '--aisa-chart-grid');
+    const axisC = token(host, '--aisa-text-muted');
+    const bottom = top + rows.length * rowH;
+    for (const t of scale.ticks) {
+      svgEl('line', { x1: x(t), x2: x(t), y1: top, y2: bottom, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges' }, svg);
+      svgEl('text', { x: x(t), y: bottom + 16, 'text-anchor': 'middle', fill: axisC, class: 'aisa-chart__tick' }, svg).textContent = fmtTick(t);
+    }
+    // marks under the hit targets, so pointing at a dot or a label keeps the tooltip
+    const marks = svgEl('g', { class: 'aisa-chart__marks' }, svg);
+    const hits = svgEl('g', {}, svg);
+    rows.forEach((r, k) => {
+      const cy = top + k * rowH + rowH / 2;
+      const color = dot(r);
+      const em = r.i === c.highlight;
+      const row = svgEl('g', { 'data-k': k, class: 'aisa-chart__row', style: `--i:${k}` }, marks);
+      svgEl('text', { x: labelW - 4, y: cy + 3.5, 'text-anchor': 'end', fill: em ? strong : text, class: 'aisa-chart__tick' }, row).textContent = fitText(r.name, labelW - 8, 10.5);
+      svgEl('line', { x1: x(r.a), x2: x(r.b), y1: cy, y2: cy, stroke: em ? emph : muted, 'stroke-width': 2, 'stroke-linecap': 'round' }, row);
+      svgEl('circle', { cx: x(r.a), cy, r: 4, fill: surface, stroke: color, 'stroke-width': 1.5 }, row);
+      svgEl('circle', { cx: x(r.b), cy, r: 4.5, fill: color, stroke: surface, 'stroke-width': 2 }, row);
+      const change = changeOf(r);
+      if (change) svgEl('text', { x: Math.max(x(r.a), x(r.b)) + 10, y: cy + 3.5, fill: em ? strong : text, class: 'aisa-chart__value' }, row).textContent = change;
+      const hit = svgEl('rect', { x: 0, y: cy - rowH / 2, width, height: rowH, fill: 'transparent' }, hits);
+      hit.__show = () => showTip(tip, plot, Math.max(x(r.a), x(r.b)), cy, r.name, [
+        { name: fromL, value: fmt(r.a), color: 'transparent', shape: 'rect' },
+        { name: toL, value: fmt(r.b), color, shape: 'rect' },
+        ...(change ? [{ name: msg('change'), value: change, color: 'transparent' }] : []),
+      ]);
+      interact(hit, tip, c, ['data-k', k]);
+    });
+    keyboardNav(svg, hits, tip);
+    renderTable(tableWrap, ['', fromL, toL, ...(c.change === false ? [] : [msg('change')])],
+      rows.map((r) => [r.name, fmt(r.a), fmt(r.b), ...(c.change === false ? [] : [changeOf(r)])]));
+  });
+}
+
+// ================================================================ WATERFALL (bridge from one total to the next)
+/**
+ * waterfallChart(host, { start: { label, value }, steps: [{ name, value (signed) }], end: { label } | false,
+ *   format, height, title, subtitle, note, source })
+ * Totals stand on the baseline in ink; each step floats from the running total, rises and falls in the diverging pair
+ * (as divergingBar), with a thin connector carrying the level to the next bar. The end total is computed, never typed in.
+ */
+export function waterfallChart(host, cfg) {
+  return mount(host, cfg, (host, state) => {
+    const c = state.cfg;
+    const { legend, plot, tip, tableWrap } = frame(host, c, 'waterfall');
+    legend.hidden = true;
+    const fmt = formatter(c.format);
+    const fmtTick = formatter(c.format, true);
+    const signed = (v) => `${v > 0 ? '+' : v < 0 ? '−' : ''}${fmt(Math.abs(v))}`;
+    const startV = Number(c.start?.value) || 0;
+    const bars = [{ name: c.start?.label ?? msg('start'), total: true, from: 0, to: startV, v: startV }];
+    let run = startV;
+    for (const s of c.steps ?? []) {
+      const v = Number(s.value) || 0;
+      bars.push({ name: String(s.name), from: run, to: run + v, v });
+      run += v;
+    }
+    if (c.end !== false) bars.push({ name: c.end?.label ?? msg('end'), total: true, from: 0, to: run, v: run });
+    const ext = bars.flatMap((b) => [b.from, b.to]);
+    const scale = niceScale(Math.min(0, ...ext), Math.max(0, ...ext));
+    const box = plotBox(host, { ...c, endLabels: false }, scale.ticks.map(fmtTick), 240);
+    box.m.top = 18;
+    box.h = box.height - box.m.top - box.m.bottom;
+    const svg = svgEl('svg', { width: box.width, height: box.height, viewBox: `0 0 ${box.width} ${box.height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
+    svg.setAttribute('aria-label', [c.title, c.subtitle].filter(Boolean).join(' — ') || 'Waterfall chart');
+    const g = svgEl('g', { transform: `translate(${box.m.left},${box.m.top})` }, svg);
+    const band = box.w / Math.max(1, bars.length);
+    const thick = Math.max(4, Math.min(28, band * 0.56));
+    const y = (v) => box.h - ((v - scale.min) / (scale.max - scale.min)) * box.h;
+    const catPos = (i) => band * i + band / 2;
+    axes(svg, host, g, { w: box.w, h: box.h, scale, fmtTick, categories: bars.map((b) => b.name), orientation: 'vertical', catPos, bandW: band });
+    const ink = singleColor(host);
+    const neg = token(host, '--aisa-div-neg');
+    const pos = token(host, '--aisa-div-pos');
+    const text = token(host, '--aisa-text-secondary');
+    const strong = token(host, '--aisa-text');
+    const link = token(host, '--aisa-chart-axis');
+    const colorOf = (b) => (b.total ? ink : b.v >= 0 ? pos : neg);
+    const marks = svgEl('g', { class: 'aisa-chart__marks' }, g);
+    const hits = svgEl('g', {}, g);
+    bars.forEach((b, i) => {
+      const left = catPos(i) - thick / 2;
+      const hi = Math.max(b.from, b.to);
+      const lo = Math.min(b.from, b.to);
+      const top = y(hi);
+      const size = Math.max(1, y(lo) - y(hi));
+      const dir = b.total ? (b.v >= 0 ? 'up' : 'down') : b.v >= 0 ? 'up' : 'down';
+      const d = barPath(left, top, thick, size, dir);
+      if (d) svgEl('path', { d, fill: colorOf(b), class: 'aisa-chart__bar', style: `--i:${i}`, 'data-k': i }, marks);
+      // connector: the level this bar ends at, carried to the next bar
+      if (i < bars.length - 1) {
+        const lv = y(b.to);
+        svgEl('line', { x1: left + thick, x2: catPos(i + 1) - thick / 2, y1: lv, y2: lv, stroke: link, 'stroke-width': 1, 'stroke-opacity': 0.6, 'shape-rendering': 'crispEdges' }, marks);
+      }
+      const label = b.total ? fmt(b.v) : signed(b.v);
+      const below = !b.total && b.v < 0;
+      const t = svgEl('text', { x: catPos(i), y: below ? y(lo) + 13 : top - 5, 'text-anchor': 'middle', fill: b.total ? strong : text, class: 'aisa-chart__value', 'data-k': i }, g);
+      if (textWidth(label, 10.5) > band + 6) t.remove();
+      else t.textContent = label;
+      const hit = svgEl('rect', { x: band * i, y: 0, width: band, height: box.h, fill: 'transparent' }, hits);
+      hit.__show = () => showTip(tip, plot, box.m.left + catPos(i), box.m.top + top, b.name, b.total
+        ? [{ name: msg('total'), value: fmt(b.v), color: colorOf(b), shape: 'rect' }]
+        : [{ name: msg('change'), value: signed(b.v), color: colorOf(b), shape: 'rect' }, { name: msg('runningTotal'), value: fmt(b.to), color: 'transparent' }]);
+      interact(hit, tip, c, ['data-k', i]);
+    });
+    keyboardNav(svg, hits, tip);
+    renderTable(tableWrap, ['', msg('change'), msg('runningTotal')], bars.map((b) => [b.name, b.total ? '' : signed(b.v), fmt(b.to)]));
+  });
+}
+
+// ================================================================ SCATTER (two measures per entity)
+/**
+ * scatterChart(host, { points: [{ name, x, y, size?, group? }], xLabel, yLabel, sizeLabel, groups: [names] (≤ 3),
+ *   highlight: index | name, labels: 'auto' | [names] | false, xRef / yRef: number | { value, label },
+ *   xFormat, yFormat, sizeFormat (default: format), zero: false, height, title, subtitle, note, source })
+ * One group draws in ink with the highlight in orange; groups take the categorical slots (max 3). `size` is drawn by
+ * area (radius ∝ √size). Labels go to the highlight and the extremes and are dropped rather than overlapped.
+ */
+export function scatterChart(host, cfg) {
+  return mount(host, cfg, (host, state, rerender) => {
+    const c = state.cfg;
+    const { fig, legend, plot, tip, tableWrap } = frame(host, c, 'scatter');
+    const pts = (c.points ?? []).map((p, i) => ({ ...p, i, x: Number(p.x), y: Number(p.y), size: p.size === undefined ? undefined : Number(p.size) }))
+      .filter((p) => Number.isFinite(p.x) && Number.isFinite(p.y));
+    const fx = formatter(c.xFormat ?? c.format);
+    const fy = formatter(c.yFormat ?? c.format);
+    const fs = formatter(c.sizeFormat ?? c.format);
+    const tx = formatter(c.xFormat ?? c.format, true);
+    const ty = formatter(c.yFormat ?? c.format, true);
+    const groups = (c.groups ?? [...new Set(pts.map((p) => p.group).filter((g) => g !== undefined))]).slice(0, 3);
+    if ((c.groups ?? []).length > 3) console.warn('[aisa-charts] scatterChart: at most 3 groups; split into small multiples');
+    const hl = typeof c.highlight === 'string' ? pts.find((p) => p.name === c.highlight)?.i : c.highlight;
+    const colorOf = (p) => {
+      if (groups.length > 1) return seriesColor(host, Math.max(0, groups.indexOf(p.group)));
+      if (hl === undefined) return singleColor(host);
+      // dots are small: the others step back to a mid grey, not the faint bar grey
+      return p.i === hl ? emphColor(host) : rampColor(host, 'seq', 4);
+    };
+    renderLegend(legend, groups.length > 1 ? groups.map((g, k) => ({ name: String(g), color: seriesColor(host, k), shape: 'dot' })) : [], {
+      hidden: state.hidden,
+      onHover: (k) => spotlight(fig, 'data-s', k),
+      onToggle: (k) => {
+        if (state.hidden.has(k)) state.hidden.delete(k);
+        else if (state.hidden.size < groups.length - 1) state.hidden.add(k);
+        rerender();
+      },
+    });
+    const shown = pts.filter((p) => groups.length < 2 || !state.hidden.has(groups.indexOf(p.group)));
+    const xRef = targetOf({ target: c.xRef });
+    const yRef = targetOf({ target: c.yRef });
+    const xs = [...pts.map((p) => p.x), ...(xRef ? [xRef.value] : [])];
+    const ys = [...pts.map((p) => p.y), ...(yRef ? [yRef.value] : [])];
+    const sx = niceScale(Math.min(...xs), Math.max(...xs), { zero: !!c.zero, ticks: 5 });
+    const sy = niceScale(Math.min(...ys), Math.max(...ys), { zero: !!c.zero, ticks: 4 });
+    const box = plotBox(host, { ...c, endLabels: false }, sy.ticks.map(ty), 260);
+    box.m.top = c.yLabel ? 22 : 10;
+    box.m.right = 16;
+    box.m.bottom = c.xLabel ? 40 : 24;
+    box.w = box.width - box.m.left - box.m.right;
+    box.h = box.height - box.m.top - box.m.bottom;
+    const X = (v) => ((v - sx.min) / (sx.max - sx.min)) * box.w;
+    const Y = (v) => box.h - ((v - sy.min) / (sy.max - sy.min)) * box.h;
+    const maxSize = Math.max(...pts.map((p) => p.size ?? 0), 0);
+    const R = (p) => (p.size === undefined || !maxSize ? 4.5 : 3 + Math.sqrt(Math.max(0, p.size) / maxSize) * 11);
+    const svg = svgEl('svg', { width: box.width, height: box.height, viewBox: `0 0 ${box.width} ${box.height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
+    svg.setAttribute('aria-label', [c.title, c.subtitle].filter(Boolean).join(' — ') || 'Scatter chart');
+    const g = svgEl('g', { transform: `translate(${box.m.left},${box.m.top})` }, svg);
+    const grid = token(host, '--aisa-chart-grid');
+    const axisC = token(host, '--aisa-text-muted');
+    const text = token(host, '--aisa-text-secondary');
+    const strong = token(host, '--aisa-text');
+    const surface = token(host, '--aisa-surface');
+    for (const t of sy.ticks) {
+      svgEl('line', { x1: 0, x2: box.w, y1: Y(t), y2: Y(t), stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges' }, g);
+      svgEl('text', { x: -8, y: Y(t) + 3.5, 'text-anchor': 'end', fill: axisC, class: 'aisa-chart__tick' }, g).textContent = ty(t);
+    }
+    const xEvery = Math.max(1, Math.ceil(Math.max(...sx.ticks.map((t) => textWidth(tx(t), 10.5))) * 1.6 / (box.w / Math.max(1, sx.ticks.length - 1))));
+    sx.ticks.forEach((t, k) => {
+      svgEl('line', { x1: X(t), x2: X(t), y1: 0, y2: box.h, stroke: grid, 'stroke-width': 1, 'shape-rendering': 'crispEdges' }, g);
+      if (!(k % xEvery)) svgEl('text', { x: X(t), y: box.h + 16, 'text-anchor': 'middle', fill: axisC, class: 'aisa-chart__tick' }, g).textContent = tx(t);
+    });
+    if (c.xLabel) svgEl('text', { x: box.w, y: box.h + 34, 'text-anchor': 'end', fill: text, class: 'aisa-chart__tick' }, g).textContent = c.xLabel;
+    if (c.yLabel) svgEl('text', { x: -box.m.left + 2, y: -10, fill: text, class: 'aisa-chart__tick' }, g).textContent = c.yLabel;
+    if (xRef) referenceLine(g, host, { value: xRef.value, label: xRef.label ?? fx(xRef.value), w: box.w, h: box.h, horizontal: true, toPos: X });
+    if (yRef) referenceLine(g, host, { value: yRef.value, label: yRef.label ?? fy(yRef.value), w: box.w, h: box.h, horizontal: false, toPos: Y });
+    const marks = svgEl('g', { class: 'aisa-chart__marks' }, g);
+    // biggest first so small dots stay on top; the highlight last of all
+    const order = [...shown].sort((a, b) => (a.i === hl) - (b.i === hl) || R(b) - R(a));
+    for (const p of order) {
+      svgEl('circle', { cx: X(p.x), cy: Y(p.y), r: R(p), fill: colorOf(p), 'fill-opacity': p.size === undefined ? 1 : 0.85, stroke: surface, 'stroke-width': 1.5, class: 'aisa-chart__dot', style: `--i:${p.i % 24}`, 'data-k': p.i, ...(groups.length > 1 ? { 'data-s': groups.indexOf(p.group) } : {}) }, marks);
+    }
+    // labels: the highlight, the names asked for, or the extremes; skipped when they would overlap
+    let want = [];
+    if (Array.isArray(c.labels)) want = shown.filter((p) => c.labels.includes(p.name));
+    else if (c.labels !== false && shown.length) {
+      const by = (f) => shown.reduce((a, b) => (f(b) > f(a) ? b : a));
+      want = [...new Set([shown.find((p) => p.i === hl), by((p) => p.y), by((p) => -p.y), by((p) => p.x), by((p) => -p.x)].filter(Boolean))];
+    }
+    const placed = shown.map((p) => ({ x0: X(p.x) - R(p), x1: X(p.x) + R(p), y0: Y(p.y) - R(p), y1: Y(p.y) + R(p), dot: true }));
+    for (const p of want) {
+      if (!p.name) continue;
+      const label = fitText(p.name, 140, 10.5);
+      const w = textWidth(label, 10.5);
+      const cx = X(p.x);
+      const cy = Y(p.y);
+      const right = cx + R(p) + 5 + w <= box.w;
+      const bx = { x0: right ? cx + R(p) + 4 : cx - R(p) - 4 - w, x1: right ? cx + R(p) + 4 + w : cx - R(p) - 4, y0: cy - 7, y1: cy + 6 };
+      const clash = placed.some((o) => !(o.dot && o.x0 <= cx && o.x1 >= cx && o.y0 <= cy && o.y1 >= cy) && o.x0 < bx.x1 && o.x1 > bx.x0 && o.y0 < bx.y1 && o.y1 > bx.y0);
+      if (clash) continue;
+      placed.push(bx);
+      svgEl('text', { x: right ? bx.x0 : bx.x1, y: cy + 3.5, 'text-anchor': right ? 'start' : 'end', fill: p.i === hl ? strong : text, class: 'aisa-chart__value', 'paint-order': 'stroke', stroke: surface, 'stroke-width': 3, 'stroke-linejoin': 'round', 'data-k': p.i }, g).textContent = label;
+    }
+    const hits = svgEl('g', {}, g);
+    for (const p of [...shown].sort((a, b) => a.x - b.x)) {
+      const hit = svgEl('circle', { cx: X(p.x), cy: Y(p.y), r: Math.max(R(p) + 5, 10), fill: 'transparent' }, hits);
+      hit.__show = () => showTip(tip, plot, box.m.left + X(p.x), box.m.top + Y(p.y), p.name ?? '', [
+        ...(groups.length > 1 ? [{ name: String(p.group), value: '', color: colorOf(p), shape: 'rect' }] : []),
+        { name: c.xLabel ?? 'x', value: fx(p.x), color: 'transparent' },
+        { name: c.yLabel ?? 'y', value: fy(p.y), color: 'transparent' },
+        ...(p.size === undefined ? [] : [{ name: c.sizeLabel ?? '', value: fs(p.size), color: 'transparent' }]),
+      ]);
+      interact(hit, tip, c, ['data-k', p.i]);
+    }
+    keyboardNav(svg, hits, tip);
+    const sized = pts.some((p) => p.size !== undefined);
+    renderTable(tableWrap, ['', ...(groups.length > 1 ? [''] : []), c.xLabel ?? 'x', c.yLabel ?? 'y', ...(sized ? [c.sizeLabel ?? ''] : [])],
+      pts.map((p) => [p.name ?? '', ...(groups.length > 1 ? [String(p.group ?? '')] : []), fx(p.x), fy(p.y), ...(sized ? [p.size === undefined ? '' : fs(p.size)] : [])]));
+  });
+}
+
 // ---------------------------------------------------------------- declarative mounting
 const KINDS = {
   bar: barChart, line: lineChart, area: (h, c) => lineChart(h, { ...c, area: true }), donut: donutChart, heatmap, stat: statTile, meter,
   ring: ringGauge, waffle: waffleChart, funnel: funnelChart, rank: rankList, slope: slopeChart, segment: segmentBar,
   diverging: divergingBar, calendar: calendarHeatmap, gantt: ganttChart, progress: progressList, histogram,
+  dumbbell: dumbbellChart, waterfall: waterfallChart, scatter: scatterChart,
 };
 export function mountAll(root = document) {
   return [...root.querySelectorAll('[data-aisa-chart]')].map((node) => {
@@ -1433,7 +1824,8 @@ export function mountAll(root = document) {
 
 const AisaCharts = {
   barChart, lineChart, donutChart, heatmap, sparkline, statTile, meter, ringGauge, waffleChart, funnelChart, rankList, slopeChart,
-  segmentBar, divergingBar, calendarHeatmap, ganttChart, progressList, histogram, mountAll, setMessages,
+  segmentBar, divergingBar, calendarHeatmap, ganttChart, progressList, histogram, dumbbellChart, waterfallChart, scatterChart,
+  mountAll, setMessages,
 };
 if (typeof window !== 'undefined') {
   window.AisaCharts = AisaCharts;
