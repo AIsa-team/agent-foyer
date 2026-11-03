@@ -1,0 +1,35 @@
+// Types for the vendored AIsa report charts module (plain JS). Configs are documented in aisa-report.js.
+export interface ReportHandle { update(config: Record<string, unknown>): void; replay(): void; destroy(): void }
+type Mount = (host: HTMLElement, config: Record<string, unknown>) => ReportHandle;
+export const strokeChart: Mount;
+export const dayStrip: Mount;
+export const hiveColumns: Mount;
+export const tickDial: Mount;
+export const pourFunnel: Mount;
+export const tapeDumbbell: Mount;
+export const dotHeat: Mount;
+export const rankMap: Mount;
+export const bumpChart: Mount;
+export const streamChart: Mount;
+export const parallelChart: Mount;
+export const stripChart: Mount;
+export const flowChart: Mount;
+export const treemapChart: Mount;
+export const networkChart: Mount;
+export const hundredChart: Mount;
+export const bridgeChart: Mount;
+export const launchFan: Mount;
+export const dotCascade: Mount;
+export const almanacChart: Mount;
+export const dayClock: Mount;
+export const hourglassChart: Mount;
+export const dayLine: Mount;
+export const tickRing: Mount;
+export const convergeChart: Mount;
+export const colonnadeChart: Mount;
+export const ballotChart: Mount;
+export const rainChart: Mount;
+export const treeChart: Mount;
+export const tickRows: Mount;
+export function setMessages(locale: string, messages: Record<string, string>): void;
+export function mountAll(root?: ParentNode): void;

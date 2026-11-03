@@ -182,6 +182,7 @@ const en: Record<MessageKey, string> = {
   // Lark data, Base data sources and alerts
   'err.lark.notConnected': 'Lark data is not connected yet. Open this link and approve once in Lark: {url}',
   'err.lark.scopeMissing': 'The hub app is not allowed to read this kind of Lark data yet. An admin needs to add the scope in the Lark developer console (see docs/LARK_SETUP.md). {detail}',
+  'data.other': 'Other',
   'err.data.badUrl': 'Cannot read this link: {url}. Use a Lark Base link, or the link of a Base page in a wiki',
   'err.data.denied': 'You cannot open this table in Lark (or it uses advanced permissions that do not let you view it)',
   'err.data.noEdit': 'You can view this table but not edit it, so nothing can be written or added to it. Ask its owner for edit access; or keep it as a read-only reference and write the app\'s records to a table made with create_lark_base.',

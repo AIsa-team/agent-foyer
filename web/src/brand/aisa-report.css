@@ -1,0 +1,63 @@
+/* AIsa report charts (aisa-report.js): the figure around each chart. Requires aisa-tokens.css. */
+.ar-fig { position: relative; margin: 0; min-width: 0; font-family: var(--aisa-font-sans); color: var(--aisa-text-body); }
+.ar-fig--ink { background: var(--aisa-ink-900); border-radius: 28px; padding: 36px 40px 30px; color: var(--aisa-ink-300); }
+.ar-fig__head { display: block; padding-right: 72px; }
+.ar-fig__kicker { display: flex; gap: 10px; align-items: center; font-family: var(--aisa-font-mono); font-size: 10.5px; letter-spacing: .08em; color: var(--aisa-text-muted); margin-bottom: 10px; }
+.ar-fig__kicker::before { content: ""; width: 9px; height: 10px; background: currentColor; opacity: .55; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.ar-fig__title { font-family: var(--aisa-font-display); font-size: 21px; line-height: 1.3; letter-spacing: -.015em; font-weight: 700; color: var(--aisa-text); max-width: 30em; text-wrap: balance; }
+.ar-fig__read { margin: 6px 0 0; font-size: 13px; line-height: 1.6; color: var(--aisa-text-secondary); max-width: 46em; }
+.ar-fig--ink .ar-fig__title { color: var(--aisa-ink-0); }
+.ar-fig--ink .ar-fig__read { color: var(--aisa-ink-400); }
+.ar-fig--ink .ar-fig__kicker, .ar-fig--ink .ar-fig__foot { color: var(--aisa-ink-500); }
+.ar-fig__controls { margin-top: 14px; }
+.ar-fig__controls:empty { display: none; }
+.ar-fig__plot { position: relative; margin-top: 26px; min-height: 40px; }
+.ar-fig__foot { display: flex; flex-wrap: wrap; gap: 4px 18px; margin-top: 18px; font-family: var(--aisa-font-mono); font-size: 10.5px; letter-spacing: .05em; color: var(--aisa-text-muted); }
+.ar-fig__foot[hidden] { display: none; }
+.ar-fig__replay { position: absolute; top: 0; right: 0; padding: 2px 0; border: 0; background: none; cursor: pointer; font-family: var(--aisa-font-mono); font-size: 10.5px; letter-spacing: .05em; color: var(--aisa-text-muted); opacity: .75; }
+.ar-fig__replay:hover { opacity: 1; color: var(--aisa-text); }
+.ar-fig__replay:focus-visible, .ar-seg button:focus-visible { outline: none; box-shadow: var(--aisa-focus-ring); border-radius: var(--aisa-radius-sm); }
+.ar-fig--ink .ar-fig__replay { top: 36px; right: 40px; color: var(--aisa-ink-500); }
+.ar-fig--ink .ar-fig__replay:hover { color: var(--aisa-ink-0); }
+
+.ar-svg { display: block; overflow: visible; }
+.ar-t--label { font-family: var(--aisa-font-sans); }
+.ar-t--mono { font-family: var(--aisa-font-mono); letter-spacing: .04em; }
+.ar-t--num { font-family: var(--aisa-font-display); font-weight: 700; font-variant-numeric: tabular-nums; }
+.ar-svg text { pointer-events: none; }
+
+/* the big number of a stroke chart */
+.ar-hero { position: absolute; left: 0; top: 0; pointer-events: none; }
+.ar-hero b { display: block; font-family: var(--aisa-font-display); font-size: 46px; font-weight: 700; letter-spacing: -.035em; line-height: 1; color: var(--aisa-text); font-variant-numeric: tabular-nums; }
+.ar-hero span { display: block; margin-top: 8px; font-family: var(--aisa-font-mono); font-size: 10.5px; letter-spacing: .06em; color: var(--aisa-text-muted); }
+
+/* tooltip */
+.ar-tag { position: absolute; z-index: 3; pointer-events: none; white-space: nowrap; padding: 6px 9px; border-radius: 8px; font-family: var(--aisa-font-mono); font-size: 11px; line-height: 1.55; background: var(--aisa-surface-raised); color: var(--aisa-text); border: 1px solid var(--aisa-line); box-shadow: 0 6px 20px rgb(0 0 0 / .07); opacity: 0; transform: translateY(3px); transition: opacity .14s, transform .14s; }
+.ar-tag.is-on { opacity: 1; transform: none; }
+.ar-tag__title { color: var(--aisa-text-secondary); }
+.ar-tag__row { display: flex; gap: 8px; align-items: baseline; }
+.ar-tag__label, .ar-tag__note { color: var(--aisa-text-muted); }
+.ar-tag b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.ar-fig--ink .ar-tag { background: var(--aisa-ink-800); color: var(--aisa-ink-0); border-color: var(--aisa-ink-700); }
+
+/* legend for stacked parts */
+.ar-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; font-family: var(--aisa-font-mono); font-size: 10.5px; letter-spacing: .04em; color: var(--aisa-text-secondary); }
+.ar-legend span { display: inline-flex; align-items: center; gap: 6px; }
+.ar-legend i { width: 9px; height: 10px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+
+/* interaction */
+.ar-dimmable { transition: opacity .18s; }
+.ar-fig .is-dim { opacity: .18; }
+.ar-morph { transition: transform .85s cubic-bezier(.65, 0, .35, 1); }
+.ar-fade { transition: opacity .5s; }
+.ar-drag { cursor: grab; touch-action: none; }
+.ar-drag:active { cursor: grabbing; }
+.ar-seg { display: inline-flex; gap: 4px; }
+.ar-seg button { font-family: var(--aisa-font-mono); font-size: 11px; letter-spacing: .04em; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--aisa-line-strong); background: transparent; color: var(--aisa-text-secondary); cursor: pointer; }
+.ar-seg button[aria-pressed="true"] { background: var(--aisa-text); border-color: var(--aisa-text); color: var(--aisa-bg); }
+
+@media (max-width: 640px) {
+  .ar-fig--ink { padding: 26px 18px 22px; border-radius: 20px; }
+  .ar-fig--ink .ar-fig__replay { top: 26px; right: 18px; }
+}
+@media (prefers-reduced-motion: reduce) { .ar-dimmable, .ar-morph, .ar-fade, .ar-tag { transition: none; } }

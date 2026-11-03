@@ -78,7 +78,11 @@
 :is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__ref { animation: aisa-fade 420ms var(--aisa-ease-out) both; animation-delay: 760ms; }
 .aisa-chart--bar .aisa-chart__bar, .aisa-chart--waterfall .aisa-chart__bar { transform-origin: center bottom; }
 .aisa-chart--horizontal .aisa-chart__bar { transform-origin: left center; animation-name: aisa-grow-x; }
-.aisa-chart--funnel .aisa-chart__bar { transform-origin: center; animation-name: aisa-grow-x; }
+.aisa-chart--funnel .aisa-chart__label { font-size: 12px; }
+.aisa-chart--funnel .aisa-chart__value { font-size: 13px; }
+.aisa-chart--funnel .aisa-chart__bar { transform-origin: left center; animation-name: aisa-grow-x; }
+/* the stage before is outlined first, then the bar grows into it */
+:is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__ghost { animation: aisa-fade 320ms var(--aisa-ease-out) both; animation-delay: calc(var(--i, 0) * 40ms + 60ms); }
 .aisa-chart--diverging .aisa-chart__bar { animation-name: aisa-grow-x; }
 .aisa-chart--gantt .aisa-chart__bar { transform-origin: left center; animation-name: aisa-grow-x; animation-delay: calc(var(--i, 0) * 70ms + 150ms); }
 :is(.aisa-chart--animate, .aisa-reveal--play) .aisa-chart__line { stroke-dasharray: 1; stroke-dashoffset: 1; animation: aisa-draw 900ms var(--aisa-ease-out) 150ms forwards; }

@@ -54,7 +54,22 @@ const moduleSchema = z.discriminatedUnion('type', [
   }).describe('a row of KPI tiles'),
   z.object({
     type: z.literal('chart'), id: moduleId, width, title: text().optional(), subtitle: text().optional(),
-    kind: z.enum(['bar', 'line', 'area', 'donut', 'ring', 'rank', 'funnel', 'waffle', 'progress', 'segment', 'slope', 'diverging', 'gantt', 'calendar']),
+    kind: z.enum([
+      'bar', 'line', 'area', 'donut', 'ring', 'rank', 'funnel', 'waffle', 'progress', 'segment', 'slope', 'diverging', 'gantt', 'calendar',
+      // the report series (marks you can count, motion in reading order): pick it whenever the form fits the data
+      'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive',
+      'dial', 'bridge', 'tape', 'bump', 'treemap', 'fan', 'clock', 'ballot', 'tickring', 'rankmap',
+    ]).describe([
+      'Pick by what the data says. Compact charts (axes, exact values, small cards): bar line area donut ring rank funnel waffle progress segment slope diverging gantt calendar.',
+      'Report series, often clearer and better looking on boards and home pages: stages that thin out → hourglass (threads) or pour (dots);',
+      '30–120 days of one number → days (weekends hollow, 7-day average, peaks); ≤ 45 days → dayline; a running total toward a goal → stroke;',
+      'a share of a whole → hundred (100 cells); countable amounts by category → ticks (long names) or hive (hexagon columns, parts when several measures);',
+      '10–20 categories → cascade; composition over time with the total → stream (≤ 7 layers, the rest fold into "Other");',
+      'an objective and its key results against time → dial; from one total to the next → bridge; each item at two moments → tape;',
+      'ranks over periods → bump; two-level breakdown → treemap; when things launched and how big they are now → fan;',
+      'events by time of day → clock; multiple-choice answers → ballot; a whole as 100 ticks on a dial → tickring; ranked list ↔ two measures → rankmap.',
+      'Avoid a report form when the card is under ~320px wide or readers need exact values off an axis.',
+    ].join(' ')),
     stacked: z.boolean().optional().describe('bar / area with several series: stack them, so each bar shows the total'),
     data: z.record(z.string(), z.unknown()).optional().describe([
       'chart config by kind:',
@@ -64,9 +79,17 @@ const moduleSchema = z.discriminatedUnion('type', [
       'rank {items:[{name,sub,value}], highlight:"top"}; funnel {stages:[{name,value}]}; waffle {items:[{name,value}], total};',
       'progress {items:[{label,value,target}]} (key results); segment {items:[{name,value}]}; slope {startLabel,endLabel,series:[{name,start,end}]};',
       'diverging {categories, values}; gantt {tasks:[{name,owner,start,end,progress,milestone?}], today}; calendar {data:[{date,value}], start, end}.',
+      'Report series: hourglass/pour {stages:[{name,value}], unit?, highlight?:"last"}; days/dayline {days:[{date,value}], highlight?:"max"|"last"};',
+      'stroke {values, labels, goal?:{value,label}, cumulative:true}; hundred/ticks/cascade {items:[{name,value}], unit?, highlight?};',
+      'stream {labels, series:[{name,values}], highlight?:index}; hive {items:[{name,value}|{name,parts:[{name,value}]}], unit?, highlightPart?};',
+      'dial {value:0..1, time:0..1, label, items:[{code,label,value:0..1}]}; bridge {start:{label,value}, steps:[{name,value}], end:{label}};',
+      'tape {items:[{name,from,to}], fromLabel, toLabel, goodWhen?:"up"|"down"}; bump {periods, series:[{name,values}]};',
+      'treemap {groups:[{name,items:[{name,value}]}]}; fan {items:[{name,weeks,value}]}; clock {events:[{time:"HH:MM",size,flag?}]};',
+      'ballot {items:[{name,value:0..1}], respondents}; tickring {items:[{name,value}], centerValue?, centerLabel?}; rankmap {items:[{name,x,y}], xLabel, yLabel}.',
+      'Every report form also takes note (what one mark is) and highlight (the one orange mark: the finding).',
       'Charts are ink by default with orange for the highlight; follow the data-viz rules (no rainbow, ≤ 8 series).',
     ].join(' ')),
-    source: anySource.optional().describe('the JSON at this source is used as `data`; data sources work with kinds bar, line, area, donut, rank, funnel, waffle, segment, calendar (date.bucket "day" for calendar)'),
+    source: anySource.optional().describe(`the JSON at this source is used as the chart data, with \`data\` kept for options such as goal, unit, highlight and note; data sources work with kinds ${CHART_KINDS.join(', ')} (date.bucket "day" for calendar, days, dayline and stroke; use date.complete so a day or month still under way is not drawn as a drop)`),
     format, height: z.number().int().min(120).max(480).optional(),
   }).describe('one chart following the hub\'s data-viz rules'),
   z.object({

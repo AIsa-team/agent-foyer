@@ -23,7 +23,7 @@ import path from 'node:path';
 import { gunzipSync, gzip } from 'node:zlib';
 import { appUrl, config, paths } from '../config.ts';
 import { get, all, now, run, type App, type User } from '../db.ts';
-import { UserError } from '../i18n/index.ts';
+import { tr, UserError } from '../i18n/index.ts';
 import { pick } from '../library.ts';
 import { localeCodes } from '../localized.ts';
 import { canAccessApp } from '../apps/access.ts';
@@ -595,5 +595,5 @@ export async function forModule(user: User, id: string, q: Query, kind: DataChar
     throw e;
   }
   if (kind === 'stat') return toStat(r);
-  return toChart(kind, r, pick(JSON.parse(getSource(id).title_i18n), locale));
+  return toChart(kind, r, pick(JSON.parse(getSource(id).title_i18n), locale), tr(locale, 'data.other'));
 }

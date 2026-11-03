@@ -1,6 +1,7 @@
 @import './brand/fonts.css';
 @import './brand/aisa-tokens.css';
 @import './brand/aisa-charts.css';
+@import './brand/aisa-report.css';
 @import './brand/aisa-ui.css';
 
 /* Hub roles mapped onto the default theme tokens (the AIsa design system; light/dark both come from the tokens). */
@@ -748,3 +749,9 @@ dialog.kit-dialog .aisa-dialog__head h2 { font-size: var(--aisa-text-lg); }
 .twin-changes li { display: flex; gap: 12px; align-items: baseline; font-size: 13px; }
 .twin-change { margin-left: auto; font-size: 12px; color: var(--muted); }
 .twin-change--auto, .twin-change--applied { color: var(--fg); }
+
+/* report-series charts on a card: the card already frames them, so their heading matches the compact charts' */
+.home-module--report .ar-fig__title { font-size: 14.5px; line-height: 1.35; letter-spacing: -.01em; }
+.home-module--report .ar-fig__read { font-size: 12.5px; margin-top: 4px; }
+.home-module--report .ar-fig__plot { margin-top: 18px; }
+.home-module--report .ar-fig__foot { margin-top: 12px; }

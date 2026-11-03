@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 import { api, ApiError, type Agent, type AppInfo, type LarkLink, type SkillInfo } from '../api';
 import { barChart, calendarHeatmap, divergingBar, donutChart, funnelChart, ganttChart, lineChart, progressList, rankList, ringGauge, segmentBar, slopeChart, statTile, waffleChart } from '../brand/aisa-charts.js';
+import { ballotChart, bridgeChart, bumpChart, dayClock, dayLine, dayStrip, dotCascade, hiveColumns, hourglassChart, hundredChart, launchFan, pourFunnel, rankMap, strokeChart, streamChart, tapeDumbbell, tickDial, tickRing, tickRows, treemapChart } from '../brand/aisa-report.js';
 import { useI18n, type MessageKey } from '../i18n';
 import { AgentStep, CopyBox, Dialog, Empty, Icon, Loading, Step, useAction, useApi, useMe } from '../ui';
 import { AppCard, LarkTile } from './Apps';
@@ -22,7 +23,13 @@ type Width = 'full' | 'half' | 'third';
 const CHARTS = {
   bar: barChart, line: lineChart, area: lineChart, donut: donutChart, ring: ringGauge, rank: rankList, funnel: funnelChart, waffle: waffleChart,
   progress: progressList, segment: segmentBar, slope: slopeChart, diverging: divergingBar, gantt: ganttChart, calendar: calendarHeatmap,
+  // the report series: counted marks, the finding in orange, drawn in reading order when first seen
+  hourglass: hourglassChart, pour: pourFunnel, days: dayStrip, dayline: dayLine, stroke: strokeChart, hundred: hundredChart, ticks: tickRows,
+  cascade: dotCascade, stream: streamChart, hive: hiveColumns, dial: tickDial, bridge: bridgeChart, tape: tapeDumbbell, bump: bumpChart,
+  treemap: treemapChart, fan: launchFan, clock: dayClock, ballot: ballotChart, tickring: tickRing, rankmap: rankMap,
 };
+/** kinds drawn by aisa-report: they take `read` (how to read the marks) where compact charts take `subtitle` */
+const REPORT_KINDS = new Set<string>(['hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive', 'dial', 'bridge', 'tape', 'bump', 'treemap', 'fan', 'clock', 'ballot', 'tickring', 'rankmap']);
 type ChartKind = keyof typeof CHARTS;
 type Base = { id?: string; own?: boolean };
 export type Module = Base & (
@@ -180,13 +187,19 @@ function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
   }, [sourceKey(m.source), m.kind]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!ref.current || !data) return;
-    const cfg = { ...data, title: text(m.title) || undefined, subtitle: text(m.subtitle) || undefined, format: m.format ?? data.format, height: m.height, ...(m.stacked ? { stacked: true } : {}) };
+    const report = REPORT_KINDS.has(m.kind);
+    // with a source, `data` holds the options the numbers don't carry (a goal, the unit of one mark, the highlight)
+    const base = m.source ? { ...(m.data ?? {}), ...data } : data;
+    const cfg = {
+      ...base, title: text(m.title) || undefined, [report ? 'read' : 'subtitle']: text(m.subtitle) || undefined,
+      format: m.format ?? base.format, height: m.height, ...(m.stacked ? { stacked: true } : {}),
+    };
     const fn = CHARTS[m.kind] ?? barChart;
     const h = fn(ref.current, m.kind === 'area' ? { ...cfg, area: true } : cfg);
     return () => h.destroy();
   });
   return (
-    <div className="card pad home-module">
+    <div className={`card pad home-module${REPORT_KINDS.has(m.kind) ? ' home-module--report' : ''}`}>
       {needsLark(err) || noAccess(err) ? <>{m.title && <div className="home-module__title">{text(m.title)}</div>}{needsLark(err) ? <ConnectLark /> : <NoAccess err={err} />}</>
         : err instanceof Error ? <div className="small" style={{ color: 'var(--danger)' }} title={err.message}>{text(m.title)} · {t('home.sourceError')}</div> : <><div ref={ref} />{!data && <span className="small muted">{t('common.loading')}</span>}</>}
       {m.source && 'data' in m.source && !err && <div className="home-more"><Link to={detailUrl(m.source)}>{t('home.details')} →</Link></div>}

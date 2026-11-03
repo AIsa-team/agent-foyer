@@ -16,13 +16,13 @@ const MESSAGES = {
   en: {
     showTable: 'Table', showChart: 'Chart', total: 'Total', other: 'Other', vs: 'vs {period}', noData: 'No data yet',
     plan: 'Plan', actual: 'Actual', ofPlan: '{pct} of plan', target: 'Target', forecast: 'Forecast', today: 'Today',
-    less: 'Less', more: 'More', conversion: '{pct} converted', progress: 'Progress', start: 'Start', end: 'End', count: 'Count',
+    less: 'Less', more: 'More', conversion: '{pct} converted', stepRate: 'From {from}', ofFirst: 'Of {first}', dropped: 'Dropped here', progress: 'Progress', start: 'Start', end: 'End', count: 'Count',
     source: 'Source: {source}', change: 'Change', runningTotal: 'Running total',
   },
   'zh-CN': {
     showTable: '表格', showChart: '图表', total: '合计', other: '其他', vs: '较{period}', noData: '暂无数据',
     plan: '计划', actual: '实际', ofPlan: '完成计划 {pct}', target: '目标', forecast: '预测', today: '今天',
-    less: '少', more: '多', conversion: '转化 {pct}', progress: '进度', start: '开始', end: '结束', count: '数量',
+    less: '少', more: '多', conversion: '转化 {pct}', stepRate: '较{from}', ofFirst: '占{first}', dropped: '这一步流失', progress: '进度', start: '开始', end: '结束', count: '数量',
     source: '来源：{source}', change: '变化', runningTotal: '累计',
   },
 };
@@ -1042,48 +1042,67 @@ export function waffleChart(host, cfg) {
 }
 
 // ================================================================ FUNNEL
-/** funnelChart(host, { stages: [{ name, value }], format, title, subtitle, showConversion: true }) — ordered stages in the ordinal ramp. */
+/**
+ * funnelChart(host, { stages: [{ name, value }], format, title, subtitle, showConversion: true })
+ * Every stage is a bar from the same left edge, so lengths compare directly. Behind each bar the stage before
+ * it stays as a hollow outline: the empty part is who dropped out at that step. The step rate sits beside each
+ * number, and the first-to-last rate closes the chart.
+ */
 export function funnelChart(host, cfg) {
   return mount(host, cfg, (host, state) => {
     const c = state.cfg;
     const { legend, plot, tip, tableWrap } = frame(host, c, 'funnel');
     legend.hidden = true;
-    const stages = c.stages ?? [];
+    const stages = (c.stages ?? []).map((s) => ({ name: String(s.name), value: Number(s.value) || 0 }));
+    const n = stages.length;
     const fmt = formatter(c.format);
-    const max = Math.max(...stages.map((s) => Number(s.value) || 0), 1);
+    const conv = c.showConversion !== false;
+    const max = Math.max(...stages.map((s) => s.value), 1);
     const width = c.width ?? Math.max(220, host.clientWidth || 400);
-    const labelW = Math.min(110, Math.ceil(Math.max(...stages.map((s) => textWidth(String(s.name), 11)), 0)) + 10);
-    const valueW = Math.ceil(Math.max(...stages.map((s) => textWidth(fmt(s.value), 11)), 0)) + 10;
-    const barW = width - labelW - valueW;
-    const rowH = 26;
-    const gapH = c.showConversion === false ? 4 : 16;
-    const height = stages.length * rowH + Math.max(0, stages.length - 1) * gapH;
+    const step = (i) => (i > 0 && stages[i - 1].value ? stages[i].value / stages[i - 1].value : null);
+    const share = (i) => (stages[0]?.value ? stages[i].value / stages[0].value : null);
+    // name and numbers on one line, the bar under them
+    const rowH = 46, barY = 22, barH = 12;
+    const overall = conv && n > 1 && stages[0].value > 0;
+    const plotH = n ? (n - 1) * rowH + barY + barH : 0;
+    const height = plotH + (overall ? 34 : 2);
     const svg = svgEl('svg', { width, height, viewBox: `0 0 ${width} ${height}`, role: 'img', class: 'aisa-chart__svg', tabindex: c.interactive === false ? undefined : 0 }, plot);
     svg.setAttribute('aria-label', c.title || 'Funnel');
-    const hits = svgEl('g', {}, svg);
+    const ink = token(host, '--aisa-chart-single');
+    const ghost = token(host, '--aisa-chart-muted');
     const text = token(host, '--aisa-text-body');
+    const strong = token(host, '--aisa-text');
     const muted = token(host, '--aisa-text-muted');
+    const len = (v) => Math.max(3, (v / max) * width);
+    const hits = svgEl('g', {}, svg);
     stages.forEach((st, i) => {
-      const y = i * (rowH + gapH);
-      // darkest step for the first (largest) stage
-      const step = stages.length <= 1 ? 5 : Math.round(5 - (i / (stages.length - 1)) * 4);
-      const fill = rampColor(host, 'ord', step);
-      const w = Math.max(4, ((Number(st.value) || 0) / max) * barW);
-      const x = labelW + (barW - w) / 2;
-      svgEl('text', { x: labelW - 10, y: y + rowH / 2 + 4, 'text-anchor': 'end', fill: text, class: 'aisa-chart__tick' }, svg).textContent = String(st.name);
-      const rect = svgEl('rect', { x, y: y + 3, width: w, height: rowH - 6, rx: 4, fill, class: 'aisa-chart__bar', style: `--i:${i}`, 'data-k': i }, hits);
-      svgEl('text', { x: width - valueW + 8, y: y + rowH / 2 + 4, fill: text, class: 'aisa-chart__value', 'data-k': i }, svg).textContent = fmt(st.value);
-      if (i > 0 && c.showConversion !== false && stages[i - 1].value) {
-        svgEl('text', { x: labelW + barW / 2, y: y - gapH / 2 + 4, 'text-anchor': 'middle', fill: muted, class: 'aisa-chart__ref-label' }, svg).textContent = msg('conversion', { pct: pct(st.value / stages[i - 1].value) });
+      const y = i * rowH;
+      const w = len(st.value);
+      if (i > 0) svgEl('rect', { x: 0.5, y: y + barY + 0.5, width: len(stages[i - 1].value) - 1, height: barH - 1, rx: 3, fill: 'none', stroke: ghost, class: 'aisa-chart__ghost', style: `--i:${i}`, 'data-k': i }, svg);
+      svgEl('rect', { x: 0, y: y + barY, width: w, height: barH, rx: 3, fill: ink, class: 'aisa-chart__bar', style: `--i:${i}`, 'data-k': i }, svg);
+      const valueText = fmt(st.value);
+      svgEl('text', { x: 0, y: y + 13, fill: text, class: 'aisa-chart__label', 'data-k': i }, svg).textContent = st.name;
+      svgEl('text', { x: width, y: y + 13, 'text-anchor': 'end', fill: strong, class: 'aisa-chart__value', style: `--i:${i}`, 'data-k': i }, svg).textContent = valueText;
+      if (conv && step(i) != null) {
+        svgEl('text', { x: width - textWidth(valueText, 13) - 10, y: y + 13, 'text-anchor': 'end', fill: muted, class: 'aisa-chart__ref-label', 'data-k': i }, svg).textContent = msg('conversion', { pct: pct(step(i)) });
       }
-      rect.__show = () => showTip(tip, plot, x + w, y + rowH / 2, String(st.name), [
-        { name: '', value: fmt(st.value), color: fill, shape: 'rect' },
-        ...(i > 0 && stages[0].value ? [{ name: stages[0].name, value: pct(st.value / stages[0].value, 1), color: 'transparent' }] : []),
+      // the hit target is the whole row, not just the bar: a 3px stage is still easy to point at
+      const hit = svgEl('rect', { x: 0, y, width, height: barY + barH + 4, fill: 'transparent', 'data-k': i }, hits);
+      hit.__show = () => showTip(tip, plot, w, y + barY + barH / 2, st.name, [
+        { name: '', value: valueText, color: ink, shape: 'rect' },
+        ...(step(i) != null ? [{ name: msg('stepRate', { from: stages[i - 1].name }), value: pct(step(i), 1), color: 'transparent' }] : []),
+        ...(i > 1 && share(i) != null ? [{ name: msg('ofFirst', { first: stages[0].name }), value: pct(share(i), 1), color: 'transparent' }] : []),
+        ...(i > 0 ? [{ name: msg('dropped'), value: fmt(Math.max(0, stages[i - 1].value - st.value)), color: 'transparent' }] : []),
       ]);
-      interact(rect, tip, c, ['data-k', i]);
+      interact(hit, tip, c, ['data-k', i]);
     });
+    if (overall) {
+      const t = svgEl('text', { x: 0, y: plotH + 26, fill: muted, class: 'aisa-chart__ref-label aisa-chart__ref' }, svg);
+      t.textContent = `${stages[0].name} → ${stages[n - 1].name}  `;
+      svgEl('tspan', { fill: strong, class: 'aisa-chart__value' }, t).textContent = pct(share(n - 1), 1);
+    }
     keyboardNav(svg, hits, tip);
-    renderTable(tableWrap, ['', '', '%'], stages.map((st, i) => [String(st.name), fmt(st.value), i === 0 || !stages[i - 1].value ? '–' : pct(st.value / stages[i - 1].value, 1)]));
+    renderTable(tableWrap, ['', '', '%'], stages.map((st, i) => [st.name, fmt(st.value), step(i) == null ? '–' : pct(step(i), 1)]));
   });
 }
 

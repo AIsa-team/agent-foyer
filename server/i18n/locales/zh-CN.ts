@@ -180,6 +180,7 @@ const zhCN = {
   // Lark data, Base data sources and alerts
   'err.lark.notConnected': '还没有连接 Lark 数据。打开这个链接，在 Lark 里同意一次就行：{url}',
   'err.lark.scopeMissing': '中台应用还没有开通读取这类 Lark 数据的权限，请管理员在 Lark 开发者后台加上（见 docs/LARK_SETUP.zh-CN.md）。{detail}',
+  'data.other': '其他',
   'err.data.badUrl': '看不懂这个链接：{url}。需要 Lark 多维表格的链接，或者知识库里多维表格页面的链接',
   'err.data.denied': '你在 Lark 里打不开这张表（或者它开了高级权限，你没有查看权限）',
   'err.data.noEdit': '你能查看这张表，但没有编辑权限，所以不能往里写或加列。请表格所有者给你编辑权限；应用可以把这张表当只读参考，记录写进 create_lark_base 新建的表里。',

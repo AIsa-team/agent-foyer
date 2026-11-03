@@ -215,10 +215,17 @@ export function runQuery(q: Query, table: { fields: Field[]; rows: Record<string
 const round = (n: number) => Math.round(n * 1e4) / 1e4;
 
 // ---------------------------------------------------------------- shapes for the home page charts
-export const CHART_KINDS = ['bar', 'line', 'area', 'donut', 'rank', 'funnel', 'waffle', 'segment', 'calendar'] as const;
+/** compact charts (aisa-charts) and report-series forms (aisa-report) that a data source can feed */
+export const CHART_KINDS = [
+  'bar', 'line', 'area', 'donut', 'rank', 'funnel', 'waffle', 'segment', 'calendar',
+  'hourglass', 'pour', 'days', 'dayline', 'stroke', 'hundred', 'ticks', 'cascade', 'stream', 'hive',
+] as const;
 export type DataChartKind = (typeof CHART_KINDS)[number];
 
-export function toChart(kind: DataChartKind, r: Result, seriesName: string): Record<string, unknown> {
+/** at most this many layers in a stream: the rest fold into one "other" layer, so no colour repeats */
+const STREAM_LAYERS = 7;
+
+export function toChart(kind: DataChartKind, r: Result, seriesName: string, otherLabel = 'Other'): Record<string, unknown> {
   const keys = r.buckets ?? [...new Set(r.rows.map((x) => x.key))];
   // date buckets within one year read better without it (08-03, 2026-08 stays as is for months)
   const year = r.buckets && keys.length && keys.every((k) => /^\d{4}-\d{2}-\d{2}$/.test(k) && k.slice(0, 4) === keys[0].slice(0, 4)) ? keys[0].slice(0, 5) : '';
@@ -226,12 +233,15 @@ export function toChart(kind: DataChartKind, r: Result, seriesName: string): Rec
   const names = [...new Set(r.rows.map((x) => x.series))];
   const valueAt = (k: string, s: string | undefined) => r.rows.find((x) => x.key === k && x.series === s)?.value ?? 0;
   const items = keys.map((k) => ({ name: k, value: r.rows.filter((x) => x.key === k).reduce((a, b) => a + b.value, 0) }));
+  // categories without a natural order read largest first; date buckets keep time order
+  const ranked = r.buckets ? items : [...items].sort((a, b) => b.value - a.value);
+  const series = names.map((s) => ({ name: s ?? seriesName, values: keys.map((k) => valueAt(k, s)) }));
   switch (kind) {
     case 'bar':
-      return { categories: keys.map(bucketLabel), series: names.map((s) => ({ name: s ?? seriesName, values: keys.map((k) => valueAt(k, s)) })) };
+      return { categories: keys.map(bucketLabel), series };
     case 'line':
     case 'area':
-      return { labels: keys.map(bucketLabel), series: names.map((s) => ({ name: s ?? seriesName, values: keys.map((k) => valueAt(k, s)) })) };
+      return { labels: keys.map(bucketLabel), series };
     case 'donut':
     case 'segment':
       return { items };
@@ -240,9 +250,32 @@ export function toChart(kind: DataChartKind, r: Result, seriesName: string): Rec
     case 'rank':
       return { items, highlight: 'top' };
     case 'funnel':
+    case 'hourglass':
+    case 'pour':
       return { stages: items };
     case 'calendar':
       return { data: items.map((x) => ({ date: x.name, value: x.value })) };
+    case 'days':
+    case 'dayline':
+      return { days: items.map((x) => ({ date: x.name, value: x.value })) };
+    case 'stroke':
+      return { values: items.map((x) => x.value), labels: keys.map(bucketLabel), cumulative: true };
+    case 'hundred':
+    case 'ticks':
+    case 'cascade':
+      return { items: ranked };
+    case 'hive':
+      // several measures or a series split: each column stacks its parts
+      return names.length > 1 || names[0] !== undefined
+        ? { items: keys.map((k) => ({ name: bucketLabel(k), parts: series.map((s) => ({ name: s.name, value: s.values[keys.indexOf(k)] ?? 0 })) })) }
+        : { items: items.map((x) => ({ name: bucketLabel(x.name), value: x.value })) };
+    case 'stream': {
+      const byTotal = [...series].sort((a, b) => b.values.reduce((x, y) => x + y, 0) - a.values.reduce((x, y) => x + y, 0));
+      const kept = byTotal.length > STREAM_LAYERS ? byTotal.slice(0, STREAM_LAYERS - 1) : byTotal;
+      const rest = byTotal.slice(kept.length);
+      const layers = rest.length ? [...kept, { name: otherLabel, values: keys.map((_, i) => rest.reduce((a, s) => a + (s.values[i] ?? 0), 0)) }] : kept;
+      return { labels: keys, tickLabels: keys.map(bucketLabel), series: layers };
+    }
   }
 }
 
