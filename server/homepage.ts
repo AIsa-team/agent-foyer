@@ -91,7 +91,7 @@ const moduleSchema = z.discriminatedUnion('type', [
       'treemap {groups:[{name,items:[{name,value}]}]}; fan {items:[{name,weeks,value}]}; clock {events:[{time:"HH:MM",size,flag?}]};',
       'ballot {items:[{name,value:0..1}], respondents}; tickring {items:[{name,value}], centerValue?, centerLabel?}; rankmap {items:[{name,x,y}], xLabel, yLabel}.',
       'With a data source, bridge reads one period of the measures: data {at?:"last"|"previous"|category, negate?:[measure labels to subtract], skip?:[labels], end?:{label}} (e.g. GMV, minus upstream cost, = revenue).',
-      'With a data source, `data` options win over what the numbers bring (cumulative:false for a stroke of per-period values, highlight, unit, goal).',
+      'With a data source, `data` options win over what the numbers bring (cumulative:false for a stroke of per-period values, highlight, unit, goal); rename {raw value: shown name} relabels series, categories, items and stages (e.g. {"model":"LLM"}).',
       'Every report form also takes note (what one mark is) and highlight (the one orange mark: the finding).',
       'Charts are ink by default with orange for the highlight; follow the data-viz rules (no rainbow, ≤ 8 series).',
     ].join(' ')),

@@ -1,7 +1,7 @@
 /*
  * AIsa charts — dependency-free SVG charts that follow the AIsa tokens and the house data-viz rules:
  * thin marks (bars ≤ 24px, 4px rounded data-end, 2px lines), 2px surface gaps and rings, hairline solid grid,
- * categorical colours in fixed slot order, a legend for ≥ 2 series, selective direct labels, a hover/focus
+ * ink by order for several series (categorical slots on request), a legend for ≥ 2 series, selective direct labels, a hover/focus
  * tooltip on every chart, and a table view as the accessible twin.
  *
  * Use as an ES module:   import { barChart } from './aisa-charts.js'; barChart(el, { ... })
@@ -62,7 +62,19 @@ const FALLBACK = {
 function token(el, name) {
   return getComputedStyle(el).getPropertyValue(name).trim() || FALLBACK[name] || '#888';
 }
-const seriesColor = (el, i) => token(el, `--aisa-series-${(i % 8) + 1}`);
+/**
+ * Several series are told apart the way the report series does it: ink by order (the first darkest), the same
+ * ramp in light, dark and brand themes, with orange kept for the highlight. Lines skip the faintest steps so a
+ * thin stroke still reads. More series than steps, or a page that asks for them (data-aisa-chart-palette=
+ * "categorical" on the chart or a container, or palette: 'categorical'), get the categorical slots instead.
+ */
+const INK_STEPS = { fill: [7, 6, 5, 4, 3], line: [7, 6, 5, 4] };
+function seriesColor(el, i, n = 8, kind = 'fill') {
+  const steps = INK_STEPS[kind] ?? INK_STEPS.fill;
+  if (n > steps.length || el.closest?.('[data-aisa-chart-palette="categorical"]')) return token(el, `--aisa-series-${(i % 8) + 1}`);
+  const k = n <= 1 ? 0 : Math.round((i / (n - 1)) * (steps.length - 1));
+  return token(el, `--aisa-seq-${steps[k]}`);
+}
 const rampColor = (el, kind, i) => token(el, `--aisa-${kind}-${i}`);
 /** Theme roles: "ink" (default) draws one series in ink and the highlight in orange; data-aisa-chart-theme="brand" makes `single` orange. */
 const singleColor = (el) => token(el, '--aisa-chart-single');
@@ -347,6 +359,7 @@ function watchTheme() {
 }
 function mount(host, cfg, draw) {
   const state = { cfg, hidden: new Set() };
+  if (cfg.palette === 'categorical') host.setAttribute('data-aisa-chart-palette', 'categorical');
   const rerender = () => draw(host, state, rerender);
   // first sight: marks wait until the chart scrolls into view, then grow in once (animate: false turns it off,
   // animate: true plays on every render as before; reduced motion skips it)
@@ -456,7 +469,7 @@ function plotBox(host, cfg, leftLabels, defaultH = 220, numeric = false) {
  *   target: number | { value, label } (thin solid reference rule),
  *   format: { style: 'decimal'|'percent'|'currency', currency, unit, decimals, notation: 'compact'? }, title, subtitle, height,
  *   valueLabels: true | 'all' | false, interactive: true, animate (see mount: grows in on first sight; false: still), table: true })
- * One series draws in the theme's ink (or orange with data-aisa-chart-theme="brand"); several series use the categorical slots.
+ * One series draws in the theme's ink (or orange with data-aisa-chart-theme="brand"); several series step down the ink ramp (palette: 'categorical' for the colour slots).
  */
 export function barChart(host, cfg) {
   return mount(host, cfg, (host, state, rerender) => {
@@ -479,7 +492,7 @@ export function barChart(host, cfg) {
     const ink = singleColor(host);
     const emph = emphColor(host);
     const muted = mutedColor(host);
-    const colors = single ? [ink] : series.map((_, i) => seriesColor(host, i));
+    const colors = single ? [ink] : series.map((_, i) => seriesColor(host, i, series.length));
     const accent = accentIndex(c, cats.length);
     const markColor = (si, ci) => {
       if (c.highlight !== undefined) return ci === c.highlight ? emph : muted;
@@ -640,7 +653,7 @@ export function lineChart(host, cfg) {
     const single = series.length === 1;
     const colors = series.map((_, i) => {
       if (c.highlight !== undefined) return i === c.highlight ? emphColor(host) : mutedColor(host);
-      return single ? singleColor(host) : seriesColor(host, i);
+      return single ? singleColor(host) : seriesColor(host, i, series.length, 'line');
     });
     const endDot = (si) => (single && c.highlight === undefined && c.accentEnd !== false ? emphColor(host) : colors[si]);
     const surface = token(host, '--aisa-surface');
@@ -743,7 +756,7 @@ export function donutChart(host, cfg) {
       items = [...items.slice(0, 5), { name: msg('other'), value: rest, other: true }];
     }
     const total = items.reduce((a, b) => a + Number(b.value), 0);
-    const colors = items.map((it, i) => (it.other ? token(host, '--aisa-chart-muted') : seriesColor(host, i)));
+    const colors = items.map((it, i) => (it.other ? token(host, '--aisa-chart-muted') : seriesColor(host, i, items.filter((x) => !x.other).length)));
     renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${total ? Math.round((it.value / total) * 100) : 0}%`, color: colors[i] })), { onHover: (i) => spotlight(fig, 'data-k', i) });
     const size = c.size ?? 180;
     const r = size / 2;
@@ -996,7 +1009,7 @@ export function waffleChart(host, cfg) {
     const sum = items.reduce((a, b) => a + (Number(b.value) || 0), 0);
     const total = c.total ?? sum;
     const single = items.length === 1;
-    const colors = items.map((_, i) => (single ? (c.tone === 'accent' ? emphColor(host) : singleColor(host)) : seriesColor(host, i)));
+    const colors = items.map((_, i) => (single ? (c.tone === 'accent' ? emphColor(host) : singleColor(host)) : seriesColor(host, i, items.length)));
     renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${pct(total ? it.value / total : 0)}`, color: colors[i] })));
     // largest-remainder rounding so the squares add up to exactly 100 (or less when total > sum)
     const raw = items.map((it) => (total ? (it.value / total) * 100 : 0));
@@ -1226,7 +1239,7 @@ export function segmentBar(host, cfg) {
       items = [...items.slice(0, 5), { name: msg('other'), value: rest, other: true }];
     }
     const total = items.reduce((a, b) => a + (Number(b.value) || 0), 0) || 1;
-    const colors = items.map((it, i) => (it.other ? mutedColor(host) : seriesColor(host, i)));
+    const colors = items.map((it, i) => (it.other ? mutedColor(host) : seriesColor(host, i, items.filter((x) => !x.other).length)));
     renderLegend(legend, items.map((it, i) => ({ name: `${it.name} · ${pct(it.value / total)}`, color: colors[i] })), { onHover: (i) => spotlight(fig, 'data-k', i) });
     const width = c.width ?? Math.max(200, host.clientWidth || 400);
     const h = c.height ?? 12;
@@ -1724,12 +1737,12 @@ export function scatterChart(host, cfg) {
     if ((c.groups ?? []).length > 3) console.warn('[aisa-charts] scatterChart: at most 3 groups; split into small multiples');
     const hl = typeof c.highlight === 'string' ? pts.find((p) => p.name === c.highlight)?.i : c.highlight;
     const colorOf = (p) => {
-      if (groups.length > 1) return seriesColor(host, Math.max(0, groups.indexOf(p.group)));
+      if (groups.length > 1) return seriesColor(host, Math.max(0, groups.indexOf(p.group)), groups.length, 'line');
       if (hl === undefined) return singleColor(host);
       // dots are small: the others step back to a mid grey, not the faint bar grey
       return p.i === hl ? emphColor(host) : rampColor(host, 'seq', 4);
     };
-    renderLegend(legend, groups.length > 1 ? groups.map((g, k) => ({ name: String(g), color: seriesColor(host, k), shape: 'dot' })) : [], {
+    renderLegend(legend, groups.length > 1 ? groups.map((g, k) => ({ name: String(g), color: seriesColor(host, k, groups.length, 'line'), shape: 'dot' })) : [], {
       hidden: state.hidden,
       onHover: (k) => spotlight(fig, 'data-s', k),
       onToggle: (k) => {

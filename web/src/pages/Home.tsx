@@ -176,6 +176,22 @@ function StatTileView({ item }: { item: Extract<Module, { type: 'stats' }>['item
     : <div className="card pad">{body}</div>;
 }
 
+/** `rename` ({ raw value: shown name }) relabels the series, categories, items and stages a data source brings. */
+function renamed(d: Record<string, unknown>) {
+  const map = d.rename as Record<string, string>;
+  const r = (v: unknown) => (typeof v === 'string' && map[v] !== undefined ? map[v] : v);
+  const named = (xs: unknown) => (Array.isArray(xs) ? xs.map((x) => (x && typeof x === 'object' && 'name' in x ? { ...x, name: r((x as { name: unknown }).name) } : x)) : xs);
+  const { rename: _r, ...rest } = d;
+  return {
+    ...rest,
+    ...(Array.isArray(d.categories) ? { categories: d.categories.map(r) } : {}),
+    ...(d.series ? { series: named(d.series) } : {}),
+    ...(d.items ? { items: named(d.items) } : {}),
+    ...(d.stages ? { stages: named(d.stages) } : {}),
+    ...(typeof d.highlight === 'string' ? { highlight: r(d.highlight) } : {}),
+  };
+}
+
 /**
  * A bridge from a data source: the measures of one period (the last, the one before, or a named category) become
  * start → steps → end. `negate` subtracts measures stored as positive amounts (costs); `skip` leaves out a measure
@@ -214,6 +230,7 @@ function ChartModule({ m }: { m: Extract<Module, { type: 'chart' }> }) {
     // with a source, `data` holds the options the numbers don't carry (a goal, the unit of one mark, the highlight),
     // and they win over the defaults the data shape brings (a stroke's cumulative, a rank's highlight)
     let base = m.source ? { ...data, ...(m.data ?? {}) } : data;
+    if (base.rename) base = renamed(base);
     if (m.kind === 'bridge' && m.source) base = bridgeFrom(base);
     const cfg = {
       ...base, title: text(m.title) || undefined, [report ? 'read' : 'subtitle']: text(m.subtitle) || undefined,

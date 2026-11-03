@@ -30,7 +30,7 @@ export const querySchema = z.object({
     op: z.enum(['is', 'isNot', 'contains', 'doesNotContain', 'isEmpty', 'isNotEmpty', 'isGreater', 'isLess']),
     value: z.union([z.string(), z.number()]).optional(),
   })).max(10).optional().describe('row filters (use date.last for time windows)'),
-  sort: z.enum(['value_desc', 'value_asc', 'label']).optional().describe('for groupBy without date; default value_desc'),
+  sort: z.enum(['value_desc', 'value_asc', 'label', 'source']).optional().describe('for groupBy without date; default value_desc; source keeps the order the rows come in (a saved question\'s own ORDER BY, e.g. time buckets 当天, 1-3 天, 4-7 天)'),
   limit: z.number().int().min(1).max(50).optional().describe('keep the top N groups (default 12)'),
 });
 export type Query = z.infer<typeof querySchema>;
@@ -204,7 +204,8 @@ export function runQuery(q: Query, table: { fields: Field[]; rows: Record<string
   } else if (groupField) {
     const totals = new Map<string, number>();
     for (const r of rows) totals.set(r.key, (totals.get(r.key) ?? 0) + r.value);
-    const order = [...totals.entries()].sort(q.sort === 'label' ? (a, b) => a[0].localeCompare(b[0]) : q.sort === 'value_asc' ? (a, b) => a[1] - b[1] : (a, b) => b[1] - a[1])
+    // totals keeps the order rows first came in, so 'source' needs no sorting (Array.sort is stable)
+    const order = [...totals.entries()].sort(q.sort === 'source' ? () => 0 : q.sort === 'label' ? (a, b) => a[0].localeCompare(b[0]) : q.sort === 'value_asc' ? (a, b) => a[1] - b[1] : (a, b) => b[1] - a[1])
       .slice(0, q.limit ?? 12).map(([k]) => k);
     rows = rows.filter((r) => order.includes(r.key)).sort((a, b) => order.indexOf(a.key) - order.indexOf(b.key));
   }

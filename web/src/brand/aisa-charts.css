@@ -22,9 +22,10 @@
 .aisa-chart__key:disabled { cursor: default; }
 .aisa-chart__key.is-off { opacity: 0.4; }
 .aisa-chart__swatch { display: inline-block; flex: none; }
-.aisa-chart__swatch--rect { width: 8px; height: 8px; border-radius: 2px; }
+/* keys are the brand's hexagon, like the report series' legends */
+.aisa-chart__swatch--rect { width: 9px; height: 10px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
 .aisa-chart__swatch--line { width: 12px; height: 2px; border-radius: 1px; }
-.aisa-chart__swatch--dot { width: 8px; height: 8px; border-radius: 50%; }
+.aisa-chart__swatch--dot { width: 9px; height: 10px; clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
 
 .aisa-chart__plot { position: relative; }
 .aisa-chart__svg { display: block; max-width: 100%; overflow: visible; }
