@@ -2394,7 +2394,10 @@ export function pairedRungs(host, cfg) {
     const plotH = H - m.t - m.b, floor = H - m.b;
     const max = Math.max(1, ...base.v, ...main.v);
     // a rung needs at least 3px of its own, so the unit grows until the tallest ladder fits
-    const unit = c.unit ?? niceUnit(max / Math.max(8, Math.floor(plotH / 3.2)));
+    // whole counts get a whole unit (1, 2, 5, 10 …): a rung is never two and a half people
+    const raw = max / Math.max(8, Math.floor(plotH / 3.2));
+    const whole = [...base.v, ...main.v].every(Number.isInteger);
+    const unit = c.unit ?? (whole ? Math.max(1, [1, 2, 5].map((k) => k * 10 ** Math.floor(Math.log10(Math.max(1, raw)))).concat(10 ** (Math.floor(Math.log10(Math.max(1, raw))) + 1)).find((u) => u >= raw)) : niceUnit(raw));
     const gap = Math.min(6, plotH / Math.max(1, Math.ceil(max / unit)));
     const colW = W / Math.max(1, n);
     const lw = Math.max(3, Math.min(16, colW * 0.3)), between = Math.max(1.5, Math.min(4, colW * 0.06));
