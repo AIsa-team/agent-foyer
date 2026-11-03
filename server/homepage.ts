@@ -34,7 +34,11 @@ const baseSource = z.object({
   query: querySchema,
 }).describe('live numbers from a registered data source (a Lark Base table or a data app), read as the viewer (people only see what they may open)');
 const anySource = z.union([source, baseSource]);
-const format = z.object({ style: z.enum(['decimal', 'percent', 'currency']).optional(), currency: z.string().optional(), unit: z.string().optional(), decimals: z.number().int().min(0).max(4).optional() }).optional();
+const format = z.object({
+  style: z.enum(['decimal', 'percent', 'currency']).optional(), currency: z.string().optional(), unit: z.string().optional(), decimals: z.number().int().min(0).max(4).optional(),
+  unitSpace: z.boolean().optional().describe('false writes the unit right after the number (65%, not 65 %)'),
+  notation: z.literal('compact').optional().describe('short large numbers by locale: 15.6K, 1.56万'),
+}).optional();
 
 const moduleSchema = z.discriminatedUnion('type', [
   z.object({
